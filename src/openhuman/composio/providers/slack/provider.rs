@@ -98,11 +98,11 @@ fn backfill_days() -> i64 {
 /// this at 1000; 200 is a safe default.
 const LIST_PAGE_SIZE: u32 = 200;
 
-/// Max messages per `SLACK_FETCH_CONVERSATION_HISTORY` page. With
-/// `INTER_CALL_PACING` clamping us to 3 req/min, the marginal cost of
-/// asking for 1000 vs 200 per call is just larger response payloads —
-/// and we want to drain the 30-day window in as few calls as possible
-/// to minimise total quota burn.
+/// Max messages per `SLACK_FETCH_CONVERSATION_HISTORY` page. The marginal
+/// cost of asking for 1000 vs 200 per call is just a larger response
+/// payload — and we want to drain the 30-day window in as few calls as
+/// possible to minimise total quota burn. Pacing is now reactive
+/// (rate-limit retry only) rather than preemptive.
 const HISTORY_PAGE_SIZE: u32 = 1000;
 
 /// Stop paginating any single channel's history after this many pages
@@ -133,13 +133,6 @@ const RATELIMIT_MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// 2s → 4 → 8 → 16 → 30 → 30 backoff this gives ≤ 90s of grace per
 /// call; longer than the worst Composio rate-window we've observed.
 const RATELIMIT_MAX_ATTEMPTS: u32 = 6;
-
-/// Fixed inter-call sleep applied after every successful execute_tool.
-/// At 20s per call we stay at 3 req/min — well below Slack's tier-2
-/// limit of 50/min and conservative enough to ride out Composio's
-/// stricter staging-tier quota replenishment. Trade-off: a full
-/// 30-day backfill across 11 channels takes 20-30 min wall-clock.
-const INTER_CALL_PACING: Duration = Duration::from_secs(20);
 
 /// Resolve the JSON dump directory from `OPENHUMAN_SLACK_DUMP_DIR`.
 /// When unset, dumping is disabled. When set, every successful Composio
@@ -185,8 +178,12 @@ pub(super) fn dump_response(scope: &str, kind: &str, idx: u32, data: &Value) {
     }
 }
 
-/// Wrap [`ComposioClient::execute_tool`] with rate-limit-aware retry +
-/// inter-call pacing.
+/// Wrap [`ComposioClient::execute_tool`] with rate-limit-aware retry.
+///
+/// No preemptive pacing — calls fire as fast as the upstream allows.
+/// When Composio/Slack returns a `ratelimited` envelope we capture the
+/// raw body to disk under `_ratelimit/` (so `retry_after` and Slack
+/// error reasons can be post-mortemed) and back off exponentially.
 ///
 /// Returns `(response, attempts_made)` on first success so callers can
 /// charge the daily quota meter for **every** attempt that hit Composio,
@@ -206,24 +203,38 @@ pub(super) async fn execute_with_retry(
             .await
             .map_err(|e| format!("{description}: {e:#}"))?;
         if resp.successful {
-            tokio::time::sleep(INTER_CALL_PACING).await;
             return Ok((resp, attempt));
         }
         let err_str = resp.error.as_deref().unwrap_or("provider failure");
         let is_ratelimit = err_str.contains("ratelimited")
             || err_str.contains("rate_limit")
             || err_str.contains("rate limit");
-        if is_ratelimit && attempt < RATELIMIT_MAX_ATTEMPTS {
+        if is_ratelimit {
+            // Capture the rate-limit envelope on disk + at warn level so
+            // we can post-mortem retry_after hints, Composio wrapper
+            // metadata, and the underlying Slack error reason. Lives
+            // under the `_ratelimit` scope so it doesn't mix with
+            // successful-response dumps.
+            dump_response("_ratelimit", slug, attempt, &resp.data);
             tracing::warn!(
                 slug,
                 attempt,
                 max_attempts = RATELIMIT_MAX_ATTEMPTS,
-                sleep_ms = delay.as_millis() as u64,
-                "[composio:slack] rate-limited; backing off and retrying"
+                error = %err_str,
+                body = %serde_json::to_string(&resp.data).unwrap_or_default(),
+                "[composio:slack] rate-limit response captured"
             );
-            tokio::time::sleep(delay).await;
-            delay = (delay * 2).min(RATELIMIT_MAX_BACKOFF);
-            continue;
+            if attempt < RATELIMIT_MAX_ATTEMPTS {
+                tracing::warn!(
+                    slug,
+                    attempt,
+                    sleep_ms = delay.as_millis() as u64,
+                    "[composio:slack] backing off and retrying"
+                );
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(RATELIMIT_MAX_BACKOFF);
+                continue;
+            }
         }
         return Err(format!("{description}: {err_str}"));
     }
