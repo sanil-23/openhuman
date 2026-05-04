@@ -114,13 +114,44 @@ pub struct LlmSummariser {
 impl LlmSummariser {
     /// Build a summariser around `cfg`. Returns an error only if the HTTP
     /// client fails to construct (timeout / TLS init).
+    ///
+    /// # Timeout policy (deliberate)
+    ///
+    /// 1. **Body-read timeout is intentionally absent.** `cfg.timeout`
+    ///    is applied as the TCP `connect_timeout` only — there is no
+    ///    deadline on `send().await` / `text().await` / `json().await`
+    ///    once the connection is established. This is correct for our
+    ///    deployment, NOT a bug:
+    ///
+    ///    - **Local Ollama (the only supported backend) processes
+    ///      slowly under CPU-only inference**: gemma3:1b on CPU runs
+    ///      60-180 s per `/api/chat` call on a real chunk; with a
+    ///      body-read timeout, reqwest/hyper would cancel the future
+    ///      mid-generation. The cancellation path retains internal
+    ///      state in hyper's connection machinery, producing a
+    ///      multi-GB heap retention storm under sustained load
+    ///      (verified empirically: priv_bytes climbed to 8-21 GB and
+    ///      OOM'd the host across three crashes during
+    ///      development).
+    ///    - **A `tokio::time::timeout` wrapper would reproduce the
+    ///      same cancellation cliff** — so it would be regressive,
+    ///      not protective.
+    ///
+    /// 2. **`cfg.timeout` is the TCP connect deadline** — fast-fails
+    ///    the "Ollama is genuinely down / unreachable" case via
+    ///    connection-refused or DNS error, which still drives the
+    ///    `InertSummariser` fallback through the surrounding
+    ///    `?`-propagation.
+    ///
+    /// 3. **Worst case (Ollama alive but stalled mid-generation)** is
+    ///    bounded: `Semaphore::new(1)` in the worker pool means at
+    ///    most one summariser call is in-flight at any moment. A
+    ///    stuck call blocks exactly one worker; the rest of the
+    ///    seal cascade is queue-backed in `mem_tree_jobs` and
+    ///    proceeds with non-LLM work. Recovery is "operator restarts
+    ///    Ollama" — there is no client-side mitigation that helps a
+    ///    truly stalled local process.
     pub fn new(cfg: LlmSummariserConfig) -> Result<Self> {
-        // No body-read timeout. Ollama is local — slow responses mean
-        // the model is genuinely processing, not that the network
-        // broke. A body-read timeout here would cancel mid-stream and
-        // force retries against the same slow model. `cfg.timeout` is
-        // repurposed as the TCP connect timeout (fast-fail when
-        // Ollama is actually down).
         let http = Client::builder()
             .connect_timeout(cfg.timeout)
             .build()
