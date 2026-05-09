@@ -64,6 +64,18 @@ pub async fn start_channels(config: Config) -> Result<()> {
     // channel dispatch calls `request_native_global("agent.run_turn", …)`
     // for every inbound message.
     crate::openhuman::agent::bus::register_agent_handlers();
+    // Phase 2 learning producers: email-signature subscriber reacts to
+    // DocumentCanonicalized events and emits Identity candidates into the buffer.
+    // The handle is intentionally leaked into a static so the subscription stays
+    // alive for the lifetime of the process (same pattern as TracingSubscriber).
+    {
+        use crate::core::event_bus::SubscriptionHandle;
+        use std::sync::OnceLock;
+        static EMAIL_SIG_HANDLE: OnceLock<Option<SubscriptionHandle>> = OnceLock::new();
+        EMAIL_SIG_HANDLE.get_or_init(|| {
+            crate::openhuman::learning::extract::signature::register_email_signature_subscriber()
+        });
+    }
     tracing::debug!("[event_bus] global singleton initialized in start_channels");
 
     // Initialise the sub-agent definition registry from this workspace.
