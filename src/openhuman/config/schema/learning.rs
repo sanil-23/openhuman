@@ -46,6 +46,18 @@ pub struct LearningConfig {
     /// Minimum tool calls in a turn to trigger reflection. Default: 1.
     #[serde(default = "default_min_turn_complexity")]
     pub min_turn_complexity: usize,
+
+    /// Pipe agent chat turns into the memory tree as `source="conversations:agent"`.
+    ///
+    /// When enabled, [`ArchivistHook`] calls `tree::ingest::ingest_chat` with a
+    /// two-message [`ChatBatch`] (user + assistant) after every completed turn.
+    /// Tool-call JSON is stripped from the assistant message before ingest —
+    /// only the prose response reaches the tree.
+    ///
+    /// Default: true. Disable to stop agent chat from flowing into the tree
+    /// without affecting the episodic-log write path.
+    #[serde(default = "default_true")]
+    pub chat_to_tree_enabled: bool,
 }
 
 fn default_true() -> bool {
@@ -70,6 +82,7 @@ impl Default for LearningConfig {
             reflection_source: ReflectionSource::default(),
             max_reflections_per_session: default_max_reflections(),
             min_turn_complexity: default_min_turn_complexity(),
+            chat_to_tree_enabled: default_true(),
         }
     }
 }
