@@ -8,8 +8,15 @@
 //! - [`candidate`] — `LearningCandidate`, `FacetClass`, `CueFamily`, `EvidenceRef`,
 //!   and the thread-safe ring-buffer [`candidate::Buffer`] that collects evidence
 //!   from producers (Phase 2) for consumption by the stability detector (Phase 3).
+//!
+//! # Phase 2 additions (#566)
+//!
+//! - [`extract`] — producer modules: `signature` (email identity parser),
+//!   `heuristics` (length-ratio + edit-window + correction-repeat detectors),
+//!   `summary_facets` (structured facets from the LLM summariser).
 
 pub mod candidate;
+pub mod extract;
 pub mod linkedin_enrichment;
 pub mod prompt_sections;
 pub mod reflection;
