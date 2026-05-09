@@ -550,7 +550,10 @@ pub async fn composio_refresh_all_identities(
         "composio: refreshed {ok}/{tried} active conn(s) — {rows} rows; \
          {fail} failed, {nopv} skipped (no provider), {inact} inactive",
         ok = report.refreshed,
-        tried = report.refreshed + report.failed,
+        // `tried` is the count of active connections we actually scanned —
+        // include `skipped_no_provider` so the denominator covers the full
+        // active set, not just provider-backed ones (#1381 review).
+        tried = report.refreshed + report.failed + report.skipped_no_provider,
         rows = report.rows_written,
         fail = report.failed,
         nopv = report.skipped_no_provider,

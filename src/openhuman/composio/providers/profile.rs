@@ -411,6 +411,13 @@ pub fn render_connected_identities_section(identities: &[ConnectedIdentity]) -> 
 
 /// Delete every row for a `(source, conn_id)` pair — used on disconnect.
 pub fn delete_connected_identity_facets(source: &str, identifier: &str) -> usize {
+    // `persist_provider_profile` writes keys with `normalize_token`-applied
+    // segments; compare against the same normalized form here so a caller
+    // passing the raw toolkit/connection_id still matches stored rows
+    // (otherwise rows would survive disconnect and the user-tagger would
+    // keep treating the removed account as the user — #1381 review).
+    let source = normalize_token(source);
+    let identifier = normalize_token(identifier);
     let Some(client) = crate::openhuman::memory::global::client_if_ready() else {
         tracing::debug!(
             source = %source,
