@@ -124,15 +124,13 @@ fn build_environment_section(workspace_dir: &Path) -> String {
 /// Empty string when no providers are connected — the section just
 /// disappears rather than rendering an empty header.
 fn build_identifiers_section() -> String {
-    let identities =
-        crate::openhuman::composio::providers::profile::load_connected_identities();
+    let identities = crate::openhuman::composio::providers::profile::load_connected_identities();
     if identities.is_empty() {
         return String::new();
     }
-    let body =
-        crate::openhuman::composio::providers::profile::render_connected_identities_section(
-            &identities,
-        );
+    let body = crate::openhuman::composio::providers::profile::render_connected_identities_section(
+        &identities,
+    );
     if body.trim().is_empty() {
         return String::new();
     }

@@ -67,7 +67,11 @@ pub async fn build_section(config: &Config, workspace_dir: &Path, _last_tick_at:
             .abs()
             .partial_cmp(&a.delta.abs())
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
 
     // 4. Format top-K.

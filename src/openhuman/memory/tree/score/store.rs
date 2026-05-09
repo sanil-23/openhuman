@@ -12,9 +12,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
-use crate::openhuman::composio::providers::profile::{
-    is_self_identity_any_toolkit, IdentityKind,
-};
+use crate::openhuman::composio::providers::profile::{is_self_identity_any_toolkit, IdentityKind};
 use crate::openhuman::config::Config;
 use crate::openhuman::memory::tree::score::extract::EntityKind;
 use crate::openhuman::memory::tree::score::resolver::CanonicalEntity;

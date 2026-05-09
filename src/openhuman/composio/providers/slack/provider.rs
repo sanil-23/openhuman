@@ -292,10 +292,7 @@ impl ComposioProvider for SlackProvider {
                             "user.profile.display_name",
                         ],
                     );
-                    avatar_url = pick_str(
-                        d,
-                        &["user.profile.image_192", "user.profile.image_72"],
-                    );
+                    avatar_url = pick_str(d, &["user.profile.image_192", "user.profile.image_72"]);
                 }
                 Ok(info) => {
                     tracing::info!(
@@ -334,7 +331,10 @@ impl ComposioProvider for SlackProvider {
 
         // Display name preference: users.info real_name > auth.test handle
         // > team_name (last-resort so the prompt isn't empty).
-        let final_display_name = display_name.clone().or_else(|| handle.clone()).or_else(|| team_name.clone());
+        let final_display_name = display_name
+            .clone()
+            .or_else(|| handle.clone())
+            .or_else(|| team_name.clone());
 
         // Profile URL: users.info doesn't return one for the user
         // directly; the workspace URL is acceptable as a navigational

@@ -107,14 +107,7 @@ impl ComposioProvider for NotionProvider {
         // and the actual owning user lives at `bot.owner.user.*`. Probe
         // the bot-owner paths first so identity reflects the user (#1365).
         let data = &resp.data;
-        let display_name = pick_str(
-            data,
-            &[
-                "bot.owner.user.name",
-                "user.name",
-                "name",
-            ],
-        );
+        let display_name = pick_str(data, &["bot.owner.user.name", "user.name", "name"]);
         let email = pick_str(
             data,
             &[
@@ -124,18 +117,12 @@ impl ComposioProvider for NotionProvider {
                 "email",
             ],
         );
-        let username = pick_str(
-            data,
-            &["bot.owner.user.id", "user.id", "id"],
-        );
+        let username = pick_str(data, &["bot.owner.user.id", "user.id", "id"]);
         let avatar_url = pick_str(
             data,
             &["bot.owner.user.avatar_url", "user.avatar_url", "avatar_url"],
         );
-        let profile_url = pick_str(
-            data,
-            &["url", "profile_url", "profile.url"],
-        );
+        let profile_url = pick_str(data, &["url", "profile_url", "profile.url"]);
 
         Ok(ProviderUserProfile {
             toolkit: "notion".to_string(),

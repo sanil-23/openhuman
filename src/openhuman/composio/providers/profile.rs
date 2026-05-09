@@ -611,7 +611,11 @@ mod tests {
 
     // ── expand_identity_rows ──────────────────────────────────────
 
-    fn fixture_profile(toolkit: &str, username: Option<&str>, extras: Value) -> ProviderUserProfile {
+    fn fixture_profile(
+        toolkit: &str,
+        username: Option<&str>,
+        extras: Value,
+    ) -> ProviderUserProfile {
         ProviderUserProfile {
             toolkit: toolkit.into(),
             connection_id: Some("conn-1".into()),
