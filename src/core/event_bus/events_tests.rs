@@ -423,6 +423,7 @@ fn all_variants_have_correct_domain() {
                 chunks_written: 3,
                 chunk_ids: vec!["c1".into(), "c2".into(), "c3".into()],
                 canonicalized_at: 1_700_000_000.0,
+                body_preview: Some("Thanks,\nAlice".into()),
             },
             "memory",
         ),

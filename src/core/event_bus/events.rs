@@ -373,6 +373,13 @@ pub enum DomainEvent {
         chunk_ids: Vec<String>,
         /// Wall-clock seconds since epoch when canonicalisation completed.
         canonicalized_at: f64,
+        /// Last ≤ 2 048 characters of the canonicalised markdown body.
+        ///
+        /// Populated for `email` and `document` sources so that lightweight
+        /// subscribers (e.g. the email-signature parser) can inspect trailing
+        /// content without hitting disk. `None` for `chat` sources where the
+        /// content is conversational and doesn't contain signature-style structure.
+        body_preview: Option<String>,
     },
 
     // ── Learning ─────────────────────────────────────────────────────────

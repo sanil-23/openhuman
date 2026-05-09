@@ -156,6 +156,25 @@ async fn persist(
     canonical: CanonicalisedSource,
 ) -> Result<IngestResult> {
     let source_kind_for_store = canonical.metadata.source_kind;
+
+    // Capture body_preview before the canonical markdown is moved into the chunker.
+    // For email and document sources: last ≤ 2 048 chars of the canonical markdown
+    // are enough for signature parsing and similar lightweight subscribers. Chat
+    // sources are conversational and have no trailing structure worth scanning, so
+    // they get body_preview = None.
+    let body_preview: Option<String> = match source_kind_for_store {
+        SourceKind::Email | SourceKind::Document => {
+            let md = &canonical.markdown;
+            let len = md.len();
+            Some(if len <= 2048 {
+                md.clone()
+            } else {
+                md[len - 2048..].to_string()
+            })
+        }
+        _ => None,
+    };
+
     let input = ChunkerInput {
         source_kind: canonical.metadata.source_kind,
         source_id: source_id.to_string(),
@@ -325,6 +344,7 @@ async fn persist(
         chunks_written: written,
         chunk_ids: chunk_ids.clone(),
         canonicalized_at: now_secs,
+        body_preview,
     });
     tracing::debug!(
         "[memory::tree::ingest] published DocumentCanonicalized source_id={} chunks={}",
