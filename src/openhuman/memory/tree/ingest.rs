@@ -9,6 +9,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::core::event_bus::{publish_global, DomainEvent};
 use crate::openhuman::config::Config;
 use crate::openhuman::memory::tree::canonicalize::{
     chat::{self, ChatBatch},
@@ -23,6 +24,7 @@ use crate::openhuman::memory::tree::score::{self, ScoreResult, ScoringConfig};
 use crate::openhuman::memory::tree::store;
 use crate::openhuman::memory::tree::types::SourceKind;
 use crate::openhuman::memory::tree::util::redact::redact;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Outcome of one ingest call.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -308,11 +310,33 @@ async fn persist(
 
     jobs::wake_workers();
 
+    let chunk_ids: Vec<String> = staged.iter().map(|s| s.chunk.id.clone()).collect();
+
+    // Emit DocumentCanonicalized so Phase 2 producers (e.g. email-signature parser)
+    // can react to new canonicalised content. Non-fatal: ingest has already succeeded.
+    // `source_kind_for_store` is Copy so it is still accessible here after the closure.
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    publish_global(DomainEvent::DocumentCanonicalized {
+        source_id: source_id.to_string(),
+        source_kind: source_kind_for_store.as_str().to_string(),
+        chunks_written: written,
+        chunk_ids: chunk_ids.clone(),
+        canonicalized_at: now_secs,
+    });
+    tracing::debug!(
+        "[memory::tree::ingest] published DocumentCanonicalized source_id={} chunks={}",
+        source_id,
+        written
+    );
+
     Ok(IngestResult {
         source_id: source_id.to_string(),
         chunks_written: written,
         chunks_dropped: dropped,
-        chunk_ids: staged.iter().map(|s| s.chunk.id.clone()).collect(),
+        chunk_ids,
         already_ingested: false,
     })
 }
