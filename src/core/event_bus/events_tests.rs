@@ -415,6 +415,28 @@ fn all_variants_have_correct_domain() {
             },
             "system",
         ),
+        // Memory tree
+        (
+            DomainEvent::DocumentCanonicalized {
+                source_id: "gmail:abc".into(),
+                source_kind: "email".into(),
+                chunks_written: 3,
+                chunk_ids: vec!["c1".into(), "c2".into(), "c3".into()],
+                canonicalized_at: 1_700_000_000.0,
+            },
+            "memory",
+        ),
+        // Learning
+        (
+            DomainEvent::CacheRebuilt {
+                added: 2,
+                evicted: 1,
+                kept: 5,
+                total_size: 7,
+                rebuilt_at: 1_700_000_000.0,
+            },
+            "learning",
+        ),
     ];
 
     for (event, expected_domain) in cases {
