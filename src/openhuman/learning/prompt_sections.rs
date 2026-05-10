@@ -155,11 +155,20 @@ pub fn load_learned_from_cache(
                 break 'outer;
             }
             let f: &ProfileFacet = &facets[idx];
+            // Phase 4: render in structured `class/key: value` form so the
+            // agent can parse the source. Goal class keeps value-only (full
+            // sentence, no key prefix). Pinned entries get a trailing suffix.
+            let pinned =
+                if f.user_state == crate::openhuman::memory::store::profile::UserState::Pinned {
+                    " *(pinned)*"
+                } else {
+                    ""
+                };
             let entry = if f.key.starts_with("goal/") {
                 // Goal class: render just the value, it's a sentence.
-                f.value.clone()
+                format!("{}{}", f.value, pinned)
             } else {
-                format!("{}: {}", f.key, f.value)
+                format!("**{}**: {}{}", f.key, f.value, pinned)
             };
             result.push(entry);
         }
@@ -379,12 +388,18 @@ mod tests {
             !result.is_empty(),
             "should produce entries for Active facets"
         );
-        // style/verbosity formatted as "style/verbosity: terse"
+        // Phase 4 format: "**style/verbosity**: terse"
         assert!(
             result.iter().any(|s| s.contains("style/verbosity")),
             "style/verbosity should appear"
         );
-        // Goal class → value only
+        assert!(
+            result
+                .iter()
+                .any(|s| s.contains("**style/verbosity**: terse")),
+            "style/verbosity should use Phase 4 bold format"
+        );
+        // Goal class → value only (no key prefix)
         assert!(
             result.iter().any(|s| s == "Learn Rust this year"),
             "goal class should render value only"
