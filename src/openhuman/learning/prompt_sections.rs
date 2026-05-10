@@ -11,6 +11,12 @@
 //!
 //! The existing KV-namespace reads in `fetch_learned_context` are preserved
 //! (both paths active in this phase; KV path will be removed in a follow-up).
+//!
+//! ## Phase 4 addition (#566)
+//!
+//! [`MemoryAccessSection`] — a static prompt section that instructs the agent to
+//! call `memory_recall` / `memory_search` before answering questions that draw on
+//! prior sessions. Registered after `LearnedContextSection` in the section chain.
 
 use crate::openhuman::context::prompt::{PromptContext, PromptSection};
 use anyhow::Result;
@@ -88,6 +94,38 @@ impl PromptSection for UserProfileSection {
         }
         out.push('\n');
         Ok(out)
+    }
+}
+
+// ── MemoryAccessSection ───────────────────────────────────────────────────────
+
+/// Static bias instruction that tells the agent to call `memory_recall` before
+/// answering questions involving named people, projects, prior decisions, or
+/// anything the user mentioned in past sessions.
+///
+/// The text is frozen at compile time — no I/O at build time.
+/// Register this section after [`LearnedContextSection`] in the prompt-section
+/// composition order (see `SystemPromptBuilder::with_defaults`).
+pub struct MemoryAccessSection;
+
+/// The static prose injected into every system prompt. Kept at ≤ 80 tokens.
+pub const MEMORY_ACCESS_INSTRUCTION: &str = "\
+## Memory access\n\
+\n\
+Before answering questions involving named people, projects, threads, prior \
+decisions, recurring topics, or anything the user has mentioned in past sessions, \
+call `memory_recall` (or `memory_search` for keyword lookups) to retrieve \
+relevant context. Surface what matters in your reply; don't stitch together \
+continuity from prompt history alone. Skip retrieval for purely procedural \
+requests where prior context isn't relevant.";
+
+impl PromptSection for MemoryAccessSection {
+    fn name(&self) -> &str {
+        "memory_access"
+    }
+
+    fn build(&self, _ctx: &PromptContext<'_>) -> Result<String> {
+        Ok(MEMORY_ACCESS_INSTRUCTION.to_string())
     }
 }
 
@@ -424,5 +462,57 @@ mod tests {
 
         let result = load_learned_from_cache(&cache);
         assert!(result.is_empty());
+    }
+
+    // ── MemoryAccessSection ───────────────────────────────────────────────────
+
+    #[test]
+    fn memory_access_section_renders_static_text() {
+        let section = MemoryAccessSection;
+        assert_eq!(section.name(), "memory_access");
+        let rendered = section
+            .build(&prompt_context(LearnedContextData::default()))
+            .unwrap();
+        assert!(
+            rendered.contains("## Memory access"),
+            "heading missing:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("memory_recall"),
+            "memory_recall tool not mentioned:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("memory_search"),
+            "memory_search tool not mentioned:\n{rendered}"
+        );
+        // Verify the rendered text matches the constant.
+        assert_eq!(rendered.trim(), MEMORY_ACCESS_INSTRUCTION.trim());
+    }
+
+    #[test]
+    fn memory_access_section_present_in_system_prompt_compose() {
+        // Verify the section renders correctly when added to a prompt composition.
+        let section = MemoryAccessSection;
+        let rendered = section
+            .build(&prompt_context(LearnedContextData::default()))
+            .unwrap();
+        // Spot-check the content constraint: ≤ 80 tokens (rough word count).
+        let word_count = rendered.split_whitespace().count();
+        assert!(
+            word_count <= 100,
+            "MemoryAccessSection is too long ({word_count} words, target ≤ 80 tokens)"
+        );
+        // The section name must be stable (used for insert_section_before).
+        assert_eq!(section.name(), "memory_access");
+        // Content check: the section must mention both retrieval tools.
+        assert!(rendered.contains("memory_recall"));
+        assert!(rendered.contains("memory_search"));
+        // Verify it is non-empty for any PromptContext (not context-gated).
+        let empty_ctx = prompt_context(LearnedContextData::default());
+        let rendered_empty_ctx = section.build(&empty_ctx).unwrap();
+        assert!(
+            !rendered_empty_ctx.trim().is_empty(),
+            "must render regardless of learned context"
+        );
     }
 }

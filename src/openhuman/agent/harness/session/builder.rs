@@ -761,9 +761,12 @@ impl Agent {
                 ))
                 .add_section(Box::new(
                     crate::openhuman::learning::UserProfileSection::new(memory.clone()),
-                ));
+                ))
+                // Phase 4 (#566): bias instruction that tells the agent to call
+                // memory_recall before answering questions involving prior context.
+                .add_section(Box::new(crate::openhuman::learning::MemoryAccessSection));
             log::info!(
-                "[learning] prompt sections registered (user_reflections, learned_context, user_profile)"
+                "[learning] prompt sections registered (user_reflections, learned_context, user_profile, memory_access)"
             );
         }
 
