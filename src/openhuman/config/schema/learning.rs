@@ -58,6 +58,18 @@ pub struct LearningConfig {
     /// without affecting the episodic-log write path.
     #[serde(default = "default_true")]
     pub chat_to_tree_enabled: bool,
+
+    /// Enable the stability detector rebuild cycle. Default: true.
+    #[serde(default = "default_true")]
+    pub stability_detector_enabled: bool,
+
+    /// How often the periodic rebuild loop runs in seconds. Default: 1800 (30 minutes).
+    #[serde(default = "default_rebuild_interval_secs")]
+    pub rebuild_interval_secs: u64,
+}
+
+fn default_rebuild_interval_secs() -> u64 {
+    1800
 }
 
 fn default_true() -> bool {
@@ -83,6 +95,8 @@ impl Default for LearningConfig {
             max_reflections_per_session: default_max_reflections(),
             min_turn_complexity: default_min_turn_complexity(),
             chat_to_tree_enabled: default_true(),
+            stability_detector_enabled: default_true(),
+            rebuild_interval_secs: default_rebuild_interval_secs(),
         }
     }
 }
