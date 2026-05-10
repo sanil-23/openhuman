@@ -263,7 +263,7 @@ fn phase4_end_to_end_pin_forget_profile_md_list() {
 // ── list_facets unit-level smoke test (no RPC server needed) ─────────────────
 
 #[test]
-fn list_facets_cache_direct_returns_active_and_provisional() {
+fn list_facets_cache_direct_active_vs_all() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(PROFILE_INIT_SQL).unwrap();
     let cache = FacetCache::new(Arc::new(Mutex::new(conn)));

@@ -208,7 +208,6 @@ impl Summariser for LlmSummariser {
         // into a prose summary and an optional JSON block. On parse failure, the
         // prose is used as-is and zero facets are emitted (fail-soft).
         let summary_text: &str;
-        let mut _structured: Option<StructuredSummary> = None;
 
         if self.cfg.structured_facet_extraction {
             let (prose, maybe_structured) = split_structured_response(raw.trim());
@@ -221,7 +220,6 @@ impl Summariser for LlmSummariser {
                         parsed.facets.len()
                     );
                     summary_facets::route_facets_to_buffer(&parsed, ctx.tree_id);
-                    _structured = Some(parsed);
                 }
                 Some(Err(e)) => {
                     log::warn!(
