@@ -932,23 +932,29 @@ impl Agent {
         };
 
         // Phase 4 (#566): add the MemoryAccessSection bias instruction only
-        // when at least one retrieval tool survives filtering. An empty
-        // `visible` set means "no filter" (wildcard / orchestrator path), in
-        // which case both tools are always reachable. For agents that filter
-        // both tools out, the section would instruct impossible tool calls —
-        // so we skip it entirely.
+        // when at least one retrieval tool is actually loaded AND survives
+        // filtering. We require both because:
+        //   - the tool may be filtered out by the agent's scope config
+        //   - the tool may not be registered at all on this agent (tool
+        //     listing is build-time configurable)
+        // An empty `visible` set means "no filter" (wildcard / orchestrator
+        // path); in that case any registered retrieval tool is reachable.
         if config.learning.enabled {
-            let has_retrieval = visible.is_empty()
-                || visible.contains("memory_recall")
-                || visible.contains("memory_search");
+            let recall_tools = ["memory_recall", "memory_search"];
+            let has_retrieval = recall_tools.iter().any(|name| {
+                let registered = tools.iter().any(|t| t.name() == *name)
+                    || delegation_tools.iter().any(|t| t.name() == *name);
+                let allowed_by_filter = visible.is_empty() || visible.contains(*name);
+                registered && allowed_by_filter
+            });
             if has_retrieval {
                 prompt_builder = prompt_builder
                     .add_section(Box::new(crate::openhuman::learning::MemoryAccessSection));
-                log::info!("[learning] memory_access prompt section registered");
+                log::debug!("[learning] memory_access prompt section registered");
             } else {
                 log::debug!(
                     "[learning] skipping MemoryAccessSection — neither memory_recall nor \
-                     memory_search is visible for agent={agent_id}"
+                     memory_search is registered+visible for agent={agent_id}"
                 );
             }
         }
