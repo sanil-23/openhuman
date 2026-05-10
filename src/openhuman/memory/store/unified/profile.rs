@@ -52,6 +52,27 @@ CREATE INDEX IF NOT EXISTS idx_profile_class
     ON user_profile(class);
 "#;
 
+/// Phase 3 ALTER TABLE statements for adding new columns to existing databases.
+///
+/// Used by both `migrate_profile_schema` (post-Arc-wrap path) and
+/// `init.rs` (pre-Arc-wrap path) to avoid duplicating the SQL.
+pub const PHASE3_COLUMNS_SQL: &[&str] = &[
+    "ALTER TABLE user_profile ADD COLUMN state TEXT NOT NULL DEFAULT 'active'",
+    "ALTER TABLE user_profile ADD COLUMN stability REAL NOT NULL DEFAULT 0.0",
+    "ALTER TABLE user_profile ADD COLUMN user_state TEXT NOT NULL DEFAULT 'auto'",
+    "ALTER TABLE user_profile ADD COLUMN evidence_refs_json TEXT",
+    "ALTER TABLE user_profile ADD COLUMN class TEXT",
+    "ALTER TABLE user_profile ADD COLUMN cue_families_json TEXT",
+];
+
+/// Phase 3 index creation statements. Idempotent (IF NOT EXISTS).
+///
+/// Shared between `migrate_profile_schema` and `init.rs`.
+pub const PHASE3_INDEXES_SQL: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS idx_profile_state ON user_profile(state)",
+    "CREATE INDEX IF NOT EXISTS idx_profile_class ON user_profile(class)",
+];
+
 /// Idempotent schema migration for existing databases.
 ///
 /// New installs get the full schema from `PROFILE_INIT_SQL`. Existing databases
@@ -60,15 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_profile_class
 /// when the column is already present.
 pub fn migrate_profile_schema(conn: &Arc<Mutex<Connection>>) {
     let conn = conn.lock();
-    let new_columns = [
-        "ALTER TABLE user_profile ADD COLUMN state TEXT NOT NULL DEFAULT 'active'",
-        "ALTER TABLE user_profile ADD COLUMN stability REAL NOT NULL DEFAULT 0.0",
-        "ALTER TABLE user_profile ADD COLUMN user_state TEXT NOT NULL DEFAULT 'auto'",
-        "ALTER TABLE user_profile ADD COLUMN evidence_refs_json TEXT",
-        "ALTER TABLE user_profile ADD COLUMN class TEXT",
-        "ALTER TABLE user_profile ADD COLUMN cue_families_json TEXT",
-    ];
-    for sql in &new_columns {
+    for sql in PHASE3_COLUMNS_SQL {
         match conn.execute(sql, []) {
             Ok(_) => {
                 tracing::debug!("[profile] schema migration applied: {sql}");
@@ -89,11 +102,7 @@ pub fn migrate_profile_schema(conn: &Arc<Mutex<Connection>>) {
     }
 
     // Ensure the new indexes exist (idempotent — IF NOT EXISTS).
-    let new_indexes = [
-        "CREATE INDEX IF NOT EXISTS idx_profile_state ON user_profile(state)",
-        "CREATE INDEX IF NOT EXISTS idx_profile_class ON user_profile(class)",
-    ];
-    for sql in &new_indexes {
+    for sql in PHASE3_INDEXES_SQL {
         if let Err(e) = conn.execute(sql, []) {
             tracing::warn!("[profile] index creation failed (non-fatal): {sql}: {e}");
         }
@@ -376,8 +385,13 @@ pub fn profile_upsert_full(
 
     let conn = conn.lock();
 
-    // Use INSERT OR REPLACE so we can atomically update all columns including
-    // state/stability without reading the row first.
+    // Use INSERT OR REPLACE to atomically update all columns including
+    // state/stability without reading the row first. Note: on a UNIQUE(facet_type,
+    // key) conflict, SQLite performs DELETE + INSERT rather than an in-place
+    // update, which means facet_id will change for conflicting rows. This is
+    // intentional: the stability detector owns these rows during rebuild and
+    // provides consistent facet_id values; external references by facet_id are
+    // not expected.
     conn.execute(
         "INSERT OR REPLACE INTO user_profile
          (facet_id, facet_type, key, value, confidence, evidence_count,

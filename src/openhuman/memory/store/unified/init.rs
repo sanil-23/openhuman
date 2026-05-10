@@ -135,18 +135,10 @@ impl UnifiedMemory {
         // New installs already have these columns via PROFILE_INIT_SQL above.
         // Existing DBs need the migration to add state/stability/user_state/evidence_refs_json.
         // We run the ALTER TABLE statements directly on `conn` before wrapping it in Arc<Mutex>.
+        // SQL arrays are defined as constants in profile.rs to avoid duplication.
         {
-            let new_cols = [
-                "ALTER TABLE user_profile ADD COLUMN state TEXT NOT NULL DEFAULT 'active'",
-                "ALTER TABLE user_profile ADD COLUMN stability REAL NOT NULL DEFAULT 0.0",
-                "ALTER TABLE user_profile ADD COLUMN user_state TEXT NOT NULL DEFAULT 'auto'",
-                "ALTER TABLE user_profile ADD COLUMN evidence_refs_json TEXT",
-                "ALTER TABLE user_profile ADD COLUMN class TEXT",
-                "ALTER TABLE user_profile ADD COLUMN cue_families_json TEXT",
-                "CREATE INDEX IF NOT EXISTS idx_profile_state ON user_profile(state)",
-                "CREATE INDEX IF NOT EXISTS idx_profile_class ON user_profile(class)",
-            ];
-            for sql in &new_cols {
+            use super::profile::{PHASE3_COLUMNS_SQL, PHASE3_INDEXES_SQL};
+            for sql in PHASE3_COLUMNS_SQL.iter().chain(PHASE3_INDEXES_SQL.iter()) {
                 match conn.execute(sql, []) {
                     Ok(_) => tracing::debug!("[profile:init] applied: {sql}"),
                     Err(e) => {
