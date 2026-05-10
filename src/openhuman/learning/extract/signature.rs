@@ -584,9 +584,13 @@ mod signature_tests {
     fn parse_signature_handles_no_signature() {
         let body = "just some content here nothing looks like a sig";
         let cs = extract(body);
-        // No strong signals → no candidates (or only low-confidence ones below threshold).
-        // In any case, ensure parse returns without panic.
-        assert!(cs.iter().all(|c| c.initial_confidence >= CONF_LOCATION));
+        // No strong signals → no candidates emitted. The < 0.6 filter at the
+        // tail of parse_signature drops anything below confidence threshold
+        // (including the gated lone-location case), so the result must be empty.
+        assert!(
+            cs.is_empty(),
+            "expected zero candidates from non-signature body, got {cs:?}"
+        );
     }
 
     #[test]
