@@ -11,6 +11,8 @@ pub fn all_learning_controller_schemas() -> Vec<ControllerSchema> {
     vec![
         learning_schemas("learning_linkedin_enrichment"),
         learning_schemas("learning_save_profile"),
+        learning_schemas("learning_rebuild_cache"),
+        learning_schemas("learning_cache_stats"),
     ]
 }
 
@@ -23,6 +25,14 @@ pub fn all_learning_registered_controllers() -> Vec<RegisteredController> {
         RegisteredController {
             schema: learning_schemas("learning_save_profile"),
             handler: handle_save_profile,
+        },
+        RegisteredController {
+            schema: learning_schemas("learning_rebuild_cache"),
+            handler: handle_rebuild_cache,
+        },
+        RegisteredController {
+            schema: learning_schemas("learning_cache_stats"),
+            handler: handle_cache_stats,
         },
     ]
 }
@@ -99,6 +109,86 @@ pub fn learning_schemas(function: &str) -> ControllerSchema {
                 },
             ],
         },
+        "learning_rebuild_cache" => ControllerSchema {
+            namespace: "learning",
+            function: "rebuild_cache",
+            description: "Manually trigger a stability-detector rebuild cycle. \
+                          Drains the candidate buffer, scores all (class, key) pairs, \
+                          applies class budgets, and persists the updated ambient cache. \
+                          Returns rebuild statistics.",
+            inputs: vec![],
+            outputs: vec![
+                FieldSchema {
+                    name: "added",
+                    ty: TypeSchema::U64,
+                    comment: "Facet rows newly created in this cycle.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "evicted",
+                    ty: TypeSchema::U64,
+                    comment: "Facet rows demoted to Dropped or deleted.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "kept",
+                    ty: TypeSchema::U64,
+                    comment: "Facet rows carried over unchanged.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "total_size",
+                    ty: TypeSchema::U64,
+                    comment: "Total Active rows after the rebuild.",
+                    required: true,
+                },
+            ],
+        },
+        "learning_cache_stats" => ControllerSchema {
+            namespace: "learning",
+            function: "cache_stats",
+            description: "Return current ambient cache statistics — total row count, \
+                          per-state breakdown, and per-class breakdown.",
+            inputs: vec![],
+            outputs: vec![
+                FieldSchema {
+                    name: "total",
+                    ty: TypeSchema::U64,
+                    comment: "Total rows in the cache (all states).",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "active",
+                    ty: TypeSchema::U64,
+                    comment: "Rows with state=active.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "provisional",
+                    ty: TypeSchema::U64,
+                    comment: "Rows with state=provisional.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "candidate",
+                    ty: TypeSchema::U64,
+                    comment: "Rows with state=candidate.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "dropped",
+                    ty: TypeSchema::U64,
+                    comment: "Rows with state=dropped.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "by_class",
+                    ty: TypeSchema::Json,
+                    comment: "Map of class name → row count (active rows only).",
+                    required: true,
+                },
+            ],
+        },
         _ => ControllerSchema {
             namespace: "learning",
             function: "unknown",
@@ -119,13 +209,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_schemas_returns_two() {
-        assert_eq!(all_learning_controller_schemas().len(), 2);
+    fn all_schemas_returns_four() {
+        assert_eq!(all_learning_controller_schemas().len(), 4);
     }
 
     #[test]
-    fn all_controllers_returns_two() {
-        assert_eq!(all_learning_registered_controllers().len(), 2);
+    fn all_controllers_returns_four() {
+        assert_eq!(all_learning_registered_controllers().len(), 4);
     }
 
     #[test]
@@ -228,6 +318,109 @@ fn handle_save_profile(params: Map<String, Value>) -> ControllerFuture {
         let log = vec![format!(
             "learning.save_profile: wrote {bytes} bytes to {path_display} (summarize={summarize})"
         )];
+        RpcOutcome::new(payload, log).into_cli_compatible_json()
+    })
+}
+
+fn handle_rebuild_cache(_params: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move {
+        use crate::openhuman::learning::cache::FacetCache;
+        use crate::openhuman::learning::stability_detector::StabilityDetector;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        tracing::debug!("[learning.rebuild_cache] manual rebuild requested via RPC");
+
+        let client = crate::openhuman::memory::global::client_if_ready()
+            .ok_or_else(|| "memory client not ready".to_string())?;
+        let conn = client.profile_conn();
+        let cache = FacetCache::new(conn);
+        let detector = StabilityDetector::new(cache);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+
+        let outcome = detector
+            .rebuild(now)
+            .map_err(|e| format!("rebuild failed: {e:#}"))?;
+
+        let log = vec![format!(
+            "learning.rebuild_cache: added={} evicted={} kept={} total={}",
+            outcome.added, outcome.evicted, outcome.kept, outcome.total_size,
+        )];
+
+        let payload = serde_json::json!({
+            "added": outcome.added,
+            "evicted": outcome.evicted,
+            "kept": outcome.kept,
+            "total_size": outcome.total_size,
+        });
+
+        RpcOutcome::new(payload, log).into_cli_compatible_json()
+    })
+}
+
+fn handle_cache_stats(_params: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move {
+        use crate::openhuman::learning::cache::FacetCache;
+        use crate::openhuman::memory::store::profile::FacetState;
+
+        tracing::debug!("[learning.cache_stats] cache stats requested via RPC");
+
+        let client = crate::openhuman::memory::global::client_if_ready()
+            .ok_or_else(|| "memory client not ready".to_string())?;
+        let conn = client.profile_conn();
+        let cache = FacetCache::new(conn);
+
+        let all_facets = cache
+            .list_all()
+            .map_err(|e| format!("list_all failed: {e:#}"))?;
+
+        let total = all_facets.len();
+        let active = all_facets
+            .iter()
+            .filter(|f| f.state == FacetState::Active)
+            .count();
+        let provisional = all_facets
+            .iter()
+            .filter(|f| f.state == FacetState::Provisional)
+            .count();
+        let candidate = all_facets
+            .iter()
+            .filter(|f| f.state == FacetState::Candidate)
+            .count();
+        let dropped = all_facets
+            .iter()
+            .filter(|f| f.state == FacetState::Dropped)
+            .count();
+
+        // Per-class count (Active rows only, keyed by class field or key prefix).
+        let mut by_class: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for f in all_facets.iter().filter(|f| f.state == FacetState::Active) {
+            let cls = f
+                .class
+                .clone()
+                .or_else(|| f.key.split_once('/').map(|(p, _)| p.to_string()))
+                .unwrap_or_else(|| "_other".to_string());
+            *by_class.entry(cls).or_insert(0) += 1;
+        }
+
+        let log = vec![format!(
+            "learning.cache_stats: total={total} active={active} provisional={provisional} \
+             candidate={candidate} dropped={dropped}"
+        )];
+
+        let payload = serde_json::json!({
+            "total": total,
+            "active": active,
+            "provisional": provisional,
+            "candidate": candidate,
+            "dropped": dropped,
+            "by_class": by_class,
+        });
+
         RpcOutcome::new(payload, log).into_cli_compatible_json()
     })
 }

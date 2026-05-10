@@ -2,6 +2,15 @@
 //!
 //! These sections read pre-fetched data from `PromptContext.learned` — no async
 //! or blocking I/O happens during prompt building.
+//!
+//! ## Phase 3 addition (#566)
+//!
+//! [`load_learned_from_cache`] reads Active facets from the `FacetCache`
+//! (backed by `user_profile_facets`) and returns them as a list of formatted
+//! strings suitable for injection into `LearnedContextData.user_profile`.
+//!
+//! The existing KV-namespace reads in `fetch_learned_context` are preserved
+//! (both paths active in this phase; KV path will be removed in a follow-up).
 
 use crate::openhuman::context::prompt::{PromptContext, PromptSection};
 use anyhow::Result;
@@ -80,6 +89,83 @@ impl PromptSection for UserProfileSection {
         out.push('\n');
         Ok(out)
     }
+}
+
+// ── Cache-backed loader ───────────────────────────────────────────────────────
+
+/// Maximum number of facets to include in the ambient prompt injection.
+///
+/// Corresponds to "~25 entries total" from the Phase 3 spec.
+const CACHE_PROMPT_CAP: usize = 25;
+
+/// Load Active facets from the `FacetCache` and format them for prompt injection.
+///
+/// Returns a list of strings in the form `class/key: value`, sorted by stability
+/// descending within each class, then alphabetically by class. The total is capped
+/// at [`CACHE_PROMPT_CAP`] entries.
+///
+/// This function is **synchronous** and performs only SQLite reads — safe to call
+/// from the synchronous part of the system prompt build path. The caller should
+/// keep both this path and the existing KV-namespace path active until the KV path
+/// is removed in a follow-up phase.
+pub fn load_learned_from_cache(
+    cache: &crate::openhuman::learning::cache::FacetCache,
+) -> Vec<String> {
+    let facets = match cache.list_active() {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!("[learning::prompt] load_learned_from_cache failed: {e}");
+            return Vec::new();
+        }
+    };
+
+    if facets.is_empty() {
+        return Vec::new();
+    }
+
+    // Group by class prefix (portion before the first '/'), then sort within
+    // each class by stability descending, then by key alphabetically.
+    use crate::openhuman::memory::store::profile::ProfileFacet;
+    use std::collections::BTreeMap;
+    let mut by_class: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+
+    for (idx, f) in facets.iter().enumerate() {
+        let class = f
+            .key
+            .split_once('/')
+            .map(|(prefix, _rest)| prefix.to_string())
+            .unwrap_or_else(|| "other".to_string());
+        by_class.entry(class).or_default().push(idx);
+    }
+
+    for indices in by_class.values_mut() {
+        indices.sort_by(|&a, &b| {
+            facets[b]
+                .stability
+                .partial_cmp(&facets[a].stability)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| facets[a].key.cmp(&facets[b].key))
+        });
+    }
+
+    let mut result = Vec::with_capacity(CACHE_PROMPT_CAP);
+    'outer: for indices in by_class.values() {
+        for &idx in indices {
+            if result.len() >= CACHE_PROMPT_CAP {
+                break 'outer;
+            }
+            let f: &ProfileFacet = &facets[idx];
+            let entry = if f.key.starts_with("goal/") {
+                // Goal class: render just the value, it's a sentence.
+                f.value.clone()
+            } else {
+                format!("{}: {}", f.key, f.value)
+            };
+            result.push(entry);
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -232,5 +318,96 @@ mod tests {
             .build(&prompt_context(LearnedContextData::default()))
             .unwrap()
             .is_empty());
+    }
+
+    // ── load_learned_from_cache ───────────────────────────────────────────────
+
+    #[test]
+    fn load_learned_from_cache_formats_active_facets() {
+        use crate::openhuman::learning::cache::FacetCache;
+        use crate::openhuman::memory::store::profile::{
+            FacetState, FacetType, ProfileFacet, UserState, PROFILE_INIT_SQL,
+        };
+        use parking_lot::Mutex;
+        use rusqlite::Connection;
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(PROFILE_INIT_SQL).unwrap();
+        let cache = FacetCache::new(Arc::new(Mutex::new(conn)));
+
+        let make_facet = |id: &str, key: &str, value: &str, stab: f64| ProfileFacet {
+            facet_id: id.into(),
+            facet_type: FacetType::Preference,
+            key: key.into(),
+            value: value.into(),
+            confidence: 0.8,
+            evidence_count: 2,
+            source_segment_ids: None,
+            first_seen_at: 1000.0,
+            last_seen_at: 1200.0,
+            state: FacetState::Active,
+            stability: stab,
+            user_state: UserState::Auto,
+            evidence_refs: vec![],
+            class: None,
+            cue_families: None,
+        };
+
+        cache
+            .upsert(&make_facet("f1", "style/verbosity", "terse", 2.0))
+            .unwrap();
+        cache
+            .upsert(&make_facet("f2", "identity/name", "Alice", 1.8))
+            .unwrap();
+        cache
+            .upsert(&make_facet(
+                "f3",
+                "goal/learn_rust",
+                "Learn Rust this year",
+                1.6,
+            ))
+            .unwrap();
+
+        // Provisional — should NOT appear.
+        let mut prov = make_facet("f4", "style/tone", "formal", 0.8);
+        prov.state = FacetState::Provisional;
+        cache.upsert(&prov).unwrap();
+
+        let result = load_learned_from_cache(&cache);
+
+        assert!(
+            !result.is_empty(),
+            "should produce entries for Active facets"
+        );
+        // style/verbosity formatted as "style/verbosity: terse"
+        assert!(
+            result.iter().any(|s| s.contains("style/verbosity")),
+            "style/verbosity should appear"
+        );
+        // Goal class → value only
+        assert!(
+            result.iter().any(|s| s == "Learn Rust this year"),
+            "goal class should render value only"
+        );
+        // Provisional should not appear
+        assert!(
+            !result.iter().any(|s| s.contains("style/tone")),
+            "provisional facet must not appear in cache prompt"
+        );
+    }
+
+    #[test]
+    fn load_learned_from_cache_empty_when_no_active_facets() {
+        use crate::openhuman::learning::cache::FacetCache;
+        use crate::openhuman::memory::store::profile::PROFILE_INIT_SQL;
+        use parking_lot::Mutex;
+        use rusqlite::Connection;
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(PROFILE_INIT_SQL).unwrap();
+        let cache = FacetCache::new(Arc::new(Mutex::new(conn)));
+
+        let result = load_learned_from_cache(&cache);
+        assert!(result.is_empty());
     }
 }
