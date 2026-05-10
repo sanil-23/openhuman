@@ -761,12 +761,11 @@ impl Agent {
                 ))
                 .add_section(Box::new(
                     crate::openhuman::learning::UserProfileSection::new(memory.clone()),
-                ))
-                // Phase 4 (#566): bias instruction that tells the agent to call
-                // memory_recall before answering questions involving prior context.
-                .add_section(Box::new(crate::openhuman::learning::MemoryAccessSection));
+                ));
+            // NOTE: MemoryAccessSection is added after tool-filtering so we can
+            // gate it on retrieval-tool visibility — see below.
             log::info!(
-                "[learning] prompt sections registered (user_reflections, learned_context, user_profile, memory_access)"
+                "[learning] prompt sections registered (user_reflections, learned_context, user_profile)"
             );
         }
 
@@ -931,6 +930,29 @@ impl Agent {
                 .map(|t| t.name().to_string())
                 .collect(),
         };
+
+        // Phase 4 (#566): add the MemoryAccessSection bias instruction only
+        // when at least one retrieval tool survives filtering. An empty
+        // `visible` set means "no filter" (wildcard / orchestrator path), in
+        // which case both tools are always reachable. For agents that filter
+        // both tools out, the section would instruct impossible tool calls —
+        // so we skip it entirely.
+        if config.learning.enabled {
+            let has_retrieval = visible.is_empty()
+                || visible.contains("memory_recall")
+                || visible.contains("memory_search");
+            if has_retrieval {
+                prompt_builder = prompt_builder
+                    .add_section(Box::new(crate::openhuman::learning::MemoryAccessSection));
+                log::info!("[learning] memory_access prompt section registered");
+            } else {
+                log::debug!(
+                    "[learning] skipping MemoryAccessSection — neither memory_recall nor \
+                     memory_search is visible for agent={agent_id}"
+                );
+            }
+        }
+
         // De-duplicate: some synthesised tool names may collide with
         // already-registered tools (unlikely for `delegate_*` names but
         // cheap to guard against).
