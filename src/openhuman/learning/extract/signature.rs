@@ -59,16 +59,13 @@ pub fn parse_signature(
 ) -> Vec<LearningCandidate> {
     let now = now_secs();
 
-    // Take the last SIG_WINDOW_LINES non-empty lines.
-    let sig_lines: Vec<&str> = email_body
+    // Take the last SIG_WINDOW_LINES non-empty lines in original order.
+    let all_non_empty: Vec<&str> = email_body
         .lines()
-        .rev()
         .filter(|l| !l.trim().is_empty())
-        .take(SIG_WINDOW_LINES)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
         .collect();
+    let start = all_non_empty.len().saturating_sub(SIG_WINDOW_LINES);
+    let sig_lines = &all_non_empty[start..];
 
     if sig_lines.is_empty() {
         return Vec::new();
@@ -136,7 +133,7 @@ pub fn parse_signature(
     }
 
     // --- Timezone detection ---
-    for line in &sig_lines {
+    for line in sig_lines {
         let t = line.trim();
         if let Some(tz) = extract_timezone(t) {
             candidates.push(LearningCandidate {
@@ -185,7 +182,7 @@ pub fn parse_signature(
     }
     // Strategy 2: "@ Company" or "Company, Inc" pattern on any sig line.
     if !candidates.iter().any(|c| c.key == "employer") {
-        for line in &sig_lines {
+        for line in sig_lines {
             let t = line.trim();
             if let Some(emp) = extract_employer_pattern(t) {
                 candidates.push(LearningCandidate {
@@ -317,7 +314,6 @@ fn extract_role(s: &str) -> Option<&str> {
         "coo",
         "cpo",
         "cfo",
-        "pm",
         "product manager",
         "consultant",
         "lead",
