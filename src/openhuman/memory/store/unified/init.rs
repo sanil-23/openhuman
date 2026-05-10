@@ -131,6 +131,31 @@ impl UnifiedMemory {
         // User profile accumulation table.
         conn.execute_batch(super::profile::PROFILE_INIT_SQL)?;
 
+        // Phase 3 (#566): idempotently add new columns to existing databases.
+        // New installs already have these columns via PROFILE_INIT_SQL above.
+        // Existing DBs need the migration to add state/stability/user_state/evidence_refs_json.
+        // We run the ALTER TABLE statements directly on `conn` before wrapping it in Arc<Mutex>.
+        {
+            let new_cols = [
+                "ALTER TABLE user_profile ADD COLUMN state TEXT NOT NULL DEFAULT 'active'",
+                "ALTER TABLE user_profile ADD COLUMN stability REAL NOT NULL DEFAULT 0.0",
+                "ALTER TABLE user_profile ADD COLUMN user_state TEXT NOT NULL DEFAULT 'auto'",
+                "ALTER TABLE user_profile ADD COLUMN evidence_refs_json TEXT",
+                "ALTER TABLE user_profile ADD COLUMN class TEXT",
+                "ALTER TABLE user_profile ADD COLUMN cue_families_json TEXT",
+                "CREATE INDEX IF NOT EXISTS idx_profile_state ON user_profile(state)",
+                "CREATE INDEX IF NOT EXISTS idx_profile_class ON user_profile(class)",
+            ];
+            for sql in &new_cols {
+                match conn.execute(sql, []) {
+                    Ok(_) => tracing::debug!("[profile:init] applied: {sql}"),
+                    Err(e) => {
+                        tracing::trace!("[profile:init] skipped (probably already exists): {e}")
+                    }
+                }
+            }
+        }
+
         // Idempotent legacy-namespace migration.
         //
         // Older writes via MemoryStoreTool packed the intended namespace into
