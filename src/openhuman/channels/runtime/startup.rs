@@ -112,6 +112,32 @@ pub async fn start_channels(config: Config) -> Result<()> {
         });
     }
 
+    // Phase 4 learning: register the ProfileMdRenderer subscriber.
+    // Subscribes to CacheRebuilt events and re-renders the five cache-derived
+    // PROFILE.md blocks (style, identity, tooling, vetoes, goals).
+    {
+        use crate::core::event_bus::SubscriptionHandle;
+        use std::sync::OnceLock;
+        static PROFILE_MD_RENDERER_HANDLE: OnceLock<Option<SubscriptionHandle>> = OnceLock::new();
+        PROFILE_MD_RENDERER_HANDLE.get_or_init(|| {
+            if let Some(client) = crate::openhuman::memory::global::client_if_ready() {
+                use crate::openhuman::learning::cache::FacetCache;
+                use crate::openhuman::learning::ProfileMdRenderer;
+                use std::sync::Arc;
+                let cache = Arc::new(FacetCache::new(client.profile_conn()));
+                let renderer =
+                    Arc::new(ProfileMdRenderer::new(cache, config.workspace_dir.clone()));
+                ProfileMdRenderer::subscribe(renderer)
+            } else {
+                tracing::debug!(
+                    "[learning::profile_md_renderer] memory client not ready at startup, \
+                     skipping ProfileMdRenderer registration"
+                );
+                None
+            }
+        });
+    }
+
     tracing::debug!("[event_bus] global singleton initialized in start_channels");
 
     // Initialise the sub-agent definition registry from this workspace.

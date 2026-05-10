@@ -25,6 +25,7 @@ pub mod cache;
 pub mod candidate;
 pub mod extract;
 pub mod linkedin_enrichment;
+pub mod profile_md_renderer;
 pub mod prompt_sections;
 pub mod reflection;
 pub mod scheduler;
@@ -36,7 +37,11 @@ pub mod user_profile;
 
 pub use cache::FacetCache;
 pub use candidate::{Buffer, CueFamily, EvidenceRef, FacetClass, LearningCandidate};
-pub use prompt_sections::{load_learned_from_cache, LearnedContextSection, UserProfileSection};
+pub use profile_md_renderer::ProfileMdRenderer;
+pub use prompt_sections::{
+    load_learned_from_cache, LearnedContextSection, MemoryAccessSection, UserProfileSection,
+    MEMORY_ACCESS_INSTRUCTION,
+};
 pub use reflection::ReflectionHook;
 pub use schemas::{
     all_learning_controller_schemas, all_learning_registered_controllers, learning_schemas,
