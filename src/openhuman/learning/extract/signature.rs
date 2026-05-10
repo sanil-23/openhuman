@@ -234,10 +234,18 @@ pub fn parse_signature(
         }
     }
 
+    // Drop low-confidence noise. All CONF_* constants are currently ≥ 0.6,
+    // so this is mostly a guard against future regressions and codifies the
+    // contract advertised in the doc comment.
+    let kept = candidates.len();
+    candidates.retain(|c| c.initial_confidence >= 0.6);
+    let dropped = kept - candidates.len();
+
     tracing::debug!(
-        "[learning::extract::signature] parse_signature source_id={} candidates={}",
+        "[learning::extract::signature] parse_signature source_id={} candidates={} dropped={}",
         source_id,
-        candidates.len()
+        candidates.len(),
+        dropped,
     );
 
     candidates
