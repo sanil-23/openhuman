@@ -93,8 +93,8 @@ jobs:
         shell: bash
         working-directory: app
         env:
-          BASE_URL: ${{ vars.BASE_URL }}
-          VITE_BACKEND_URL: ${{ vars.BASE_URL }}
+          BASE_URL: https://staging-api.tinyhumans.ai/
+          VITE_BACKEND_URL: https://staging-api.tinyhumans.ai/
           VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
           VITE_DEBUG: ${{ vars.VITE_DEBUG }}
           VITE_MINIMUM_SUPPORTED_APP_VERSION: ${{ vars.VITE_MINIMUM_SUPPORTED_APP_VERSION }}
