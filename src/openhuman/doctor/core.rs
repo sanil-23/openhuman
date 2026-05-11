@@ -742,8 +742,7 @@ fn check_command_available(
         use std::os::windows::process::CommandExt;
         child_cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    match child_cmd.output()
-    {
+    match child_cmd.output() {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout)
                 .lines()
