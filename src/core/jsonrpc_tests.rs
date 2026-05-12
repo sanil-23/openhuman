@@ -93,6 +93,26 @@ async fn shutdown_token_stops_axum_listener_within_timeout() {
     let _signed_out_restore = crate::openhuman::scheduler_gate::SignedOutTestGuard::set(false);
 
     let workspace = tempfile::tempdir().expect("workspace tempdir");
+
+    // Force the scheduler gate's policy to `Aggressive` for the
+    // lifetime of this lib-test binary by seeding a workspace config
+    // with `[scheduler_gate] mode = "always_on"`. `STATE` is a process-
+    // wide `OnceLock`; whatever `init_global` writes during this
+    // test's `run_server_embedded` bootstrap is frozen for every later
+    // test in the same binary. Without this, on a busy CI runner the
+    // `Signals::sample()` snapshot at init time can capture
+    // `cpu_usage_pct >= cpu_severe_pct` (default 95.0), pin the cached
+    // policy to `Paused { CpuPressure }`, and deadlock every later
+    // caller of `wait_for_capacity()` in the `paused_poll_ms` re-eval
+    // loop (e.g. `memory::tree::jobs::worker::run_once`). Pinning
+    // `AlwaysOn` makes `policy::decide` short-circuit to `Aggressive`
+    // regardless of signals, so `wait_for_capacity()` always returns
+    // a permit immediately for the rest of the binary's life.
+    std::fs::write(
+        workspace.path().join("config.toml"),
+        "[scheduler_gate]\nmode = \"always_on\"\n",
+    )
+    .expect("seed scheduler_gate=always_on config.toml");
     let _env = EnvVarGuard::set_many(vec![
         (
             "OPENHUMAN_WORKSPACE",
