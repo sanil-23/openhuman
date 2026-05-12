@@ -88,9 +88,10 @@ const LEGACY_ALIASES: &[(&str, &str)] = &[
 /// calling it on an already-canonical name (or any unrelated name) is a
 /// no-op.
 ///
-/// Lifetimes are arranged so callers can use the returned reference for
-/// the duration of the input borrow without allocating.
-pub fn resolve_legacy<'a>(method: &'a str) -> &'a str {
+/// Returns a borrow that lives for at least the input's lifetime — the
+/// matched-canonical branch returns `&'static`, the pass-through branch
+/// returns the input borrow; elision picks the tighter input lifetime.
+pub fn resolve_legacy(method: &str) -> &str {
     for (legacy, canonical) in LEGACY_ALIASES {
         if *legacy == method {
             return canonical;

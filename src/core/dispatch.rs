@@ -45,7 +45,10 @@ pub async fn dispatch(
     // `crate::core::legacy_aliases` for the shared table.
     let resolved = resolve_legacy(method);
     if resolved != method {
-        log::info!(
+        // Per-rewrite log at debug to keep the dispatcher hot path quiet
+        // at scale (per graycyrus review on PR #1544). Aggregate
+        // visibility belongs in the observability layer, not here.
+        log::debug!(
             "[rpc-legacy-alias] rewrite method={} -> canonical={}",
             method,
             resolved
