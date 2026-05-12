@@ -385,6 +385,28 @@ mod tests {
         drop(second);
     }
 
+    /// RAII guard that snapshots `SIGNED_OUT` on construction, mutates it,
+    /// and restores the snapshotted value on drop — even if the test body
+    /// panics. Without this, an assertion or timeout failure inside a
+    /// `SIGNED_OUT=true` test would leak the flag into every subsequent
+    /// test in the same binary and reproduce the exact deadlock class
+    /// this PR fixes. (Per CodeRabbit feedback on PR #1552.)
+    struct SignedOutTestGuard(bool);
+
+    impl SignedOutTestGuard {
+        fn set(next: bool) -> Self {
+            let prev = is_signed_out();
+            set_signed_out(next);
+            Self(prev)
+        }
+    }
+
+    impl Drop for SignedOutTestGuard {
+        fn drop(&mut self) {
+            set_signed_out(self.0);
+        }
+    }
+
     #[tokio::test]
     async fn signed_out_is_ignored_when_gate_uninit() {
         // In unit tests `init_global` is never called, so `STATE` is `None`.
@@ -394,16 +416,13 @@ mod tests {
         // (`clear_session`, RPC 401 dispatch, `SessionExpiredSubscriber`)
         // deadlock every subsequent caller of `wait_for_capacity`.
         let _g = lock();
-        set_signed_out(false);
-        set_signed_out(true);
+        let _signed_out = SignedOutTestGuard::set(true);
 
         assert_eq!(
             current_policy(),
             Policy::Normal,
             "with STATE uninit, signed_out must NOT change current_policy"
         );
-
-        set_signed_out(false);
     }
 
     #[tokio::test]
@@ -418,15 +437,13 @@ mod tests {
         // 60-second `paused_poll_ms` fallback (STATE is None in tests, so
         // the fallback is the unconfigured default).
         let _g = lock();
-        set_signed_out(true);
+        let _signed_out = SignedOutTestGuard::set(true);
 
         let permit = timeout(TokioDuration::from_millis(500), wait_for_capacity())
             .await
             .expect("wait_for_capacity must NOT block when STATE is uninit, even if signed_out")
             .expect("uninit gate still hands back a permit");
         drop(permit);
-
-        set_signed_out(false);
     }
 
     #[tokio::test]
