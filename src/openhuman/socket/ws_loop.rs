@@ -18,6 +18,19 @@ use super::types::{ConnectionOutcome, WsStream};
 // Background loop
 // ---------------------------------------------------------------------------
 
+/// Number of consecutive `ConnectionOutcome::Failed` attempts before the
+/// loop escalates its log level from `warn` to `error`. Below the
+/// threshold, repeated transient failures (gateway 5xx, TLS handshake
+/// resets, DNS blips) stay at `warn` and don't reach the Sentry tracing
+/// layer; sustained outages still surface as `error` so real backend
+/// availability problems aren't silently swallowed.
+///
+/// See OPENHUMAN-TAURI-8M — a single gateway 503 incident generated 549
+/// Sentry events because every retry was logged at `error`. With the
+/// threshold in place the same incident produces at most one event per
+/// affected client.
+const FAIL_ESCALATE_THRESHOLD: u32 = 5;
+
 /// Background loop that manages the WebSocket connection and reconnection.
 pub(super) async fn ws_loop(
     url: String,
@@ -27,8 +40,24 @@ pub(super) async fn ws_loop(
     mut shutdown_rx: watch::Receiver<bool>,
     internal_tx: mpsc::UnboundedSender<String>,
 ) {
+    // Defense in depth: the public RPC `connect_with_session` already refuses
+    // to spawn without a session token, but the bare `connect(url, token)`
+    // RPC trusts its caller. Treat an empty token as a programming error
+    // rather than silently spinning a doomed reconnect loop — every attempt
+    // would either 401 at the SIO CONNECT step or fail upstream at the
+    // gateway, producing exactly the kind of retry-storm noise this module
+    // is otherwise designed to suppress.
+    if token.trim().is_empty() {
+        log::error!("[socket] ws_loop: refusing to start — empty session token");
+        *shared.status.write() = ConnectionStatus::Disconnected;
+        *shared.socket_id.write() = None;
+        emit_state_change(&shared);
+        return;
+    }
+
     let mut backoff = Duration::from_millis(1000);
     let max_backoff = Duration::from_secs(30);
+    let mut consecutive_failures: u32 = 0;
 
     loop {
         if *shutdown_rx.borrow() {
@@ -55,11 +84,29 @@ pub(super) async fn ws_loop(
                 break;
             }
             ConnectionOutcome::Lost(reason) => {
+                // `Lost` is only returned after a successful SIO CONNECT ACK
+                // (see `run_connection`), so reaching this arm proves the
+                // backend is reachable and the token is valid. Reset both
+                // the backoff and the failure streak.
+                consecutive_failures = 0;
                 log::warn!("[socket] Connection lost: {}", reason);
-                backoff = Duration::from_millis(1000); // reset on established-then-lost
+                backoff = Duration::from_millis(1000);
             }
             ConnectionOutcome::Failed(reason) => {
-                log::error!("[socket] Connection failed: {}", reason);
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                if consecutive_failures >= FAIL_ESCALATE_THRESHOLD {
+                    log::error!(
+                        "[socket] Connection failed {}x (sustained): {}",
+                        consecutive_failures,
+                        reason
+                    );
+                } else {
+                    log::warn!(
+                        "[socket] Connection failed (attempt {}): {}",
+                        consecutive_failures,
+                        reason
+                    );
+                }
                 // keep growing backoff
             }
         }

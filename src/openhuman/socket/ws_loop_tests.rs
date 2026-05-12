@@ -383,3 +383,45 @@ fn connect_behavior_variants_are_distinct() {
         ConnectBehavior::GarbageOpenPacket => {}
     }
 }
+
+/// Empty-token guard: if a caller invokes the bare `connect(url, token)` RPC
+/// with an empty string the loop must bail immediately rather than spin a
+/// doomed reconnect cycle that fires Sentry events on every retry. The
+/// status must end up `Disconnected` and the function must return without
+/// ever opening a socket.
+#[tokio::test]
+async fn ws_loop_refuses_to_start_with_empty_token() {
+    let shared = make_shared();
+    *shared.status.write() = ConnectionStatus::Connecting;
+    *shared.socket_id.write() = Some("stale".into());
+
+    let (_emit_tx, emit_rx) = mpsc::unbounded_channel::<String>();
+    // Shutdown channel is never signalled — if the guard fails, the test
+    // will time out waiting for the spawned task to complete.
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (internal_tx, _internal_rx) = mpsc::unbounded_channel::<String>();
+
+    let loop_shared = Arc::clone(&shared);
+    let handle = tokio::spawn(async move {
+        ws_loop(
+            // URL is deliberately invalid — if the guard misfires, the
+            // task would error on connect rather than return immediately.
+            "http://invalid.example.invalid:1".into(),
+            "   ".into(), // whitespace-only counts as empty
+            loop_shared,
+            emit_rx,
+            shutdown_rx,
+            internal_tx,
+        )
+        .await;
+    });
+
+    let res = tokio::time::timeout(tokio::time::Duration::from_secs(2), handle).await;
+    assert!(
+        res.is_ok(),
+        "ws_loop must return immediately on empty token, not spin"
+    );
+
+    assert_eq!(*shared.status.read(), ConnectionStatus::Disconnected);
+    assert!(shared.socket_id.read().is_none());
+}
