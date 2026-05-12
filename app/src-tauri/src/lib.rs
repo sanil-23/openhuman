@@ -1653,6 +1653,17 @@ pub fn run() {
                     // calls on both Window and Webview to cover the case
                     // where minimize/unminimize raced ahead of CEF's
                     // browser-create.
+                    // Windows-only: the bug class (CEF host-renderer focus
+                    // desync after a `visible: false` → `show()` transition
+                    // without a real `WM_KILLFOCUS`+`WM_SETFOCUS` edge)
+                    // manifests on the Windows CEF integration. macOS and
+                    // Linux CEF use different focus propagation paths and
+                    // don't exhibit the symptom, so running the
+                    // minimize/unminimize cycle there would just be a
+                    // visible flicker for no benefit. (Per CodeRabbit
+                    // review on PR #1528.)
+                    #[cfg(target_os = "windows")]
+                    {
                     log::info!("[focus-fix] scheduling deferred CEF focus-cycle");
                     let webview_window_clone = window.clone();
                     tauri::async_runtime::spawn(async move {
@@ -1685,6 +1696,7 @@ pub fn run() {
                         }
                         log::info!("[focus-fix] focus cycle complete");
                     });
+                    }
                 }
             }
 
