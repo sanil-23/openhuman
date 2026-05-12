@@ -281,7 +281,14 @@ mod tests {
     /// another process / stuck in TIME_WAIT), `start()` must still
     /// succeed by binding a fresh OS-assigned ephemeral port instead of
     /// trying to re-bind the stale port.
-    #[tokio::test]
+    // Single-threaded runtime: `std::env::set_var` mutates process-global
+    // state and is not thread-safe in Rust. Under the default multi-threaded
+    // tokio test runtime, threads spawned by the same test could observe
+    // the env between `set_var` and the restore. `current_thread` eliminates
+    // that intra-test window (cross-test races between OS threads from
+    // OTHER tests are still possible — see the save/restore pattern below
+    // for that part). Per graycyrus review on PR #1543.
+    #[tokio::test(flavor = "current_thread")]
     async fn start_ignores_stale_port_env_and_binds_ephemeral() {
         // Occupy a port so `PORT_ENV` points at something that would
         // definitely fail if `start()` honoured it.
@@ -311,6 +318,13 @@ mod tests {
         // can't satisfy a bind on `stale_port` — defends against the
         // exact race the Sentry issue describes.
         drop(blocker);
+        // Note: `stop()` only aborts the accept loop — it does NOT (and
+        // cannot) reset the `STARTED` OnceLock. If a second test in this
+        // binary later calls `start()` it'll hit the idempotency
+        // early-return and silently observe this test's port. A future
+        // refactor to `AtomicBool`-based singleton would let `stop()`
+        // fully tear down. Tracked as graycyrus feedback on PR #1543;
+        // currently inert because this is the only test in the module.
         stop();
         match prev_port_env {
             Some(v) => std::env::set_var(PORT_ENV, v),
