@@ -199,6 +199,44 @@ pub fn set_signed_out(signed_out: bool) {
     }
 }
 
+/// Test-only RAII helper that snapshots [`SIGNED_OUT`] on construction,
+/// flips it to `next`, and restores the snapshotted value on drop —
+/// even if the test body panics.
+///
+/// Use this in any test that exercises a code path that itself calls
+/// [`set_signed_out`] *after* [`init_global`] has promoted [`STATE`].
+/// Notably the JSON-RPC server bootstrap (`run_server_embedded` →
+/// `bootstrap_skill_runtime` → `register_domain_subscribers`) flips
+/// the atomic to `true` whenever the workspace has no stored session
+/// token, which is the common case for tests using a fresh
+/// `tempfile::tempdir()` workspace. Without this guard the flipped
+/// atomic leaks into every later test in the same lib-test binary
+/// that hits [`wait_for_capacity`] and deadlocks them in the
+/// `paused_poll_ms` branch.
+///
+/// Bypasses the writer-side gate at [`set_signed_out`] (which no-ops
+/// only when `STATE` is `None`) so it works regardless of whether
+/// `init_global` has run.
+#[cfg(test)]
+pub(crate) struct SignedOutTestGuard(bool);
+
+#[cfg(test)]
+impl SignedOutTestGuard {
+    /// Snapshot `SIGNED_OUT`, write `next`, and return a guard that
+    /// restores the snapshotted value on drop.
+    pub(crate) fn set(next: bool) -> Self {
+        let prev = SIGNED_OUT.swap(next, Ordering::AcqRel);
+        Self(prev)
+    }
+}
+
+#[cfg(test)]
+impl Drop for SignedOutTestGuard {
+    fn drop(&mut self) {
+        SIGNED_OUT.store(self.0, Ordering::Release);
+    }
+}
+
 /// Most recent sampled signals, or a neutral default if the sampler hasn't run.
 pub fn current_signals() -> Signals {
     STATE.get().map(|s| s.read().signals).unwrap_or(Signals {
@@ -399,31 +437,11 @@ mod tests {
         drop(second);
     }
 
-    /// RAII guard that snapshots `SIGNED_OUT` on construction, mutates it,
-    /// and restores the snapshotted value on drop — even if the test body
-    /// panics. Without this, an assertion or timeout failure inside a
-    /// `SIGNED_OUT=true` test would leak the flag into every subsequent
-    /// test in the same binary and reproduce the exact deadlock class
-    /// this PR fixes. (Per CodeRabbit feedback on PR #1552.)
-    struct SignedOutTestGuard(bool);
-
-    impl SignedOutTestGuard {
-        // Writes directly to the atomic so the regression tests below can
-        // simulate a leaked `SIGNED_OUT=true` even when `STATE` is `None`.
-        // The production `set_signed_out` no-ops in that state by design
-        // (see its rustdoc), which is exactly the leak class we're guarding
-        // the readers against here.
-        fn set(next: bool) -> Self {
-            let prev = SIGNED_OUT.swap(next, Ordering::AcqRel);
-            Self(prev)
-        }
-    }
-
-    impl Drop for SignedOutTestGuard {
-        fn drop(&mut self) {
-            SIGNED_OUT.store(self.0, Ordering::Release);
-        }
-    }
+    // `SignedOutTestGuard` lives at module scope (above) so cross-module
+    // tests (e.g. `core::jsonrpc::tests::shutdown_token_*`) can use it
+    // too. The local re-import keeps the existing tests below readable
+    // without fully-qualified paths.
+    use super::SignedOutTestGuard;
 
     #[tokio::test]
     async fn signed_out_is_ignored_when_gate_uninit() {

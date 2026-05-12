@@ -79,6 +79,19 @@ async fn wait_until_port_released(port: u16) {
 
 #[tokio::test]
 async fn shutdown_token_stops_axum_listener_within_timeout() {
+    // Booting the embedded server promotes `scheduler_gate::STATE` to
+    // `Some` (via `init_global`) and — because the temp workspace has
+    // no stored session JWT — flips the process-global `SIGNED_OUT`
+    // atomic to `true` (via `set_signed_out(true)` on the `Ok(None)`
+    // arm of `get_session_token`). Without restoring it, the atomic
+    // leaks into every subsequent test in the same lib-test binary
+    // that calls `wait_for_capacity()` and deadlocks them in the
+    // `paused_poll_ms` branch of the loop. The writer-side gate in
+    // `scheduler_gate::set_signed_out` only no-ops when `STATE` is
+    // `None`, which is the *other* leak class — it can't catch this
+    // one because `init_global` runs first.
+    let _signed_out_restore = crate::openhuman::scheduler_gate::SignedOutTestGuard::set(false);
+
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     let _env = EnvVarGuard::set_many(vec![
         (
