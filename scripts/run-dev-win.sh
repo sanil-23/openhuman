@@ -199,7 +199,7 @@ if [[ -z "${WindowsSdkDir:-}" || "${WindowsSDKVersion:-}" == "\\" || -z "${Windo
   if [[ -d "$sdk_root_unix/Lib" ]]; then
     sdk_version="$(ls -d "$sdk_root_unix"/Lib/*/ 2>/dev/null \
       | sort -V | tail -n1 \
-      | xargs -I{} basename {})"
+      | sed 's|.*/||; s|/||g')"
     if [[ -n "$sdk_version" && -f "$sdk_root_unix/Lib/$sdk_version/um/x64/kernel32.lib" ]]; then
       sdk_root_win="$(cygpath -w "$sdk_root_unix")"
       export WindowsSdkDir="${sdk_root_win}\\"
