@@ -2103,7 +2103,7 @@ fn event_is_localhost_dev_fetch_noise(event: &sentry::protocol::Event<'_>) -> bo
         .any(message_is_localhost_dev_fetch_noise)
 }
 
-/// Pure substring check, separated from `event_is_localhost_dev_fetch_noise`
+/// Pure prefix check, separated from `event_is_localhost_dev_fetch_noise`
 /// so the matching rule can be unit-tested without constructing a full
 /// Sentry `Event`.
 fn message_is_localhost_dev_fetch_noise(message: &str) -> bool {
