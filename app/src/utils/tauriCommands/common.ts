@@ -2,6 +2,9 @@
  * Common utilities and types for Tauri Commands.
  */
 import { isTauri as coreIsTauri } from '@tauri-apps/api/core';
+import debug from 'debug';
+
+const log = debug('tauri:ipc-guard');
 
 /**
  * True when the Tauri runtime is present AND the underlying IPC transport is
@@ -26,7 +29,14 @@ export const isTauri = (): boolean => {
   // being missing while the rest of the object is partially populated.
   const internals = (window as unknown as { __TAURI_INTERNALS__?: { invoke?: unknown } })
     .__TAURI_INTERNALS__;
-  return typeof internals?.invoke === 'function';
+  if (typeof internals?.invoke !== 'function') {
+    // Bridge-missing branch: distinct from `!coreIsTauri()` (= not in Tauri
+    // at all). Logging here makes the CEF bootstrap gap observable in dev
+    // and is a no-op in production (debug namespace disabled by default).
+    log('isTauri() -> false: IPC bridge not wired (CEF bootstrap gap or non-Tauri)');
+    return false;
+  }
+  return true;
 };
 
 export interface CommandResponse<T> {

@@ -234,6 +234,13 @@ if (!process.env.DEBUG_TESTS) {
 afterEach(() => {
   clearRequestLog();
   cleanup();
+  // Re-seed the IPC handle after any test that may have deleted it
+  // (e.g. tests exercising the CEF-gap branch of `isTauri()`). Without
+  // this, sibling tests in the same jsdom worker would silently regress
+  // to the non-Tauri path. Per graycyrus review on PR #1556.
+  (
+    window as unknown as { __TAURI_INTERNALS__: { invoke: () => Promise<unknown> } }
+  ).__TAURI_INTERNALS__ = { invoke: vi.fn(() => Promise.resolve()) };
 });
 afterAll(async () => {
   await stopMockServer();
