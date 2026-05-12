@@ -289,6 +289,12 @@ mod tests {
             .await
             .expect("blocker bind");
         let stale_port = blocker.local_addr().expect("blocker addr").port();
+        // Save+restore `PORT_ENV` so parallel tests in the same process
+        // don't see this test's mutation. (Per CodeRabbit feedback on PR
+        // #1543.) `std::env::set_var` is process-global; without the
+        // restore, an unrelated test asserting on `PORT_ENV` could observe
+        // `stale_port` and flake.
+        let prev_port_env = std::env::var(PORT_ENV).ok();
         std::env::set_var(PORT_ENV, stale_port.to_string());
 
         let bound = start()
@@ -306,5 +312,9 @@ mod tests {
         // exact race the Sentry issue describes.
         drop(blocker);
         stop();
+        match prev_port_env {
+            Some(v) => std::env::set_var(PORT_ENV, v),
+            None => std::env::remove_var(PORT_ENV),
+        }
     }
 }
