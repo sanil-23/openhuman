@@ -1,5 +1,4 @@
 // IMPORTANT: Polyfills must be imported FIRST
-import { isTauri as tauriRuntimeAvailable } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
@@ -15,6 +14,7 @@ import { setStoreForApiClient } from './services/apiClient';
 import { primeActiveUserId } from './store/userScopedStorage';
 import { setupDesktopDeepLinkListener } from './utils/desktopDeepLinkListener';
 import { getActiveUserIdFromCore } from './utils/tauriCommands';
+import { isTauri as tauriRuntimeAvailable } from './utils/tauriCommands/common';
 
 setStoreForApiClient(() => getCoreStateSnapshot().snapshot.sessionToken);
 

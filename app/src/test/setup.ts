@@ -98,6 +98,17 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function () {};
 }
 
+// The hardened `isTauri()` (in `utils/tauriCommands/common.ts`) checks both
+// `coreIsTauri()` and `window.__TAURI_INTERNALS__.invoke`. Many existing test
+// files mock `@tauri-apps/api/core::isTauri` to `true` to exercise the
+// Tauri branch; without a matching IPC handle on `window` they would now
+// regress to the non-Tauri path. Seed a no-op handle once globally so the
+// IPC-readiness check passes by default. Tests that *want* the CEF gap
+// behaviour can `delete window.__TAURI_INTERNALS__` in a `beforeEach`.
+(
+  window as unknown as { __TAURI_INTERNALS__: { invoke: () => Promise<unknown> } }
+).__TAURI_INTERNALS__ = { invoke: vi.fn(() => Promise.resolve()) };
+
 // Mock Tauri APIs (not available in test env)
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: vi.fn(() => false) }));
 
