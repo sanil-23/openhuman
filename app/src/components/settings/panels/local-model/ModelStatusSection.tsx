@@ -107,14 +107,15 @@ const ModelStatusSection = ({
           <div className="flex-1 space-y-1">
             <div className="text-sm font-semibold text-amber-900">Ollama is not installed</div>
             <div className="text-xs text-amber-800">
-              Local AI features (chat, vision, embedding) need the Ollama runtime. Install it
-              below — the installer runs silently and lands in your workspace; no console window
-              will appear.
+              Local AI features (chat, vision, embedding) need the Ollama runtime. Install it below
+              — the installer runs silently and lands in your workspace; no console window will
+              appear.
             </div>
           </div>
         </div>
         <div className="flex items-center gap-2 pt-1">
           <button
+            type="button"
             onClick={() => onTriggerDownload(true)}
             disabled={isTriggeringDownload}
             className="px-3 py-1.5 text-xs rounded-md bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-medium">
@@ -132,6 +133,7 @@ const ModelStatusSection = ({
         {isInstallError && status?.error_detail && (
           <div className="space-y-1 pt-2 border-t border-amber-200">
             <button
+              type="button"
               onClick={onToggleErrorDetail}
               className="text-xs text-red-700 hover:text-red-600 underline">
               {showErrorDetail ? 'Hide error details' : 'Show install error details'}
@@ -160,6 +162,7 @@ const ModelStatusSection = ({
               className="flex-1 rounded-md border border-amber-300 bg-white px-2 py-1.5 text-xs text-stone-900 placeholder:text-stone-400 focus:border-amber-500 focus:outline-none"
             />
             <button
+              type="button"
               onClick={onSetOllamaPath}
               disabled={isSettingPath || !ollamaPathInput.trim()}
               className="px-2 py-1.5 text-xs rounded-md bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white whitespace-nowrap">
@@ -167,6 +170,7 @@ const ModelStatusSection = ({
             </button>
             {ollamaPathInput && (
               <button
+                type="button"
                 onClick={onClearOllamaPath}
                 disabled={isSettingPath}
                 className="px-2 py-1.5 text-xs rounded-md border border-amber-300 hover:border-amber-400 disabled:opacity-60 text-amber-800 whitespace-nowrap">
@@ -181,7 +185,6 @@ const ModelStatusSection = ({
 
   return (
     <>
-
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-stone-900">Runtime Status</h3>

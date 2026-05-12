@@ -17,9 +17,13 @@ const OLLAMA_INSTALLER_PROCESS_NAME: &str = "OllamaSetup.exe";
 /// non-Windows branch is therefore a constant `false`.
 #[cfg(windows)]
 pub(crate) fn is_ollama_installer_running() -> bool {
-    use sysinfo::System;
+    use sysinfo::{ProcessesToUpdate, System};
     let mut sys = System::new();
-    sys.refresh_all();
+    // refresh_processes is sufficient — we only need the process list, not
+    // CPU/memory/disk/network. refresh_all() adds dozens of milliseconds of
+    // blocking I/O on a loaded Windows machine and this function runs on the
+    // async executor inside download_and_install_ollama.
+    sys.refresh_processes(ProcessesToUpdate::All);
     sys.processes().values().any(|p| {
         p.name()
             .to_string_lossy()

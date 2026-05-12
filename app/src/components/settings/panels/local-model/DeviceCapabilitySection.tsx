@@ -57,7 +57,8 @@ const DeviceCapabilitySection = ({
   installWarning,
   installError,
 }: DeviceCapabilitySectionProps) => {
-  const installInProgress = installState === 'installing' || installState === 'downloading' || installState === 'loading';
+  const installInProgress =
+    installState === 'installing' || installState === 'downloading' || installState === 'loading';
   const installFailed = installState === 'degraded';
   const [applying, setApplying] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string>('');
@@ -186,9 +187,9 @@ const DeviceCapabilitySection = ({
           ) : (
             <>
               <div className="text-xs text-amber-800">
-                <span className="font-semibold text-amber-900">Install Ollama first.</span>{' '}
-                Local tiers run on the Ollama runtime, which isn&apos;t installed yet. The
-                &ldquo;Disabled (cloud fallback)&rdquo; option stays available either way.
+                <span className="font-semibold text-amber-900">Install Ollama first.</span> Local
+                tiers run on the Ollama runtime, which isn&apos;t installed yet. The &ldquo;Disabled
+                (cloud fallback)&rdquo; option stays available either way.
               </div>
               <div className="flex items-center gap-2">
                 {onTriggerOllamaInstall && (
