@@ -66,8 +66,14 @@ if [[ -x "$cmd_exe_for_path" ]]; then
     if [[ -n "$windows_path_unix" ]]; then
       export PATH="$PATH:$windows_path_unix"
       echo "[run-dev-win] appended Windows-side PATH (node/cargo/pnpm/… now findable)"
+    else
+      echo "[run-dev-win] WARNING: cmd.exe PATH query returned no entries — node/cargo may be missing downstream" >&2
     fi
+  else
+    echo "[run-dev-win] WARNING: cmd.exe PATH query returned empty — node/cargo may be missing downstream" >&2
   fi
+else
+  echo "[run-dev-win] WARNING: cmd.exe not found at '$cmd_exe_for_path' — Windows PATH restoration skipped; node/cargo may be missing downstream" >&2
 fi
 
 export LIBCLANG_PATH="/c/Program Files/LLVM/bin"
@@ -193,7 +199,7 @@ if [[ -z "${WindowsSdkDir:-}" || "${WindowsSDKVersion:-}" == "\\" || -z "${Windo
   if [[ -d "$sdk_root_unix/Lib" ]]; then
     sdk_version="$(ls -d "$sdk_root_unix"/Lib/*/ 2>/dev/null \
       | sort -V | tail -n1 \
-      | xargs -I{} basename {})"
+      | sed 's|.*/||; s|/||g')"
     if [[ -n "$sdk_version" && -f "$sdk_root_unix/Lib/$sdk_version/um/x64/kernel32.lib" ]]; then
       sdk_root_win="$(cygpath -w "$sdk_root_unix")"
       export WindowsSdkDir="${sdk_root_win}\\"
