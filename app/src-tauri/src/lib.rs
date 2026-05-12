@@ -2116,7 +2116,7 @@ fn message_is_localhost_dev_fetch_noise(message: &str) -> bool {
         "Failed to request http://localhost:",
         "Failed to request http://127.0.0.1:",
     ];
-    PREFIXES.iter().any(|p| message.contains(p))
+    PREFIXES.iter().any(|p| message.starts_with(p))
 }
 
 fn build_sentry_release_tag() -> String {
@@ -2541,6 +2541,19 @@ mod tests {
         assert!(
             !message_is_localhost_dev_fetch_noise(msg),
             "non-tauri-cef localhost errors must NOT be filtered"
+        );
+    }
+
+    #[test]
+    fn localhost_dev_fetch_noise_anchors_to_message_start() {
+        // CodeRabbit (PR #1545) caught that the predicate used
+        // `contains` rather than `starts_with`. Regression: a message
+        // that merely embeds the dev-proxy prefix later in its text
+        // must NOT be filtered — only messages that *begin* with it.
+        let msg = "User report: `Failed to request http://localhost:1420/foo` was logged earlier";
+        assert!(
+            !message_is_localhost_dev_fetch_noise(msg),
+            "messages that merely contain the dev-proxy prefix must NOT be filtered"
         );
     }
 }
