@@ -66,8 +66,14 @@ if [[ -x "$cmd_exe_for_path" ]]; then
     if [[ -n "$windows_path_unix" ]]; then
       export PATH="$PATH:$windows_path_unix"
       echo "[run-dev-win] appended Windows-side PATH (node/cargo/pnpm/… now findable)"
+    else
+      echo "[run-dev-win] WARNING: cmd.exe PATH query returned no entries — node/cargo may be missing downstream" >&2
     fi
+  else
+    echo "[run-dev-win] WARNING: cmd.exe PATH query returned empty — node/cargo may be missing downstream" >&2
   fi
+else
+  echo "[run-dev-win] WARNING: cmd.exe not found at '$cmd_exe_for_path' — Windows PATH restoration skipped; node/cargo may be missing downstream" >&2
 fi
 
 export LIBCLANG_PATH="/c/Program Files/LLVM/bin"

@@ -845,8 +845,9 @@ fn show_main_window(app: &AppHandle<AppRuntime>) -> Result<(), String> {
     // triggers `WM_KILLFOCUS`+`WM_SETFOCUS` and CEF's window handler routes
     // through `host.set_focus(1)` internally.
     //
-    // Explicitly dispatch `WebviewMessage::SetFocus` (cef_impl.rs line ~2081),
-    // which is what actually invokes `CefBrowserHost::SetFocus(true)`.
+    // Explicitly dispatch `WebviewMessage::SetFocus` (cef_impl.rs handler
+    // for that variant), which is what actually invokes
+    // `CefBrowserHost::SetFocus(true)`.
     let webview: &tauri::Webview<AppRuntime> = window.as_ref();
     if let Err(err) = webview.set_focus() {
         log::warn!(
