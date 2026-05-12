@@ -178,7 +178,21 @@ pub fn is_signed_out() -> bool {
 /// Toggle the signed-out override. Set to `true` from `clear_session`
 /// and 401-detection sites; set to `false` from `store_session` once a
 /// fresh JWT has been written. Idempotent.
+///
+/// Gated on [`STATE`] being initialised: if the scheduler gate hasn't
+/// been started (every unit-test binary, plus the brief pre-`init_global`
+/// window during bootstrap), this is a no-op. There are no background
+/// workers to stand down in that state, and unconditionally flipping the
+/// process-global atomic lets test paths like `clear_session` and
+/// `SessionExpiredSubscriber.handle()` leak `true` into subsequent tests
+/// that — if anything later promotes [`STATE`] to `Some` — will spin
+/// forever in the `paused_poll_ms` branch of [`wait_for_capacity`].
+/// Gating at the writer is a belt-and-braces companion to the reader-side
+/// guard added in PR #1552.
 pub fn set_signed_out(signed_out: bool) {
+    if STATE.get().is_none() {
+        return;
+    }
     let prev = SIGNED_OUT.swap(signed_out, Ordering::AcqRel);
     if prev != signed_out {
         log::info!("[scheduler_gate] signed_out {} -> {}", prev, signed_out);
@@ -394,16 +408,20 @@ mod tests {
     struct SignedOutTestGuard(bool);
 
     impl SignedOutTestGuard {
+        // Writes directly to the atomic so the regression tests below can
+        // simulate a leaked `SIGNED_OUT=true` even when `STATE` is `None`.
+        // The production `set_signed_out` no-ops in that state by design
+        // (see its rustdoc), which is exactly the leak class we're guarding
+        // the readers against here.
         fn set(next: bool) -> Self {
-            let prev = is_signed_out();
-            set_signed_out(next);
+            let prev = SIGNED_OUT.swap(next, Ordering::AcqRel);
             Self(prev)
         }
     }
 
     impl Drop for SignedOutTestGuard {
         fn drop(&mut self) {
-            set_signed_out(self.0);
+            SIGNED_OUT.store(self.0, Ordering::Release);
         }
     }
 
@@ -444,6 +462,32 @@ mod tests {
             .expect("wait_for_capacity must NOT block when STATE is uninit, even if signed_out")
             .expect("uninit gate still hands back a permit");
         drop(permit);
+    }
+
+    #[tokio::test]
+    async fn set_signed_out_is_a_noop_when_gate_uninit() {
+        // Writer-side companion to `signed_out_is_ignored_when_gate_uninit`.
+        // The production `set_signed_out` must NOT mutate the process-global
+        // atomic in tests / pre-init bootstrap, otherwise a `clear_session`
+        // call exercised in one test leaks `SIGNED_OUT=true` into every
+        // subsequent test in the binary. With this gate, only callers that
+        // run after `init_global` (i.e. real workers in production) ever
+        // flip the bit.
+        let _g = lock();
+        // Force the atomic to a known-clean state via the test backdoor.
+        let _restore = SignedOutTestGuard::set(false);
+
+        set_signed_out(true);
+        assert!(
+            !is_signed_out(),
+            "set_signed_out(true) must no-op when STATE is None"
+        );
+
+        set_signed_out(false);
+        assert!(
+            !is_signed_out(),
+            "set_signed_out(false) must no-op when STATE is None"
+        );
     }
 
     #[tokio::test]
