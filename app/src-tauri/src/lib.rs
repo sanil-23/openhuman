@@ -1122,6 +1122,25 @@ pub fn run() {
         environment: Some(std::borrow::Cow::Owned(resolve_sentry_environment())),
         send_default_pii: false,
         before_send: Some(std::sync::Arc::new(|mut event| {
+            // Drop "dev-server fetch failed" noise: the vendored
+            // `tauri-runtime-cef` dev proxy
+            // (vendor/tauri-cef/crates/tauri/src/protocol/tauri.rs) calls
+            // `log::error!("Failed to request {url}: {err}")` whenever the
+            // CEF webview asks for an asset on `http://localhost:1420` (the
+            // Vite dev URL baked into `tauri.conf.json`). That `log::error!`
+            // is bridged into `tracing` and picked up by the sentry-tracing
+            // layer as an Event — see `src/core/logging.rs::sentry_tracing_layer`.
+            // In packaged staging/production builds Vite isn't running, so
+            // the request correctly fails — but the failure is noise we
+            // don't want in Sentry (issue OPENHUMAN-TAURI-V, 66+ events).
+            // See [sentry-localhost-filter] log line below for diagnostics.
+            if event_is_localhost_dev_fetch_noise(&event) {
+                log::debug!(
+                    "[sentry-localhost-filter] dropping dev-server fetch noise event: {:?}",
+                    event.message.as_deref().unwrap_or("<no message>")
+                );
+                return None;
+            }
             // Strip server_name (hostname) to avoid leaking machine identity.
             event.server_name = None;
             event.user = None;
@@ -2056,6 +2075,50 @@ pub fn run_core_from_args(args: &[String]) -> Result<(), String> {
 /// every surface (React frontend, core sidecar, Tauri shell) group under the
 /// same release in Sentry and benefit from the same source-map / debug-info
 /// upload.
+/// Return `true` when the Sentry event is a "Failed to request
+/// http://localhost:…" message originating from the vendored
+/// `tauri-runtime-cef` dev-server proxy.
+///
+/// The proxy logs this message via `log::error!` (see
+/// `app/src-tauri/vendor/tauri-cef/crates/tauri/src/protocol/tauri.rs`)
+/// every time the CEF webview asks for an asset on the Vite dev URL
+/// (`http://localhost:1420` per `tauri.conf.json`). In packaged
+/// staging/production builds Vite isn't running, so the request fails —
+/// but the failure is benign and shouldn't be reported.
+///
+/// The match is conservative: it checks the exact `Failed to request ` +
+/// `http://localhost` / `http://127.0.0.1` prefix that only the dev-proxy
+/// emits. Production HTTP errors from elsewhere in the shell or core use
+/// different message shapes and won't be filtered.
+fn event_is_localhost_dev_fetch_noise(event: &sentry::protocol::Event<'_>) -> bool {
+    // sentry-tracing 0.47 (with default `attach_stacktrace=false`) stores the
+    // log message in `event.message`. Check there first; fall back to the
+    // last exception's `value` for the (currently unused) stacktrace-enabled
+    // path so the filter stays correct if attach_stacktrace ever flips.
+    let direct = event.message.as_deref();
+    let from_exception = event.exception.last().and_then(|e| e.value.as_deref());
+    [direct, from_exception]
+        .into_iter()
+        .flatten()
+        .any(message_is_localhost_dev_fetch_noise)
+}
+
+/// Pure substring check, separated from `event_is_localhost_dev_fetch_noise`
+/// so the matching rule can be unit-tested without constructing a full
+/// Sentry `Event`.
+fn message_is_localhost_dev_fetch_noise(message: &str) -> bool {
+    // The tauri-cef dev proxy formats the message as:
+    //   `Failed to request {url}: {err}`
+    // so anchoring on `Failed to request http://localhost` / `127.0.0.1` is
+    // sufficient and avoids matching unrelated "Failed to request …" errors
+    // elsewhere in the codebase that target real hosts.
+    const PREFIXES: &[&str] = &[
+        "Failed to request http://localhost:",
+        "Failed to request http://127.0.0.1:",
+    ];
+    PREFIXES.iter().any(|p| message.contains(p))
+}
+
 fn build_sentry_release_tag() -> String {
     let version = env!("CARGO_PKG_VERSION");
     let sha = option_env!("OPENHUMAN_BUILD_SHA").unwrap_or("").trim();
@@ -2423,5 +2486,61 @@ mod tests {
             None => std::env::remove_var(key),
         }
         assert_eq!(env, "production");
+    }
+
+    // ── Sentry before_send filter: drop "Failed to request http://localhost:…"
+    //    noise emitted by the vendored tauri-runtime-cef dev proxy in packaged
+    //    builds (issue OPENHUMAN-TAURI-V). Tests target the pure
+    //    `message_is_localhost_dev_fetch_noise` helper so the rule can be
+    //    asserted without standing up a Sentry client.
+
+    #[test]
+    fn localhost_dev_fetch_noise_drops_vite_dev_url_1420() {
+        // The exact message shape reported by the latest event tag in Sentry
+        // (URL repeated by reqwest's `error sending request for url (…)`).
+        let msg = "Failed to request http://localhost:1420/components/skills/SkillCard.tsx: \
+                   error sending request for url (http://localhost:1420/components/skills/SkillCard.tsx)";
+        assert!(
+            message_is_localhost_dev_fetch_noise(msg),
+            "expected Vite dev-server fetch failure to be filtered"
+        );
+    }
+
+    #[test]
+    fn localhost_dev_fetch_noise_drops_127_0_0_1_dev_url() {
+        // Some environments resolve `localhost` to 127.0.0.1 at the reqwest
+        // layer; the formatted message can carry either spelling.
+        let msg = "Failed to request http://127.0.0.1:1420/index.html: \
+                   error sending request for url (http://127.0.0.1:1420/index.html)";
+        assert!(
+            message_is_localhost_dev_fetch_noise(msg),
+            "expected 127.0.0.1 dev-server fetch failure to be filtered"
+        );
+    }
+
+    #[test]
+    fn localhost_dev_fetch_noise_passes_production_url_through() {
+        // Real upstream failures (e.g. backend API errors surfaced via the
+        // same `Failed to request …` wording elsewhere) must NOT be filtered —
+        // they're the high-signal events Sentry exists for.
+        let msg = "Failed to request https://api.openhuman.ai/v1/skills: \
+                   error sending request for url (https://api.openhuman.ai/v1/skills)";
+        assert!(
+            !message_is_localhost_dev_fetch_noise(msg),
+            "production API errors must NOT be filtered out"
+        );
+    }
+
+    #[test]
+    fn localhost_dev_fetch_noise_passes_unrelated_localhost_messages() {
+        // The filter is anchored on the dev-proxy's exact prefix to avoid
+        // accidentally dropping any error that happens to mention localhost
+        // (e.g. core-sidecar transport errors logged from coreRpcClient).
+        let msg =
+            "[core_rpc] transport error: error sending request for url (http://localhost:7788/rpc)";
+        assert!(
+            !message_is_localhost_dev_fetch_noise(msg),
+            "non-tauri-cef localhost errors must NOT be filtered"
+        );
     }
 }
