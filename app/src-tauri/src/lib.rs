@@ -2112,6 +2112,12 @@ fn message_is_localhost_dev_fetch_noise(message: &str) -> bool {
     // so anchoring on `Failed to request http://localhost` / `127.0.0.1` is
     // sufficient and avoids matching unrelated "Failed to request …" errors
     // elsewhere in the codebase that target real hosts.
+    //
+    // Note: no `[::1]` (IPv6 loopback) entry — the vendored tauri-cef dev
+    // proxy resolves `localhost` to IPv4 via reqwest's default resolver, so
+    // dev-server fetches always surface as `http://localhost:` or
+    // `http://127.0.0.1:`. Add an `[::1]` prefix if that ever changes
+    // (per graycyrus note on PR #1545).
     const PREFIXES: &[&str] = &[
         "Failed to request http://localhost:",
         "Failed to request http://127.0.0.1:",
@@ -2541,6 +2547,56 @@ mod tests {
         assert!(
             !message_is_localhost_dev_fetch_noise(msg),
             "non-tauri-cef localhost errors must NOT be filtered"
+        );
+    }
+
+    #[test]
+    fn event_filter_uses_message_field() {
+        // event-level coverage: when sentry-tracing populates
+        // `event.message` (default with `attach_stacktrace=false`), the
+        // filter should see the noise payload through the primary read
+        // path. Per graycyrus on PR #1545.
+        let mut event = sentry::protocol::Event::new();
+        event.message = Some("Failed to request http://localhost:1420/foo: timeout".into());
+        assert!(
+            event_is_localhost_dev_fetch_noise(&event),
+            "event.message read path must catch noise messages"
+        );
+    }
+
+    #[test]
+    fn event_filter_falls_back_to_last_exception_value() {
+        // event-level coverage: if `attach_stacktrace` is ever turned on,
+        // sentry-tracing populates `event.exception` instead of (or in
+        // addition to) `event.message`. Filter must still see the noise
+        // payload through the exception fallback. Per graycyrus on PR #1545.
+        let mut event = sentry::protocol::Event::new();
+        event.message = None;
+        event.exception.values.push(sentry::protocol::Exception {
+            ty: "log".into(),
+            value: Some("Failed to request http://localhost:1420/foo: timeout".into()),
+            ..Default::default()
+        });
+        assert!(
+            event_is_localhost_dev_fetch_noise(&event),
+            "exception fallback must catch noise messages when event.message is absent"
+        );
+    }
+
+    #[test]
+    fn event_filter_passes_through_when_neither_field_matches() {
+        // Negative event-level case: no noise prefix in either field →
+        // event must NOT be filtered.
+        let mut event = sentry::protocol::Event::new();
+        event.message = Some("genuine production error".into());
+        event.exception.values.push(sentry::protocol::Exception {
+            ty: "log".into(),
+            value: Some("connection refused (10061)".into()),
+            ..Default::default()
+        });
+        assert!(
+            !event_is_localhost_dev_fetch_noise(&event),
+            "legitimate production events must pass through"
         );
     }
 
