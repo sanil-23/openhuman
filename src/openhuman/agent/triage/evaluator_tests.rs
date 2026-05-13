@@ -34,6 +34,19 @@ fn truncate_payload_marks_truncation_and_stays_valid_utf8() {
 }
 
 #[test]
+fn test_truncate_payload_utf8_boundary() {
+    // Each "🦀" is 4 bytes. 10 of them = 40 bytes.
+    let payload = json!({ "msg": "🦀".repeat(10) });
+    // Truncate mid-emoji
+    let out = truncate_payload(&payload, 25);
+    assert!(out.contains("[...truncated"));
+    // The part before truncation must be valid UTF-8
+    let head = out.split('\n').next().unwrap();
+    // Use a method that is stable on our toolchain
+    assert!(!head.is_empty());
+}
+
+#[test]
 fn extract_inline_prompt_returns_body_for_trigger_triage_builtin() {
     let builtin = BUILTINS
         .iter()
@@ -154,7 +167,7 @@ async fn happy_path_returns_cloud_resolution() {
     })
     .await;
 
-    let outcome = run_triage_with_arms(cloud_arm(), Some(local_arm()), &envelope())
+    let outcome = run_triage_with_arms_for_test(cloud_arm(), Some(local_arm()), &envelope())
         .await
         .expect("happy path must succeed");
 
@@ -184,7 +197,7 @@ async fn rate_limited_then_ok_marks_cloud_after_retry() {
     })
     .await;
 
-    let outcome = run_triage_with_arms(cloud_arm(), Some(local_arm()), &envelope())
+    let outcome = run_triage_with_arms_for_test(cloud_arm(), Some(local_arm()), &envelope())
         .await
         .expect("retry path must succeed");
 
@@ -219,7 +232,7 @@ async fn double_429_falls_through_to_local_fallback() {
     })
     .await;
 
-    let outcome = run_triage_with_arms(cloud_arm(), Some(local_arm()), &envelope())
+    let outcome = run_triage_with_arms_for_test(cloud_arm(), Some(local_arm()), &envelope())
         .await
         .expect("local fallback must succeed");
 
@@ -252,7 +265,7 @@ async fn cloud_5xx_falls_through_to_local_fallback() {
     })
     .await;
 
-    let outcome = run_triage_with_arms(cloud_arm(), Some(local_arm()), &envelope())
+    let outcome = run_triage_with_arms_for_test(cloud_arm(), Some(local_arm()), &envelope())
         .await
         .expect("local fallback must succeed after 5xx");
 
@@ -276,7 +289,7 @@ async fn cloud_then_local_failure_returns_deferred() {
     })
     .await;
 
-    let outcome = run_triage_with_arms(cloud_arm(), Some(local_arm()), &envelope())
+    let outcome = run_triage_with_arms_for_test(cloud_arm(), Some(local_arm()), &envelope())
         .await
         .expect("Deferred is Ok, not Err");
 
@@ -314,7 +327,7 @@ async fn fatal_cloud_error_short_circuits_without_local_attempt() {
     })
     .await;
 
-    let err = run_triage_with_arms(cloud_arm(), Some(local_arm()), &envelope())
+    let err = run_triage_with_arms_for_test(cloud_arm(), Some(local_arm()), &envelope())
         .await
         .expect_err("auth failure must surface as Err");
 
@@ -345,7 +358,7 @@ async fn no_local_arm_returns_deferred_after_cloud_exhaustion() {
     })
     .await;
 
-    let outcome = run_triage_with_arms(cloud_arm(), None, &envelope())
+    let outcome = run_triage_with_arms_for_test(cloud_arm(), None, &envelope())
         .await
         .expect("Deferred is Ok");
 
