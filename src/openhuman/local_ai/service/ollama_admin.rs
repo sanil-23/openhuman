@@ -1040,27 +1040,42 @@ impl LocalAiService {
         &self,
         model: &str,
     ) -> Result<bool, String> {
-        // Use list_models() directly rather than first calling ollama_healthy()
-        // and then issuing a second /api/tags GET. The old two-step pattern
-        // doubled the number of /api/tags calls when the server was up: one
-        // from ollama_healthy() and one from the tags request below. With three
-        // has_model() calls per assets_status poll (chat, vision, embedding) that
-        // was 6 network round-trips instead of 3 on every healthy poll.
-        //
-        // list_models() returns Err on any connection or HTTP failure, which we
-        // map to Ok(false) — the same outcome the old ollama_healthy() guard
-        // produced. The 500ms connect_timeout on the shared reqwest client
-        // (set in bootstrap.rs) bounds the cost of a missing server.
+        // Issue the /api/tags GET directly. We previously short-circuited via
+        // ollama_healthy(), but that doubled the number of /api/tags round-trips
+        // on healthy polls (one probe + one tags fetch). With three has_model()
+        // calls per assets_status poll (chat, vision, embedding) that was 6
+        // network calls instead of 3. The 500ms connect_timeout on the shared
+        // reqwest client (set in bootstrap.rs) bounds the cost when the server
+        // is down — the connect failure surfaces as Err, same as ollama_healthy()
+        // would have surfaced as `false`.
         log::debug!("[local_ai] has_model: checking for model `{model}`");
-        let models = match self.list_models().await {
-            Ok(m) => m,
-            Err(e) => {
-                log::debug!("[local_ai] has_model: list_models failed (server down?): {e}");
-                return Ok(false);
-            }
-        };
+        let response = self
+            .http
+            .get(format!("{}/api/tags", ollama_base_url()))
+            .send()
+            .await
+            .map_err(|e| format!("ollama tags request failed: {e}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let detail = body.trim();
+            return Err(format!(
+                "ollama tags failed with status {}{}",
+                status,
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {detail}")
+                }
+            ));
+        }
+        let payload: OllamaTagsResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("ollama tags parse failed: {e}"))?;
+
         let target = model.to_ascii_lowercase();
-        Ok(models.iter().any(|m| {
+        Ok(payload.models.iter().any(|m| {
             let name = m.name.to_ascii_lowercase();
             name == target || name.starts_with(&(target.clone() + ":"))
         }))
