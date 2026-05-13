@@ -222,10 +222,7 @@ mod tests {
         // enforcer itself must let the value pass through unchanged.
         let mut config = test_config();
         config.local_ai.embedding_model_id = "all-minilm:latest".to_string();
-        assert_eq!(
-            effective_embedding_model_id(&config),
-            "all-minilm:latest"
-        );
+        assert_eq!(effective_embedding_model_id(&config), "all-minilm:latest");
     }
 
     #[test]
