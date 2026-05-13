@@ -11,6 +11,9 @@ import {
   type ApplyPresetResult,
   type LocalAiDownloadsProgress,
   type LocalAiStatus,
+  type LlmBackend,
+  memoryTreeGetLlm,
+  memoryTreeSetLlm,
   openhumanGetConfig,
   openhumanLocalAiApplyPreset,
   openhumanLocalAiDownload,
@@ -58,6 +61,13 @@ const LocalModelPanel = () => {
   });
   const [usageError, setUsageError] = useState('');
   const [usageSaving, setUsageSaving] = useState(false);
+
+  // Memory summarizer backend lives in `memory_tree.llm_backend`, which is
+  // outside the `local_ai.usage.*` surface — so it has its own RPC pair
+  // (`memoryTreeGetLlm` / `memoryTreeSetLlm`). The Memory page's
+  // `BackendChooser` writes the same field, so the two UIs stay in sync.
+  const [summarizerBackend, setSummarizerBackend] = useState<LlmBackend>('cloud');
+  const [summarizerSaving, setSummarizerSaving] = useState(false);
 
   const progress = useMemo(() => {
     const downloadProgress = progressFromDownloads(downloads);
@@ -143,11 +153,43 @@ const LocalModelPanel = () => {
     }
   };
 
+  const loadSummarizerBackend = async () => {
+    try {
+      const resp = await memoryTreeGetLlm();
+      if (resp?.current === 'local' || resp?.current === 'cloud') {
+        setSummarizerBackend(resp.current);
+      }
+    } catch (err) {
+      // Non-fatal — the row stays at its default (cloud) and the user
+      // can still flip it; the next save attempt will surface the error.
+      console.warn('[local-model-panel] memoryTreeGetLlm failed', err);
+    }
+  };
+
+  const updateSummarizerBackend = async (next: LlmBackend) => {
+    const prev = summarizerBackend;
+    setSummarizerBackend(next);
+    setSummarizerSaving(true);
+    setUsageError('');
+    try {
+      await memoryTreeSetLlm({ backend: next });
+    } catch (err) {
+      // Roll back the optimistic toggle and surface the error.
+      setSummarizerBackend(prev);
+      const msg =
+        err instanceof Error ? err.message : 'Failed to save memory summarizer backend';
+      setUsageError(msg);
+    } finally {
+      setSummarizerSaving(false);
+    }
+  };
+
   useEffect(() => {
     const initialLoad = window.setTimeout(() => {
       void loadStatus();
       void loadPresets();
       void loadUsage();
+      void loadSummarizerBackend();
     }, 0);
     const timer = window.setInterval(() => {
       void loadStatus();
@@ -366,6 +408,30 @@ const LocalModelPanel = () => {
           </label>
 
           <div className={`space-y-2 pl-6 ${usageFlags.runtime_enabled ? '' : 'opacity-50'}`}>
+            {/* Memory summarizer is special: it writes `memory_tree.llm_backend`,
+                not `local_ai.usage.*`, so it shares its toggle with the
+                Memory page's BackendChooser. Same field, two UIs in sync. */}
+            <label
+              className="flex items-start gap-3 cursor-pointer"
+              data-testid="local-ai-usage-memory-summarizer">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={summarizerBackend === 'local'}
+                disabled={!usageFlags.runtime_enabled || summarizerSaving}
+                onChange={e =>
+                  void updateSummarizerBackend(e.target.checked ? 'local' : 'cloud')
+                }
+              />
+              <div>
+                <div className="text-sm text-stone-900">Memory summarizer</div>
+                <div className="text-xs text-stone-500">
+                  Run memory-tree extract + summarise locally instead of in the cloud. Also
+                  reflected in Intelligence → Memory backend chooser.
+                </div>
+              </div>
+            </label>
+
             {(
               [
                 {
