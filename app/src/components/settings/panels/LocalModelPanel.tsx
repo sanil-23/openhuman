@@ -9,9 +9,9 @@ import {
 } from '../../../utils/localAiHelpers';
 import {
   type ApplyPresetResult,
+  type LlmBackend,
   type LocalAiDownloadsProgress,
   type LocalAiStatus,
-  type LlmBackend,
   memoryTreeGetLlm,
   memoryTreeSetLlm,
   openhumanGetConfig,
@@ -179,8 +179,7 @@ const LocalModelPanel = () => {
     } catch (err) {
       // Roll back the optimistic toggle and surface the error.
       setSummarizerBackend(prev);
-      const msg =
-        err instanceof Error ? err.message : 'Failed to save memory summarizer backend';
+      const msg = err instanceof Error ? err.message : 'Failed to save memory summarizer backend';
       setUsageError(msg);
     } finally {
       setSummarizerSaving(false);
@@ -424,9 +423,7 @@ const LocalModelPanel = () => {
                 className="mt-0.5"
                 checked={summarizerBackend === 'local'}
                 disabled={!usageFlags.runtime_enabled || summarizerSaving}
-                onChange={e =>
-                  void updateSummarizerBackend(e.target.checked ? 'local' : 'cloud')
-                }
+                onChange={e => void updateSummarizerBackend(e.target.checked ? 'local' : 'cloud')}
               />
               <div>
                 <div className="text-sm text-stone-900">Memory summarizer</div>
