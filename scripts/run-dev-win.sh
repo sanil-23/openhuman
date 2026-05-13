@@ -562,8 +562,21 @@ fi
 # hardcoded 1420 collision. Vite reads the same env var directly; the
 # tauri-cli inline override patches tauri.conf.json's `devUrl` so the
 # shell connects to the right Vite instance.
-DEV_PORT="${OPENHUMAN_DEV_PORT:-1420}"
-if [[ "$DEV_PORT" != "1420" ]]; then
+# Validate OPENHUMAN_DEV_PORT before interpolating into JSON — a stray
+# space, alphabetic char, or out-of-range value would produce an invalid
+# devUrl and tauri would refuse to start (or worse, drift from Vite's
+# own numeric fallback). Trim whitespace, require pure digits in
+# [1, 65535], fall back to 1420 with a warning otherwise.
+raw_dev_port="${OPENHUMAN_DEV_PORT:-1420}"
+raw_dev_port="${raw_dev_port//[[:space:]]/}"
+if [[ "$raw_dev_port" =~ ^[0-9]+$ ]] && (( raw_dev_port >= 1 && raw_dev_port <= 65535 )); then
+  DEV_PORT="$raw_dev_port"
+else
+  echo "[run-dev-win] WARNING: invalid OPENHUMAN_DEV_PORT='$raw_dev_port'; falling back to 1420" >&2
+  DEV_PORT=1420
+fi
+
+if (( DEV_PORT != 1420 )); then
   echo "[run-dev-win] OPENHUMAN_DEV_PORT=$DEV_PORT — overriding tauri devUrl"
   "$PNPM_EXE" tauri dev -c "{\"build\":{\"devUrl\":\"http://localhost:$DEV_PORT\"}}"
 else

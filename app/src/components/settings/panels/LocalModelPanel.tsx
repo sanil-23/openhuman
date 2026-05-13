@@ -170,6 +170,12 @@ const LocalModelPanel = () => {
   };
 
   const updateSummarizerBackend = async (next: LlmBackend) => {
+    // Belt-and-braces: the checkbox is already `disabled` when the
+    // master runtime is off or a save is in flight, but the rendered
+    // disabled attribute only stops real-browser click events — JSDOM
+    // / fireEvent ignore it. Mirror the gate here so programmatic
+    // dispatch can't sneak past the master switch either.
+    if (!usageFlags.runtime_enabled || summarizerSaving) return;
     const prev = summarizerBackend;
     setSummarizerBackend(next);
     setSummarizerSaving(true);
@@ -428,8 +434,8 @@ const LocalModelPanel = () => {
               <div>
                 <div className="text-sm text-stone-900">Memory summarizer</div>
                 <div className="text-xs text-stone-500">
-                  Run memory-tree extract + summarise locally instead of in the cloud. Also
-                  reflected in Intelligence → Memory backend chooser.
+                  Run memory-tree extract + summarise locally instead of in the cloud. The local
+                  model used comes from the Model Tier preset above.
                 </div>
               </div>
             </label>

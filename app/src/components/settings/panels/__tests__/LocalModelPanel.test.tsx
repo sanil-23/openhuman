@@ -299,6 +299,11 @@ describe('LocalModelPanel — usage flags', () => {
       .closest('label')
       ?.querySelector('input[type="checkbox"]') as HTMLInputElement;
     expect(checkbox).toBeDisabled();
+    // Exercise the disabled-click path — fireEvent dispatches even on
+    // disabled inputs (it bypasses React's synthetic event guard), so
+    // this confirms the handler doesn't fire `setLlm` because of the
+    // gating, not just because no click happened.
+    fireEvent.click(checkbox);
     expect(memoryTreeSetLlm).not.toHaveBeenCalled();
   });
 });
