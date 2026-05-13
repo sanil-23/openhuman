@@ -303,9 +303,7 @@ impl LocalAiService {
                      Cancel the installer (System tray / Task Manager) and retry.",
                     INSTALLER_WAIT_TIMEOUT.as_secs()
                 ));
-                return Err(
-                    "Previous Ollama installer is stuck. Cancel it and retry.".to_string()
-                );
+                return Err("Previous Ollama installer is stuck. Cancel it and retry.".to_string());
             }
             // The prior installer is gone. If it succeeded, our regular
             // discovery paths will find the binary and we can short-circuit
