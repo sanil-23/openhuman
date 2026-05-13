@@ -19,9 +19,13 @@ vi.mock('../../services/gameplayReviewService', () => ({
   flattenClipCandidates: vi.fn((session: any) => session?.analysis?.clip_candidates ?? []),
   flattenDrafts: vi.fn((session: any) => session?.analysis?.draft_metadata ?? []),
   flattenHighlights: vi.fn((session: any) => session?.analysis?.highlights ?? []),
-  formatSpoilerMode: vi.fn((mode: string) => (mode === 'full' ? 'Full spoilers' : 'Light spoilers')),
+  formatSpoilerMode: vi.fn((mode: string) =>
+    mode === 'full' ? 'Full spoilers' : 'Light spoilers'
+  ),
   listGameplaySessions: vi.fn(),
-  normalizeGameplayError: vi.fn((error: unknown) => (error instanceof Error ? error.message : String(error))),
+  normalizeGameplayError: vi.fn((error: unknown) =>
+    error instanceof Error ? error.message : String(error)
+  ),
   prepareGameplayFrames: vi.fn(),
   registerGameplaySession: vi.fn(),
   saveGameplayPreset: vi.fn(),
@@ -161,18 +165,14 @@ describe('GameplayReviewWorkspace', () => {
     expect(fileInput).not.toBeNull();
     const file = new File([new Uint8Array([1, 2, 3])], 'frame-1.png', { type: 'image/png' });
     Object.defineProperty(file, 'webkitRelativePath', { value: 'session/frame-1.png' });
-    fireEvent.change(fileInput as HTMLInputElement, {
-      target: { files: [file] },
-    });
+    fireEvent.change(fileInput as HTMLInputElement, { target: { files: [file] } });
 
     fireEvent.click(screen.getByRole('button', { name: /import and analyze/i }));
 
     await waitFor(() => expect(mockedPrepareGameplayFrames).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText(/Gameplay recap/)).toBeInTheDocument());
     expect(
-      screen.getByText('Highlight: clutch fight', {
-        selector: 'div.font-medium.text-stone-900',
-      })
+      screen.getByText('Highlight: clutch fight', { selector: 'div.font-medium.text-stone-900' })
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /ask session/i }));

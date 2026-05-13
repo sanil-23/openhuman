@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { ToastNotification } from '../../types/intelligence';
 import {
   analyzeGameplaySession,
   askGameplaySession,
@@ -9,15 +8,16 @@ import {
   flattenDrafts,
   flattenHighlights,
   formatSpoilerMode,
+  type GameplayFrameInput,
+  type GameplayReviewSession,
   listGameplaySessions,
   normalizeGameplayError,
   prepareGameplayFrames,
   registerGameplaySession,
   saveGameplayPreset,
-  type GameplayFrameInput,
-  type GameplayReviewSession,
   type SpoilerMode,
 } from '../../services/gameplayReviewService';
+import type { ToastNotification } from '../../types/intelligence';
 
 interface GameplayReviewWorkspaceProps {
   onToast?: (toast: Omit<ToastNotification, 'id'>) => void;
@@ -47,9 +47,7 @@ const INITIAL_IMPORT_STATE: ImportState = {
   platforms: 'twitch,kick,youtube',
 };
 
-const DIRECTORY_INPUT_PROPS: Record<string, string> = {
-  webkitdirectory: '',
-};
+const DIRECTORY_INPUT_PROPS: Record<string, string> = { webkitdirectory: '' };
 
 function formatTimestamp(ms?: number | null): string {
   if (!ms) return 'n/a';
@@ -148,11 +146,14 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
         source_label: form.sourceLabel.trim() || null,
         spoiler_mode: form.spoilerMode,
         preset_id: form.presetName.trim() || null,
-        frames: frames.map(frame => ({
-          file_name: frame.file_name,
-          image_ref: frame.image_ref,
-          captured_at_ms: frame.captured_at_ms,
-        } satisfies GameplayFrameInput)),
+        frames: frames.map(
+          frame =>
+            ({
+              file_name: frame.file_name,
+              image_ref: frame.image_ref,
+              captured_at_ms: frame.captured_at_ms,
+            }) satisfies GameplayFrameInput
+        ),
       });
 
       setAnalysisBusy(true);
@@ -172,11 +173,7 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
     } catch (err) {
       const message = normalizeGameplayError(err);
       setError(message);
-      onToast?.({
-        type: 'error',
-        title: 'Gameplay review failed',
-        message,
-      });
+      onToast?.({ type: 'error', title: 'Gameplay review failed', message });
     } finally {
       setAnalysisBusy(false);
       setImportBusy(false);
@@ -233,10 +230,12 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sage-700">
               Gameplay review
             </p>
-            <h2 className="text-2xl font-bold text-stone-900">Import a session, find the clips, draft the post</h2>
+            <h2 className="text-2xl font-bold text-stone-900">
+              Import a session, find the clips, draft the post
+            </h2>
             <p className="max-w-2xl text-sm text-stone-600">
-              Load a folder of keyframes from a long session, generate a concise recap, ask follow-up questions,
-              and turn the strongest moments into platform-ready clip metadata.
+              Load a folder of keyframes from a long session, generate a concise recap, ask
+              follow-up questions, and turn the strongest moments into platform-ready clip metadata.
             </p>
           </div>
           <div className="rounded-xl border border-sage-200 bg-white/80 px-4 py-3 text-sm text-stone-700 shadow-sm">
@@ -278,9 +277,10 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
             <span className="font-medium text-stone-700">Spoiler mode</span>
             <select
               value={form.spoilerMode}
-              onChange={event => setForm(prev => ({ ...prev, spoilerMode: event.target.value as SpoilerMode }))}
-              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 outline-none ring-0 transition focus:border-primary-500"
-            >
+              onChange={event =>
+                setForm(prev => ({ ...prev, spoilerMode: event.target.value as SpoilerMode }))
+              }
+              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 outline-none ring-0 transition focus:border-primary-500">
               <option value="off">Off</option>
               <option value="light">Light</option>
               <option value="full">Full</option>
@@ -326,7 +326,9 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
             <input
               type="checkbox"
               checked={form.audioFeedback}
-              onChange={event => setForm(prev => ({ ...prev, audioFeedback: event.target.checked }))}
+              onChange={event =>
+                setForm(prev => ({ ...prev, audioFeedback: event.target.checked }))
+              }
             />
             Enable audio summary notes
           </label>
@@ -345,28 +347,26 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
           <button
             type="button"
             onClick={handleSelectFiles}
-            className="rounded-xl border border-sage-200 bg-white px-4 py-2 text-sm font-semibold text-sage-800 shadow-sm transition hover:bg-sage-50"
-          >
+            className="rounded-xl border border-sage-200 bg-white px-4 py-2 text-sm font-semibold text-sage-800 shadow-sm transition hover:bg-sage-50">
             Choose folder / frames
           </button>
           <button
             type="button"
             onClick={handleImportSession}
             disabled={importBusy || analysisBusy}
-            className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
+            className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60">
             {importBusy ? 'Importing…' : 'Import and analyze'}
           </button>
           <button
             type="button"
             onClick={handleDraftClips}
             disabled={draftBusy || !activeSession}
-            className="rounded-xl border border-amber-200 bg-white px-4 py-2 text-sm font-semibold text-amber-800 shadow-sm transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
+            className="rounded-xl border border-amber-200 bg-white px-4 py-2 text-sm font-semibold text-amber-800 shadow-sm transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60">
             {draftBusy ? 'Drafting…' : 'Refresh clip metadata'}
           </button>
           <div className="text-xs text-stone-500">
-            The core will analyze image frames. For raw video files, point this at extracted keyframes.
+            The core will analyze image frames. For raw video files, point this at extracted
+            keyframes.
           </div>
         </div>
       </div>
@@ -382,7 +382,9 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
           <div className="flex items-center justify-between gap-2">
             <div>
               <h3 className="text-lg font-semibold text-stone-900">Session viewer</h3>
-              <p className="text-sm text-stone-500">Recap, highlights, and clip candidates for the current session.</p>
+              <p className="text-sm text-stone-500">
+                Recap, highlights, and clip candidates for the current session.
+              </p>
             </div>
             <div className="rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs text-stone-600">
               {activeSession ? activeSession.game_id : 'No session selected'}
@@ -394,9 +396,12 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
               <div className="rounded-xl border border-sage-200 bg-sage-50 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-semibold text-sage-900">{activeSession.session_title}</div>
+                    <div className="text-sm font-semibold text-sage-900">
+                      {activeSession.session_title}
+                    </div>
                     <div className="text-xs text-sage-700">
-                      Imported {formatTimestamp(activeSession.imported_at_ms)} · {activeSession.frames.length} frame(s)
+                      Imported {formatTimestamp(activeSession.imported_at_ms)} ·{' '}
+                      {activeSession.frames.length} frame(s)
                     </div>
                   </div>
                   <div className="text-xs font-medium text-sage-700">
@@ -404,10 +409,14 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
                   </div>
                 </div>
                 {activeSession.analysis?.spoiler_note && (
-                  <p className="mt-3 text-sm text-stone-700">{activeSession.analysis.spoiler_note}</p>
+                  <p className="mt-3 text-sm text-stone-700">
+                    {activeSession.analysis.spoiler_note}
+                  </p>
                 )}
                 {activeSession.analysis && (
-                  <p className="mt-3 whitespace-pre-line text-sm text-stone-800">{activeSession.analysis.recap}</p>
+                  <p className="mt-3 whitespace-pre-line text-sm text-stone-800">
+                    {activeSession.analysis.recap}
+                  </p>
                 )}
               </div>
 
@@ -417,7 +426,9 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
                   <div className="mt-3 space-y-3">
                     {activeHighlights.length > 0 ? (
                       activeHighlights.map(highlight => (
-                        <article key={highlight.id} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                        <article
+                          key={highlight.id}
+                          className="rounded-lg border border-stone-200 bg-stone-50 p-3">
                           <div className="flex items-center justify-between gap-2">
                             <div className="font-medium text-stone-900">{highlight.title}</div>
                             <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-stone-500">
@@ -425,7 +436,8 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
                             </span>
                           </div>
                           <p className="mt-1 text-xs uppercase tracking-wide text-stone-500">
-                            {highlight.kind} · frame {highlight.frame_index + 1} · {formatTimestamp(highlight.captured_at_ms)}
+                            {highlight.kind} · frame {highlight.frame_index + 1} ·{' '}
+                            {formatTimestamp(highlight.captured_at_ms)}
                           </p>
                           <p className="mt-2 text-sm text-stone-700">{highlight.rationale}</p>
                         </article>
@@ -441,7 +453,9 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
                   <div className="mt-3 space-y-3">
                     {activeClips.length > 0 ? (
                       activeClips.map(clip => (
-                        <article key={clip.id} className="rounded-lg border border-amber-100 bg-amber-50 p-3">
+                        <article
+                          key={clip.id}
+                          className="rounded-lg border border-amber-100 bg-amber-50 p-3">
                           <div className="font-medium text-amber-950">{clip.start_label}</div>
                           <div className="text-xs text-amber-800">through {clip.end_label}</div>
                           <p className="mt-2 text-sm text-stone-700">{clip.rationale}</p>
@@ -459,15 +473,21 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
                 <div className="mt-3 grid gap-3 md:grid-cols-3">
                   {activeDrafts.length > 0 ? (
                     activeDrafts.map(draft => (
-                      <article key={`${draft.platform}-${draft.title}`} className="rounded-lg border border-stone-200 bg-white p-3">
+                      <article
+                        key={`${draft.platform}-${draft.title}`}
+                        className="rounded-lg border border-stone-200 bg-white p-3">
                         <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">
                           {draft.platform}
                         </div>
                         <div className="mt-1 font-medium text-stone-900">{draft.title}</div>
-                        <p className="mt-2 text-sm text-stone-700 whitespace-pre-line">{draft.description}</p>
+                        <p className="mt-2 text-sm text-stone-700 whitespace-pre-line">
+                          {draft.description}
+                        </p>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {draft.tags.map(tag => (
-                            <span key={tag} className="rounded-full bg-stone-100 px-2 py-0.5 text-[11px] text-stone-600">
+                            <span
+                              key={tag}
+                              className="rounded-full bg-stone-100 px-2 py-0.5 text-[11px] text-stone-600">
                               #{tag}
                             </span>
                           ))}
@@ -475,7 +495,9 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
                       </article>
                     ))
                   ) : (
-                    <p className="text-sm text-stone-500">Draft metadata will appear after analysis.</p>
+                    <p className="text-sm text-stone-500">
+                      Draft metadata will appear after analysis.
+                    </p>
                   )}
                 </div>
               </div>
@@ -493,28 +515,29 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
                     type="button"
                     onClick={handleQuestion}
                     disabled={questionBusy}
-                    className="rounded-xl bg-sage-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sage-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
+                    className="rounded-xl bg-sage-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sage-800 disabled:cursor-not-allowed disabled:opacity-60">
                     {questionBusy ? 'Thinking…' : 'Ask session'}
                   </button>
                 </div>
                 {questionAnswer && (
-                  <p className="mt-3 whitespace-pre-line text-sm text-stone-800">{questionAnswer}</p>
+                  <p className="mt-3 whitespace-pre-line text-sm text-stone-800">
+                    {questionAnswer}
+                  </p>
                 )}
-                {activeSession.analysis?.follow_up_questions && activeSession.analysis.follow_up_questions.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-stone-600">
-                    {activeSession.analysis.follow_up_questions.map(item => (
-                      <button
-                        key={item}
-                        type="button"
-                        onClick={() => setQuestion(item)}
-                        className="rounded-full border border-sage-200 bg-white px-3 py-1 transition hover:bg-sage-50"
-                      >
-                        {item}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                {activeSession.analysis?.follow_up_questions &&
+                  activeSession.analysis.follow_up_questions.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-stone-600">
+                      {activeSession.analysis.follow_up_questions.map(item => (
+                        <button
+                          key={item}
+                          type="button"
+                          onClick={() => setQuestion(item)}
+                          className="rounded-full border border-sage-200 bg-white px-3 py-1 transition hover:bg-sage-50">
+                          {item}
+                        </button>
+                      ))}
+                    </div>
+                  )}
               </div>
             </div>
           ) : (
@@ -527,7 +550,9 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
         <aside className="space-y-4 rounded-2xl border border-stone-200 bg-white p-5 shadow-soft">
           <div>
             <h3 className="text-lg font-semibold text-stone-900">Session history</h3>
-            <p className="text-sm text-stone-500">Previously imported or analyzed sessions for this workspace.</p>
+            <p className="text-sm text-stone-500">
+              Previously imported or analyzed sessions for this workspace.
+            </p>
           </div>
           <div className="space-y-3">
             {recentSessions.length > 0 ? (
@@ -540,8 +565,7 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
                     activeSession?.session_id === session.session_id
                       ? 'border-primary-300 bg-primary-50'
                       : 'border-stone-200 bg-white hover:bg-stone-50'
-                  }`}
-                >
+                  }`}>
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="font-medium text-stone-900">{session.session_title}</div>
@@ -552,7 +576,9 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
                       <div>{session.frames.length} frame(s)</div>
                     </div>
                   </div>
-                  <div className="mt-2 text-xs text-stone-500">Imported {formatTimestamp(session.imported_at_ms)}</div>
+                  <div className="mt-2 text-xs text-stone-500">
+                    Imported {formatTimestamp(session.imported_at_ms)}
+                  </div>
                 </button>
               ))
             ) : (
@@ -562,8 +588,7 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
           <button
             type="button"
             onClick={() => void refreshSessions()}
-            className="w-full rounded-xl border border-stone-200 bg-white px-4 py-2 text-sm font-semibold text-stone-700 transition hover:bg-stone-50"
-          >
+            className="w-full rounded-xl border border-stone-200 bg-white px-4 py-2 text-sm font-semibold text-stone-700 transition hover:bg-stone-50">
             Refresh history
           </button>
         </aside>

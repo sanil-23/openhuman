@@ -106,7 +106,10 @@ export interface PreparedGameplayFrame extends GameplayFrameInput {
   source_name: string;
 }
 
-export async function prepareGameplayFrames(files: File[], maxFrames = 12): Promise<PreparedGameplayFrame[]> {
+export async function prepareGameplayFrames(
+  files: File[],
+  maxFrames = 12
+): Promise<PreparedGameplayFrame[]> {
   const imageFiles = files
     .filter(file => file.type.startsWith('image/'))
     .sort((left, right) => {
@@ -116,7 +119,11 @@ export async function prepareGameplayFrames(files: File[], maxFrames = 12): Prom
     })
     .slice(0, Math.max(1, maxFrames));
 
-  log('prepareGameplayFrames: selected %d image(s) from %d file(s)', imageFiles.length, files.length);
+  log(
+    'prepareGameplayFrames: selected %d image(s) from %d file(s)',
+    imageFiles.length,
+    files.length
+  );
   const prepared: PreparedGameplayFrame[] = [];
   for (const file of imageFiles) {
     const buffer = await file.arrayBuffer();
@@ -135,7 +142,9 @@ export async function prepareGameplayFrames(files: File[], maxFrames = 12): Prom
   return prepared;
 }
 
-export async function registerGameplaySession(payload: GameplayReviewSessionInput): Promise<GameplayReviewSession> {
+export async function registerGameplaySession(
+  payload: GameplayReviewSessionInput
+): Promise<GameplayReviewSession> {
   const result = await callCoreRpc<GameplayReviewSession>({
     method: 'openhuman.gameplay_review_register_session',
     params: payload,
@@ -162,10 +171,7 @@ export async function listGameplaySessions(gameId?: string): Promise<GameplayRev
 }
 
 export async function saveGameplayPreset(payload: GameplayPresetInput): Promise<unknown> {
-  return callCoreRpc({
-    method: 'openhuman.gameplay_review_set_preset',
-    params: payload,
-  });
+  return callCoreRpc({ method: 'openhuman.gameplay_review_set_preset', params: payload });
 }
 
 export async function listGameplayPresets(): Promise<GameplayPresetInput[]> {
@@ -198,7 +204,9 @@ export function flattenDrafts(session: GameplayReviewSession | null): GameplayPl
   return session?.analysis?.draft_metadata ?? [];
 }
 
-export function flattenClipCandidates(session: GameplayReviewSession | null): GameplayClipCandidate[] {
+export function flattenClipCandidates(
+  session: GameplayReviewSession | null
+): GameplayClipCandidate[] {
   return session?.analysis?.clip_candidates ?? [];
 }
 
