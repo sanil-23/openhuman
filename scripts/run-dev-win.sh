@@ -527,8 +527,19 @@ export PATH="$PATH_PREFIX:$PATH"
 # destination, so subsequent dev runs are essentially free.
 # ─────────────────────────────────────────────────────────────────────────────
 if [[ -n "${CEF_RUNTIME_PATH:-}" && -f "$CEF_RUNTIME_PATH/libcef.dll" ]]; then
-  CARGO_TARGET_DIR_UNIX="$(to_unix_path "${CARGO_TARGET_DIR:-$REPO_ROOT/target}" 2>/dev/null || printf '%s' "${CARGO_TARGET_DIR:-$REPO_ROOT/target}")"
-  CEF_STAGE_DIR="$CARGO_TARGET_DIR_UNIX/debug"
+  # The dev OpenHuman.exe is produced by the *Tauri shell* crate
+  # (app/src-tauri/Cargo.toml), not the root core crate. When
+  # CARGO_TARGET_DIR is set both workspaces share it; when unset, the
+  # Tauri shell builds into app/src-tauri/target while the root crate
+  # builds into target/. Stage CEF next to where OpenHuman.exe will
+  # actually live so Windows' DLL search order finds libcef.dll
+  # regardless of how the exe is launched (terminal, OAuth deep-link,
+  # double-click, etc).
+  if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+    CEF_STAGE_DIR="$(to_unix_path "$CARGO_TARGET_DIR" 2>/dev/null || printf '%s' "$CARGO_TARGET_DIR")/debug"
+  else
+    CEF_STAGE_DIR="$REPO_ROOT/app/src-tauri/target/debug"
+  fi
   mkdir -p "$CEF_STAGE_DIR"
   if [[ ! -f "$CEF_STAGE_DIR/libcef.dll" \
         || "$CEF_RUNTIME_PATH/libcef.dll" -nt "$CEF_STAGE_DIR/libcef.dll" ]]; then
