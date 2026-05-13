@@ -140,16 +140,21 @@ impl LocalAiService {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
 
-        // Health probe timed out. Classify the failure from captured stderr.
+        // Health probe timed out. The serve child is unhealthy and may be
+        // holding the Ollama port — kill it before returning so the next
+        // bootstrap attempt isn't blocked by a zombie listener.
+        if let Err(err) = serve_child.kill().await {
+            log::warn!("[local_ai] failed to kill unhealthy `ollama serve` child: {err}");
+        }
+
+        // Classify the failure from captured stderr.
         let stderr_snapshot = stderr_buffer.lock().clone();
         let lowered = stderr_snapshot.to_ascii_lowercase();
-        let cfa_signatures = [
-            "operation was blocked",
-            "controlled folder access",
-            "access is denied",
-            "0x80070005",
-            "is not recognized as a trusted",
-        ];
+        // Match only explicit Controlled Folder Access markers. Generic
+        // strings like "access is denied" or "is not recognized as a trusted"
+        // appear in many unrelated Windows errors and previously caused us
+        // to surface a misleading CFA remediation message.
+        let cfa_signatures = ["controlled folder access", "operation was blocked"];
         let cfa_hit = cfa_signatures.iter().any(|sig| lowered.contains(sig));
         if cfa_hit {
             log::warn!(
@@ -269,8 +274,38 @@ impl LocalAiService {
                 status.error_detail = None;
                 status.error_category = None;
             }
+            // Bounded wait: a stuck OllamaSetup.exe (e.g. Inno Setup dialog
+            // waiting on user input) must not block app startup forever. Five
+            // minutes covers a slow download + UAC prompt; past that we mark
+            // the install as failed-but-recoverable and let the caller decide.
+            let wait_start = std::time::Instant::now();
+            const INSTALLER_WAIT_TIMEOUT: std::time::Duration =
+                std::time::Duration::from_secs(5 * 60);
+            let mut timed_out = false;
             while crate::openhuman::local_ai::install::is_ollama_installer_running() {
+                if wait_start.elapsed() >= INSTALLER_WAIT_TIMEOUT {
+                    timed_out = true;
+                    break;
+                }
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            if timed_out {
+                log::warn!(
+                    "[local_ai] OllamaSetup.exe still running after {}s — giving up the wait",
+                    INSTALLER_WAIT_TIMEOUT.as_secs()
+                );
+                let mut status = self.status.lock();
+                status.state = "install_failed".to_string();
+                status.warning = None;
+                status.error_category = Some("install_stuck".to_string());
+                status.error_detail = Some(format!(
+                    "Previous OllamaSetup.exe install was still running after {}s. \
+                     Cancel the installer (System tray / Task Manager) and retry.",
+                    INSTALLER_WAIT_TIMEOUT.as_secs()
+                ));
+                return Err(
+                    "Previous Ollama installer is stuck. Cancel it and retry.".to_string()
+                );
             }
             // The prior installer is gone. If it succeeded, our regular
             // discovery paths will find the binary and we can short-circuit
@@ -1052,6 +1087,11 @@ impl LocalAiService {
         let response = self
             .http
             .get(format!("{}/api/tags", ollama_base_url()))
+            // Per-request timeout matches list_models (5s). The shared client's
+            // connect_timeout only bounds the TCP handshake; without this a
+            // hung server (accepted connection, no response body) would block
+            // assets_status polls indefinitely.
+            .timeout(std::time::Duration::from_secs(5))
             .send()
             .await
             .map_err(|e| format!("ollama tags request failed: {e}"))?;
