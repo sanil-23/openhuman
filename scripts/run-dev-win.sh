@@ -199,7 +199,7 @@ if [[ -z "${WindowsSdkDir:-}" || "${WindowsSDKVersion:-}" == "\\" || -z "${Windo
   if [[ -d "$sdk_root_unix/Lib" ]]; then
     sdk_version="$(ls -d "$sdk_root_unix"/Lib/*/ 2>/dev/null \
       | sort -V | tail -n1 \
-      | sed 's|.*/||; s|/||g')"
+      | sed 's|/$||; s|.*/||')"
     if [[ -n "$sdk_version" && -f "$sdk_root_unix/Lib/$sdk_version/um/x64/kernel32.lib" ]]; then
       sdk_root_win="$(cygpath -w "$sdk_root_unix")"
       export WindowsSdkDir="${sdk_root_win}\\"
@@ -546,4 +546,15 @@ fi
 # Use the vendored tauri-cef CLI (via the pnpm tauri script) so the
 # CEF runtime is correctly bundled. APPLE_SIGNING_IDENTITY is macOS-only
 # and is intentionally omitted here.
-"$PNPM_EXE" tauri dev
+#
+# OPENHUMAN_DEV_PORT lets parallel worktree dev sessions avoid the
+# hardcoded 1420 collision. Vite reads the same env var directly; the
+# tauri-cli inline override patches tauri.conf.json's `devUrl` so the
+# shell connects to the right Vite instance.
+DEV_PORT="${OPENHUMAN_DEV_PORT:-1420}"
+if [[ "$DEV_PORT" != "1420" ]]; then
+  echo "[run-dev-win] OPENHUMAN_DEV_PORT=$DEV_PORT — overriding tauri devUrl"
+  "$PNPM_EXE" tauri dev -c "{\"build\":{\"devUrl\":\"http://localhost:$DEV_PORT\"}}"
+else
+  "$PNPM_EXE" tauri dev
+fi
