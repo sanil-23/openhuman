@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ConfirmationModal } from '../components/intelligence/ConfirmationModal';
 import IntelligenceCallsTab from '../components/intelligence/IntelligenceCallsTab';
 import IntelligenceDreamsTab from '../components/intelligence/IntelligenceDreamsTab';
+import { GameplayReviewWorkspace } from '../components/intelligence/GameplayReviewWorkspace';
 import IntelligenceSubconsciousTab from '../components/intelligence/IntelligenceSubconsciousTab';
 import { MemoryWorkspace } from '../components/intelligence/MemoryWorkspace';
 import { ToastContainer } from '../components/intelligence/Toast';
@@ -20,7 +21,7 @@ import type {
   ToastNotification,
 } from '../types/intelligence';
 
-type IntelligenceTab = 'memory' | 'subconscious' | 'calls' | 'dreams';
+type IntelligenceTab = 'memory' | 'gameplay' | 'subconscious' | 'calls' | 'dreams';
 
 export default function Intelligence() {
   const { aiStatus } = useIntelligenceStats();
@@ -129,6 +130,7 @@ export default function Intelligence() {
 
   const tabs: { id: IntelligenceTab; label: string; comingSoon?: boolean }[] = [
     { id: 'memory', label: 'Memory' },
+    { id: 'gameplay', label: 'Gameplay' },
     { id: 'subconscious', label: 'Subconscious' },
     { id: 'calls', label: 'Calls' },
     { id: 'dreams', label: 'Dreams', comingSoon: true },
@@ -217,6 +219,8 @@ export default function Intelligence() {
 
             {/* Tab content */}
             {activeTab === 'memory' && <MemoryWorkspace onToast={addToast} />}
+
+            {activeTab === 'gameplay' && <GameplayReviewWorkspace onToast={addToast} />}
 
             {activeTab === 'subconscious' && (
               <IntelligenceSubconsciousTab

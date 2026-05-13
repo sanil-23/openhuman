@@ -75,3 +75,4 @@ pub mod webview_apis;
 pub mod webview_notifications;
 pub mod whatsapp_data;
 pub mod workspace;
+pub mod gameplay_review;
