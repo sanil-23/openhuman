@@ -258,9 +258,9 @@ pub fn update_config(cfg: SchedulerGateConfig) {
 /// top-priority "host should do no LLM work" signal and ignores config /
 /// signals. We gate on [`STATE`] being present because the override only has
 /// a meaningful effect when there are real background workers calling into
-/// the gate; in unit tests where `init_global` was never called, the
-/// process-global atomic can leak `true` from an earlier test and deadlock
-/// every subsequent caller (see `wait_for_capacity` for the deadlock path).
+/// the gate; in unit tests where `init_global` was never called, a stale
+/// `signed_out` flag from an earlier test can otherwise deadlock every
+/// subsequent caller (see `wait_for_capacity` for the deadlock path).
 pub fn current_policy() -> Policy {
     if STATE.get().is_some() && is_signed_out() {
         return Policy::Paused {
@@ -412,9 +412,9 @@ pub async fn wait_for_capacity() -> Option<LlmPermit> {
         // We gate on `STATE.get().is_some()` so the override only fires once
         // the gate has been initialised by `init_global`. In unit tests
         // where `init_global` was never called there is no background-worker
-        // pool to stand down, but the process-global `SIGNED_OUT` atomic can
-        // still leak `true` from an earlier test that exercised the
-        // credentials / 401 paths (`clear_session`, RPC 401 dispatch, or
+        // pool to stand down, but the per-runtime `signed_out` flag can
+        // still be `true` from an earlier test that exercised the credentials
+        // / 401 paths (`clear_session`, RPC 401 dispatch, or
         // `SessionExpiredSubscriber.handle()`). Without the gate, every
         // subsequent caller of `wait_for_capacity` polls forever on the
         // 60-second fallback cadence — manifest as the
@@ -609,10 +609,10 @@ mod tests {
     async fn signed_out_is_ignored_when_gate_uninit() {
         // In unit tests `init_global` is never called, so `STATE` is `None`.
         // In that state the signed-out override is intentionally inert: there
-        // are no background workers to stand down, and honouring the
-        // process-global atomic would let any earlier test that flipped it
-        // (`clear_session`, RPC 401 dispatch, `SessionExpiredSubscriber`)
-        // deadlock every subsequent caller of `wait_for_capacity`.
+        // are no background workers to stand down, and honouring the per-runtime
+        // flag would let any earlier test that set it (`clear_session`, RPC 401
+        // dispatch, `SessionExpiredSubscriber`) deadlock every subsequent caller
+        // of `wait_for_capacity`.
         let _g = lock();
         if skip_if_gate_initialised("signed_out_is_ignored_when_gate_uninit") {
             return;
@@ -630,10 +630,10 @@ mod tests {
     async fn wait_for_capacity_acquires_immediately_when_signed_out_and_uninit() {
         // Regression test for the
         // `openhuman::agent::triage::evaluator::tests::*` hangs that surfaced
-        // after #1516 added the `SIGNED_OUT` override. Earlier tests in the
+        // after #1516 added the `signed_out` override. Earlier tests in the
         // same `cargo test` binary that exercise `clear_session` /
-        // `SessionExpiredSubscriber` / the RPC 401 path leave the
-        // process-global atomic stuck `true`. Without the `STATE.is_some()`
+        // `SessionExpiredSubscriber` / the RPC 401 path can leave the
+        // per-runtime flag set to `true`. Without the `STATE.is_some()`
         // gate, every subsequent `wait_for_capacity()` polls forever on the
         // 60-second `paused_poll_ms` fallback (STATE is None in tests, so
         // the fallback is the unconfigured default).
@@ -655,12 +655,17 @@ mod tests {
     #[tokio::test]
     async fn set_signed_out_is_a_noop_when_gate_uninit() {
         // Writer-side companion to `signed_out_is_ignored_when_gate_uninit`.
-        // The production `set_signed_out` must NOT mutate the process-global
-        // atomic in tests / pre-init bootstrap, otherwise a `clear_session`
-        // call exercised in one test leaks `SIGNED_OUT=true` into every
-        // subsequent test in the binary. With this gate, only callers that
-        // run after `init_global` (i.e. real workers in production) ever
-        // flip the bit.
+        // The production `set_signed_out` must NOT mutate the per-runtime flag
+        // when `STATE` is uninit, otherwise a `clear_session` call exercised
+        // in one test leaks `signed_out=true` into every subsequent test in
+        // the binary. With this gate, only callers that run after `init_global`
+        // (i.e. real workers in production) ever flip the bit.
+        //
+        // Note: because this is a `#[tokio::test]`, a runtime is always
+        // present, so the `current_id().is_none()` branch in the test-cfg
+        // implementations of `set_signed_out` and `is_signed_out` is
+        // unreachable here. The gate we exercise is exclusively the
+        // `STATE.get().is_none()` early-return.
         let _g = lock();
         if skip_if_gate_initialised("set_signed_out_is_a_noop_when_gate_uninit") {
             return;
