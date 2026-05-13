@@ -6,13 +6,17 @@ import IntelligenceSettingsTab from '../IntelligenceSettingsTab';
 
 // The orchestrator hits these RPCs on mount; the global tauriCommands mock
 // in setup.ts only stubs auth/service helpers, so we extend it here with
-// the local-AI surface the Settings tab uses, plus the new memory_tree
-// LLM-selector RPCs that replaced the dev-time mock backend.
+// the local-AI surface the Settings tab uses, plus the memory_tree
+// LLM-selector RPCs.
+//
+// Backend selection moved to Settings → Local AI Model → "Memory
+// summarizer" checkbox. This tab now only READS `memory_tree.llm_backend`
+// on mount via memoryTreeGetLlm to decide whether to render the local-only
+// model picker sections; it never WRITES the backend itself. The Memory
+// LLM dropdown still calls memoryTreeSetLlm (with extract_model +
+// summariser_model fields), so the setter mock stays.
 vi.mock('../../../utils/tauriCommands', () => ({
   isTauri: vi.fn(() => true),
-  // memory_tree LLM selector — the BackendChooser polls these on mount and
-  // again on every backend toggle. We track the value in a closure so the
-  // set→get round-trip behaves like the real persistent core.
   memoryTreeGetLlm: vi.fn(),
   memoryTreeSetLlm: vi.fn(),
   openhumanLocalAiAssetsStatus: vi
@@ -107,58 +111,49 @@ const { memoryTreeGetLlm, memoryTreeSetLlm } =
   };
 
 describe('IntelligenceSettingsTab', () => {
+  // The backend value the mocked memoryTreeGetLlm reports on mount.
+  // Tests that need local-mode behavior set this to 'local' before
+  // renderWithProviders. There's no in-UI toggle anymore — selection
+  // happens via Settings → Local AI Model → Memory summarizer.
+  let initialBackend: 'cloud' | 'local';
+
   beforeEach(() => {
-    let backend: 'cloud' | 'local' = 'cloud';
+    initialBackend = 'cloud';
     memoryTreeGetLlm.mockReset();
     memoryTreeSetLlm.mockReset();
-    memoryTreeGetLlm.mockImplementation(async () => ({ current: backend }));
-    // Accept both legacy (bare string) and the new request-object shape so
-    // tests can assert on either call form.
+    memoryTreeGetLlm.mockImplementation(async () => ({ current: initialBackend }));
+    // Accept both legacy (bare string) and the new request-object shape.
     memoryTreeSetLlm.mockImplementation(
       async (req: 'cloud' | 'local' | { backend: 'cloud' | 'local' }) => {
-        backend = typeof req === 'string' ? req : req.backend;
-        return { current: backend };
+        const next = typeof req === 'string' ? req : req.backend;
+        return { current: next };
       }
     );
   });
 
-  // Helper: bootstrap into Local mode so the model assignment + catalog
-  // render. Cloud is the default; clicking the Advanced radio flips to
-  // local and renders the Ollama-related sections.
-  async function flipToLocal() {
+  it('renders the cloud-mode hint when memory tree backend is Cloud', async () => {
+    initialBackend = 'cloud';
+    renderWithProviders(<IntelligenceSettingsTab />);
+
+    // Hint section appears with the pointer to Local AI Settings.
     await waitFor(() => {
-      expect(screen.getByText('AI backend')).toBeInTheDocument();
+      expect(screen.getByText('Memory model assignment')).toBeInTheDocument();
     });
-    const radios = screen.getAllByRole('radio');
-    const localCard = radios.find(el => /Advanced/.test(el.textContent ?? ''));
-    expect(localCard).toBeDefined();
-    fireEvent.click(localCard!);
+    expect(screen.getByText(/Memory summarizer/)).toBeInTheDocument();
+    // Local-only sections are hidden so cloud users never see Ollama-related UI.
+    expect(screen.queryByText('Model assignment')).not.toBeInTheDocument();
+    expect(screen.queryByText('Model catalog')).not.toBeInTheDocument();
+  });
+
+  it('reveals Model assignment + Catalog when memory tree backend is Local', async () => {
+    initialBackend = 'local';
+    renderWithProviders(<IntelligenceSettingsTab />);
+
     await waitFor(() => {
       expect(screen.getByText('Model assignment')).toBeInTheDocument();
     });
-  }
-
-  it('renders the AI backend section in cloud mode (no local sections)', async () => {
-    renderWithProviders(<IntelligenceSettingsTab />);
-
-    await waitFor(() => {
-      expect(screen.getByText('AI backend')).toBeInTheDocument();
-    });
-    // Cloud is default — local-only sections are hidden so cloud users
-    // never see Ollama-related UI.
-    expect(screen.queryByText('Model assignment')).not.toBeInTheDocument();
-    expect(screen.queryByText('Model catalog')).not.toBeInTheDocument();
-    // Currently-loaded panel was removed entirely (was dev-debug noise).
-    expect(screen.queryByText('Currently loaded')).not.toBeInTheDocument();
-  });
-
-  it('hides Model assignment in Cloud mode and reveals it in Local mode', async () => {
-    renderWithProviders(<IntelligenceSettingsTab />);
-    await flipToLocal();
-
-    // The new UI consolidates Extract + Summariser LLM into a single
-    // Memory LLM picker (the underlying RPC still fans out to both
-    // extract_model and summariser_model in config.toml).
+    expect(screen.getByText('Model catalog')).toBeInTheDocument();
+    // The consolidated Memory LLM dropdown (extract + summarise) is present.
     expect(screen.getByText('Memory LLM')).toBeInTheDocument();
     expect(screen.getByText('Embedder')).toBeInTheDocument();
     // Old separate dropdowns must be absent.
@@ -167,81 +162,68 @@ describe('IntelligenceSettingsTab', () => {
   });
 
   it('shows model catalog rows with sizes (in local mode)', async () => {
+    initialBackend = 'local';
     renderWithProviders(<IntelligenceSettingsTab />);
-    await flipToLocal();
 
     await waitFor(() => {
       expect(screen.getAllByText('qwen2.5:0.5b').length).toBeGreaterThanOrEqual(1);
     });
-    // Each model can appear in the Memory LLM dropdown AND the catalog,
-    // so use getAllByText. Just confirm the catalog has at least one of
-    // each curated entry rendered somewhere on the screen.
     expect(screen.getAllByText('gemma3:1b-it-qat').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('gemma3:4b').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('gemma3:12b-it-qat').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('bge-m3').length).toBeGreaterThanOrEqual(1);
-
     // 3.3 GB is unique to gemma3:4b in the catalog row meta.
     expect(screen.getByText('3.3 GB')).toBeInTheDocument();
   });
 
-  it('renders a Download action for models that are not installed', async () => {
+  it('renders a Download action for models that are not installed (local mode)', async () => {
+    initialBackend = 'local';
     renderWithProviders(<IntelligenceSettingsTab />);
-    await flipToLocal();
 
-    // qwen2.5:0.5b is NOT in the diagnostics installed list, so it shows
-    // a Download button.
     await waitFor(() => {
       expect(screen.getByText('qwen2.5:0.5b')).toBeInTheDocument();
     });
-
     const downloadButtons = screen.getAllByRole('button', { name: 'Download' });
     expect(downloadButtons.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('reads the backend via memoryTreeGetLlm on mount and persists toggles via memoryTreeSetLlm', async () => {
+  it('reads memoryTreeGetLlm on mount and never writes the backend from this tab', async () => {
+    initialBackend = 'local';
     renderWithProviders(<IntelligenceSettingsTab />);
 
-    // Bootstrap: getMemoryTreeLlm must run once on mount.
+    // Bootstrap: memoryTreeGetLlm must run once on mount.
     await waitFor(() => {
       expect(memoryTreeGetLlm).toHaveBeenCalled();
     });
-
-    // Click Local — setMemoryTreeLlm must be called with the request
-    // object form `{ backend: 'local' }`. settingsApi.ts always normalizes
-    // to the request-object shape because the wrapper now accepts both
-    // forms but the API layer translates camelCase options through the
-    // object shape. Model fields are absent so the corresponding
-    // config keys stay untouched.
-    const radios = screen.getAllByRole('radio');
-    const localCard = radios.find(el => /Advanced/.test(el.textContent ?? ''));
-    fireEvent.click(localCard!);
-
+    // Wait long enough for any spurious post-mount writes — there should
+    // be none, since this tab no longer exposes a backend chooser.
     await waitFor(() => {
-      expect(memoryTreeSetLlm).toHaveBeenCalledWith({ backend: 'local' });
+      expect(screen.getByText('Model assignment')).toBeInTheDocument();
     });
-
-    // The mocked setter persists state in the closure, so the bootstrap
-    // value of any subsequent get_llm call would now be 'local' — sanity
-    // check that the closure flipped.
-    const after = await memoryTreeGetLlm();
-    expect(after.current).toBe('local');
+    // No call to memoryTreeSetLlm with a backend-only payload (the Memory
+    // LLM dropdown still calls it on change with extract_model +
+    // summariser_model — separate path, exercised by the next test).
+    const backendOnlyCalls = memoryTreeSetLlm.mock.calls.filter((args: unknown[]) => {
+      const req = args[0];
+      if (typeof req === 'string') return true;
+      if (req && typeof req === 'object') {
+        const obj = req as Record<string, unknown>;
+        return 'backend' in obj && !('extract_model' in obj);
+      }
+      return false;
+    });
+    expect(backendOnlyCalls).toHaveLength(0);
   });
 
   it('persists Memory LLM dropdown changes via memoryTreeSetLlm with both extract_model and summariser_model', async () => {
-    // The single Memory LLM picker fans out to BOTH extract_model and
-    // summariser_model in one atomic write — the underlying schema keeps
-    // the two keys separate so power users can split via the RPC, but the
-    // UI consolidates them into one cognitive unit.
+    initialBackend = 'local';
     renderWithProviders(<IntelligenceSettingsTab />);
-    await flipToLocal();
 
-    // Reset call history so the assertion below is scoped to the
-    // dropdown change, not the earlier backend toggle.
+    await waitFor(() => {
+      expect(screen.getByText('Model assignment')).toBeInTheDocument();
+    });
     memoryTreeSetLlm.mockClear();
 
-    // Pick a different memory LLM. `gemma3:12b-it-qat` is in the curated
-    // catalog with both `extract` and `summariser` roles.
     const memorySelect = screen.getByLabelText(
       'Memory LLM (extract + summarise)'
     ) as HTMLSelectElement;

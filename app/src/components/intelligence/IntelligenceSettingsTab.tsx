@@ -11,7 +11,6 @@ import {
   REQUIRED_EMBEDDER_MODEL,
   setMemoryTreeLlm,
 } from '../../lib/intelligence/settingsApi';
-import BackendChooser from './BackendChooser';
 import ModelAssignment from './ModelAssignment';
 import ModelCatalog from './ModelCatalog';
 
@@ -19,17 +18,25 @@ import ModelCatalog from './ModelCatalog';
  * Settings tab for the Intelligence page.
  *
  * Layout (top → bottom):
- *   1. AI Backend         — Cloud / Local toggle
- *   2. Model Assignment   — per-role dropdowns (visible only in Local mode)
- *   3. Model Catalog      — full curated list with download / use / delete
- *   4. Currently Loaded   — live `/api/ps`-style readout
+ *   1. Model Assignment   — per-role dropdowns (visible only when the
+ *                            memory-tree LLM backend is Local)
+ *   2. Model Catalog      — full curated list with download / use
  *
- * The orchestrator owns the cross-section state (backend, role assignments,
- * cached installed-models / status). Sections themselves stay presentational.
+ * The Cloud ↔ Local toggle that used to live on this tab moved to
+ * Settings → Local AI Model → "Memory summarizer" checkbox. Both UIs
+ * wrote `memory_tree.llm_backend`, so collapsing to one removes the
+ * duplicate control surface (the two could drift mid-render). This tab
+ * still reads that field at mount to decide whether to expose the
+ * Ollama model picker sections.
+ *
+ * The orchestrator owns the cross-section state (cached installed-models
+ * + role assignments). Sections themselves stay presentational.
  */
 export default function IntelligenceSettingsTab() {
+  // Mirrors `memory_tree.llm_backend`. Read-only on this tab now —
+  // flipped from Local AI Settings. Used as the visibility gate for the
+  // Ollama model picker UI below.
   const [backend, setBackend] = useState<Backend>('cloud');
-  const [backendBusy, setBackendBusy] = useState(false);
   // Single Memory LLM that drives both extractor and summariser. Most
   // users want one model for both; the rare case of mixing them is not
   // worth the second dropdown's cognitive cost.
@@ -50,8 +57,8 @@ export default function IntelligenceSettingsTab() {
         if (!cancelled) {
           // Bootstrap failure leaves the tab on its useState defaults
           // (cloud backend, empty installed list) rather than throwing
-          // an unhandled rejection. The user can still flip the backend
-          // chooser; subsequent reads will retry the RPCs.
+          // an unhandled rejection. Subsequent reads will retry the RPCs
+          // when the user navigates back.
           console.error('[intelligence-settings] bootstrap failed', err);
         }
       }
@@ -59,18 +66,6 @@ export default function IntelligenceSettingsTab() {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  const handleBackendChange = useCallback(async (next: Backend) => {
-    setBackendBusy(true);
-    try {
-      const { effective } = await setMemoryTreeLlm(next);
-      setBackend(effective);
-    } catch (err) {
-      console.error('[intelligence-settings] backend switch failed', err);
-    } finally {
-      setBackendBusy(false);
-    }
   }, []);
 
   // Persist Memory LLM changes to config.toml. Fans out to both
@@ -132,15 +127,13 @@ export default function IntelligenceSettingsTab() {
 
   return (
     <div className="space-y-10" data-testid="intelligence-settings-tab">
-      <Section title="AI backend">
-        <BackendChooser value={backend} onChange={handleBackendChange} busy={backendBusy} />
-      </Section>
-
-      {/* All local-model sections (assignment, catalog, currently-loaded)
-          are gated on local backend. Cloud users get just the backend
-          chooser + the explanatory copy that lives inside it — they don't
-          need to see Ollama-related UI at all. */}
-      {backend === 'local' && (
+      {/* Local-model sections are gated on `memory_tree.llm_backend === 'local'`.
+          The toggle itself now lives in Settings → Local AI Model →
+          "Memory summarizer"; this tab is read-only with respect to
+          backend selection. Cloud users see an empty tab (intentional —
+          there's no Ollama model picker to surface when memory tree
+          isn't running on Ollama). */}
+      {backend === 'local' ? (
         <>
           <Section title="Model assignment">
             <ModelAssignment
@@ -159,6 +152,14 @@ export default function IntelligenceSettingsTab() {
             />
           </Section>
         </>
+      ) : (
+        <Section title="Memory model assignment">
+          <p className="text-sm text-stone-500">
+            Memory tree is running on cloud. To pick a local Ollama model for memory
+            summarisation, enable <strong>Memory summarizer</strong> in Settings → Local AI
+            Model.
+          </p>
+        </Section>
       )}
     </div>
   );

@@ -64,8 +64,11 @@ const LocalModelPanel = () => {
 
   // Memory summarizer backend lives in `memory_tree.llm_backend`, which is
   // outside the `local_ai.usage.*` surface — so it has its own RPC pair
-  // (`memoryTreeGetLlm` / `memoryTreeSetLlm`). The Memory page's
-  // `BackendChooser` writes the same field, so the two UIs stay in sync.
+  // (`memoryTreeGetLlm` / `memoryTreeSetLlm`). This is now the only UI
+  // surface for the cloud/local toggle (the Intelligence Memory tab's
+  // BackendChooser was removed in this PR to eliminate the duplicate
+  // control surface). The tab's local-only Ollama model picker reads
+  // the same field at mount to decide visibility.
   const [summarizerBackend, setSummarizerBackend] = useState<LlmBackend>('cloud');
   const [summarizerSaving, setSummarizerSaving] = useState(false);
 
@@ -409,8 +412,10 @@ const LocalModelPanel = () => {
 
           <div className={`space-y-2 pl-6 ${usageFlags.runtime_enabled ? '' : 'opacity-50'}`}>
             {/* Memory summarizer is special: it writes `memory_tree.llm_backend`,
-                not `local_ai.usage.*`, so it shares its toggle with the
-                Memory page's BackendChooser. Same field, two UIs in sync. */}
+                not `local_ai.usage.*`. This is now the sole UI surface for
+                that field (the Intelligence Memory tab's BackendChooser was
+                removed); the tab's Ollama model picker still reads it at
+                mount to gate visibility. */}
             <label
               className="flex items-start gap-3 cursor-pointer"
               data-testid="local-ai-usage-memory-summarizer">
