@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use chrono::Utc;
+use log::{debug, trace, warn};
 use uuid::Uuid;
 
 use crate::openhuman::config::Config;
@@ -23,9 +24,28 @@ const DEFAULT_PLATFORMS: &[&str] = &["twitch", "kick", "youtube"];
 pub async fn register_session(
     payload: GameplayReviewSessionInput,
 ) -> Result<RpcOutcome<GameplayReviewSession>, String> {
+    debug!(
+        "[gameplay_review][rpc] register_session start game_id={} frames={} spoiler_mode={}",
+        payload.game_id,
+        payload.frames.len(),
+        payload
+            .spoiler_mode
+            .unwrap_or_default()
+            .as_str()
+    );
     let session = build_session(payload)?;
     let workspace_dir = workspace_dir().await?;
+    debug!(
+        "[gameplay_review][rpc] register_session workspace_dir={} session_id={}",
+        workspace_dir.display(),
+        session.session_id
+    );
     store::save_session(&workspace_dir, &session)?;
+    debug!(
+        "[gameplay_review][rpc] register_session complete session_id={} game_id={}",
+        session.session_id,
+        session.game_id
+    );
     Ok(RpcOutcome::single_log(
         session,
         "gameplay review session registered",
@@ -35,17 +55,67 @@ pub async fn register_session(
 pub async fn analyze_session(
     payload: GameplayReviewAnalysisInput,
 ) -> Result<RpcOutcome<GameplayReviewSession>, String> {
+    debug!(
+        "[gameplay_review][rpc] analyze_session start session_id={} max_highlights={:?} platform_overrides={}",
+        payload.session_id,
+        payload.max_highlights,
+        payload.platforms.len()
+    );
     let workspace_dir = workspace_dir().await?;
     let mut session = store::load_session(&workspace_dir, &payload.session_id)?
         .ok_or_else(|| format!("gameplay session not found: {}", payload.session_id))?;
+    debug!(
+        "[gameplay_review][rpc] analyze_session loaded session_id={} game_id={} frames={} preset_id={:?}",
+        session.session_id,
+        session.game_id,
+        session.frames.len(),
+        session.preset_id
+    );
     let preset = match session.preset_id.as_deref() {
-        Some(game_id) => store::load_preset(&workspace_dir, game_id)?,
-        None => None,
+        Some(game_id) => {
+            debug!(
+                "[gameplay_review][rpc] analyze_session loading preset game_id={}",
+                game_id
+            );
+            store::load_preset(&workspace_dir, game_id)?
+        }
+        None => {
+            trace!(
+                "[gameplay_review][rpc] analyze_session no preset configured session_id={}",
+                session.session_id
+            );
+            None
+        }
     };
-    let analysis = analyze_session_frames(&session, preset.as_ref(), payload.max_highlights, &payload.platforms).await;
+    let analysis = analyze_session_frames(
+        &session,
+        preset.as_ref(),
+        payload.max_highlights,
+        &payload.platforms,
+    )
+    .await;
     session.analyzed_at_ms = Some(Utc::now().timestamp_millis());
     session.analysis = Some(analysis);
     store::save_session(&workspace_dir, &session)?;
+    debug!(
+        "[gameplay_review][rpc] analyze_session complete session_id={} highlights={} clips={} drafts={}",
+        session.session_id,
+        session
+            .analysis
+            .as_ref()
+            .map(|analysis| analysis.highlights.len())
+            .unwrap_or(0),
+        session
+            .analysis
+            .as_ref()
+            .map(|analysis| analysis.clip_candidates.len())
+            .unwrap_or(0),
+        session
+            .analysis
+            .as_ref()
+            .map(|analysis| analysis.draft_metadata.len())
+            .unwrap_or(0)
+    );
     Ok(RpcOutcome::single_log(
         session,
         "gameplay review session analyzed",
@@ -53,9 +123,16 @@ pub async fn analyze_session(
 }
 
 pub async fn get_session(session_id: String) -> Result<RpcOutcome<GameplayReviewSession>, String> {
+    debug!("[gameplay_review][rpc] get_session start session_id={}", session_id);
     let workspace_dir = workspace_dir().await?;
     let session = store::load_session(&workspace_dir, &session_id)?
         .ok_or_else(|| format!("gameplay session not found: {session_id}"))?;
+    debug!(
+        "[gameplay_review][rpc] get_session complete session_id={} game_id={} analyzed={}",
+        session.session_id,
+        session.game_id,
+        session.analysis.is_some()
+    );
     Ok(RpcOutcome::single_log(
         session,
         "gameplay review session fetched",
@@ -65,11 +142,26 @@ pub async fn get_session(session_id: String) -> Result<RpcOutcome<GameplayReview
 pub async fn list_sessions(
     game_id: Option<String>,
 ) -> Result<RpcOutcome<Vec<GameplayReviewSession>>, String> {
+    debug!(
+        "[gameplay_review][rpc] list_sessions start game_id_filter={:?}",
+        game_id
+    );
     let workspace_dir = workspace_dir().await?;
     let mut sessions = store::list_sessions(&workspace_dir)?;
     if let Some(filter) = game_id.as_deref() {
+        let before = sessions.len();
         sessions.retain(|session| session.game_id == filter);
+        debug!(
+            "[gameplay_review][rpc] list_sessions filtered game_id={} before={} after={}",
+            filter,
+            before,
+            sessions.len()
+        );
     }
+    debug!(
+        "[gameplay_review][rpc] list_sessions complete count={}",
+        sessions.len()
+    );
     Ok(RpcOutcome::single_log(
         sessions,
         "gameplay review sessions listed",
@@ -79,9 +171,21 @@ pub async fn list_sessions(
 pub async fn set_preset(
     payload: GameplayPresetInput,
 ) -> Result<RpcOutcome<GameplayReviewPreset>, String> {
+    debug!(
+        "[gameplay_review][rpc] set_preset start game_id={} display_name={} focus_items={} spoiler_mode={}",
+        payload.game_id,
+        payload.display_name,
+        payload.coaching_focus.len(),
+        payload.spoiler_mode.as_str()
+    );
     let workspace_dir = workspace_dir().await?;
     let preset = store::preset_from_input(payload);
     store::save_preset(&workspace_dir, &preset)?;
+    debug!(
+        "[gameplay_review][rpc] set_preset complete game_id={} path_hint={}",
+        preset.game_id,
+        store::preset_path(&workspace_dir, &preset.game_id).display()
+    );
     Ok(RpcOutcome::single_log(
         preset,
         "gameplay review preset saved",
@@ -89,8 +193,13 @@ pub async fn set_preset(
 }
 
 pub async fn list_presets() -> Result<RpcOutcome<Vec<GameplayReviewPreset>>, String> {
+    debug!("[gameplay_review][rpc] list_presets start");
     let workspace_dir = workspace_dir().await?;
     let presets = store::list_presets(&workspace_dir)?;
+    debug!(
+        "[gameplay_review][rpc] list_presets complete count={}",
+        presets.len()
+    );
     Ok(RpcOutcome::single_log(
         presets,
         "gameplay review presets listed",
@@ -100,6 +209,11 @@ pub async fn list_presets() -> Result<RpcOutcome<Vec<GameplayReviewPreset>>, Str
 pub async fn ask_session(
     payload: GameplayReviewQuestionInput,
 ) -> Result<RpcOutcome<GameplayReviewQuestionResult>, String> {
+    debug!(
+        "[gameplay_review][rpc] ask_session start session_id={} question_len={}",
+        payload.session_id,
+        payload.question.len()
+    );
     let workspace_dir = workspace_dir().await?;
     let session = store::load_session(&workspace_dir, &payload.session_id)?
         .ok_or_else(|| format!("gameplay session not found: {}", payload.session_id))?;
@@ -121,6 +235,12 @@ pub async fn ask_session(
     } else {
         analysis.follow_up_questions.clone()
     };
+    debug!(
+        "[gameplay_review][rpc] ask_session complete session_id={} matched_highlights={} suggested_follow_up={}",
+        session.session_id,
+        matched_highlights.len(),
+        suggested_follow_up.len()
+    );
     Ok(RpcOutcome::single_log(
         GameplayReviewQuestionResult {
             answer,
@@ -134,6 +254,12 @@ pub async fn ask_session(
 pub async fn draft_clip_metadata(
     payload: GameplayReviewClipInput,
 ) -> Result<RpcOutcome<Vec<GameplayPlatformDraft>>, String> {
+    debug!(
+        "[gameplay_review][rpc] draft_clip_metadata start session_id={} platform={:?} highlight_id={:?}",
+        payload.session_id,
+        payload.platform,
+        payload.highlight_id
+    );
     let workspace_dir = workspace_dir().await?;
     let session = store::load_session(&workspace_dir, &payload.session_id)?
         .ok_or_else(|| format!("gameplay session not found: {}", payload.session_id))?;
@@ -141,7 +267,17 @@ pub async fn draft_clip_metadata(
         .analysis
         .as_ref()
         .ok_or_else(|| "session has not been analyzed yet".to_string())?;
-    let drafts = draft_metadata(&session, analysis, payload.platform.as_deref(), payload.highlight_id.as_deref());
+    let drafts = draft_metadata(
+        &session,
+        analysis,
+        payload.platform.as_deref(),
+        payload.highlight_id.as_deref(),
+    );
+    debug!(
+        "[gameplay_review][rpc] draft_clip_metadata complete session_id={} drafts={}",
+        session.session_id,
+        drafts.len()
+    );
     Ok(RpcOutcome::single_log(
         drafts,
         "gameplay review clip metadata drafted",
@@ -149,20 +285,35 @@ pub async fn draft_clip_metadata(
 }
 
 async fn workspace_dir() -> Result<std::path::PathBuf, String> {
+    debug!("[gameplay_review][rpc] workspace_dir load start");
     let config = Config::load_or_init()
         .await
         .map_err(|err| format!("gameplay review config load failed: {err}"))?;
-    Ok(store::workspace_dir_from_config(&config))
+    let workspace_dir = store::workspace_dir_from_config(&config);
+    trace!(
+        "[gameplay_review][rpc] workspace_dir resolved path={}",
+        workspace_dir.display()
+    );
+    Ok(workspace_dir)
 }
 
 fn build_session(payload: GameplayReviewSessionInput) -> Result<GameplayReviewSession, String> {
+    debug!(
+        "[gameplay_review][rpc] build_session start game_id={} session_title={} frames={}",
+        payload.game_id,
+        payload.session_title,
+        payload.frames.len()
+    );
     if payload.game_id.trim().is_empty() {
+        warn!("[gameplay_review][rpc] build_session rejected empty game_id");
         return Err("game_id is required".to_string());
     }
     if payload.session_title.trim().is_empty() {
+        warn!("[gameplay_review][rpc] build_session rejected empty session_title");
         return Err("session_title is required".to_string());
     }
     if payload.frames.is_empty() {
+        warn!("[gameplay_review][rpc] build_session rejected empty frames");
         return Err("at least one frame is required".to_string());
     }
 
@@ -193,8 +344,6 @@ async fn analyze_session_frames(
     platform_overrides: &[String],
 ) -> GameplayReviewAnalysis {
     let limit = max_highlights.unwrap_or(5).clamp(1, 8);
-    let mut highlights = Vec::new();
-    let mut clip_candidates = Vec::new();
     let platforms: Vec<String> = if platform_overrides.is_empty() {
         DEFAULT_PLATFORMS
             .iter()
@@ -203,8 +352,39 @@ async fn analyze_session_frames(
     } else {
         platform_overrides.to_vec()
     };
+    debug!(
+        "[gameplay_review][analysis] start session_id={} game_id={} frames={} limit={} platforms={}",
+        session.session_id,
+        session.game_id,
+        session.frames.len(),
+        limit,
+        platforms.len()
+    );
+    if let Some(preset) = preset {
+        trace!(
+            "[gameplay_review][analysis] using preset game_id={} coaching_focus={} audio_feedback={} spoiler_mode={}",
+            preset.game_id,
+            preset.coaching_focus.len(),
+            preset.audio_feedback,
+            preset.spoiler_mode.as_str()
+        );
+    } else {
+        trace!(
+            "[gameplay_review][analysis] no preset for session_id={}",
+            session.session_id
+        );
+    }
+
+    let mut highlights = Vec::new();
+    let mut clip_candidates = Vec::new();
 
     for (index, frame) in session.frames.iter().enumerate() {
+        trace!(
+            "[gameplay_review][analysis] analyze frame session_id={} frame_index={} file_name={}",
+            session.session_id,
+            index,
+            frame.file_name
+        );
         let capture = CaptureFrame {
             captured_at_ms: frame
                 .captured_at_ms
@@ -218,8 +398,10 @@ async fn analyze_session_frames(
         let summary = match global_engine().analyze_and_persist_frame(capture).await {
             Ok(summary) => summary,
             Err(err) => {
-                log::warn!(
-                    "[gameplay_review] frame analysis fell back to deterministic summary: {}",
+                warn!(
+                    "[gameplay_review][analysis] frame analysis fallback session_id={} frame_index={} error={}",
+                    session.session_id,
+                    index,
                     err
                 );
                 fallback_summary(session, frame, index)
@@ -261,6 +443,13 @@ async fn analyze_session_frames(
 
     let recap = build_recap(session, &highlights, preset);
     let draft_metadata = draft_metadata_from_highlights(session, &highlights, preset, &platforms);
+    debug!(
+        "[gameplay_review][analysis] complete session_id={} highlights={} clips={} drafts={}",
+        session.session_id,
+        highlights.len(),
+        clip_candidates.len(),
+        draft_metadata.len()
+    );
 
     GameplayReviewAnalysis {
         recap,
@@ -277,6 +466,12 @@ fn fallback_summary(
     frame: &GameplayFrameInput,
     index: usize,
 ) -> crate::openhuman::screen_intelligence::VisionSummary {
+    trace!(
+        "[gameplay_review][analysis] fallback_summary session_id={} frame_index={} file_name={}",
+        session.session_id,
+        index,
+        frame.file_name
+    );
     let label = frame
         .file_name
         .rsplit_once('/')

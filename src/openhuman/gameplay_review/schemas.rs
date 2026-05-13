@@ -2,6 +2,8 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use log::debug;
+
 use crate::core::all::{ControllerFuture, RegisteredController};
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
 use crate::rpc::RpcOutcome;
@@ -118,21 +120,54 @@ fn deserialize_params<T: DeserializeOwned>(params: Map<String, Value>) -> Result
 fn handle_register_session(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<GameplayReviewSessionInput>(params)?;
-        to_json(crate::openhuman::gameplay_review::rpc::register_session(payload).await?)
+        debug!(
+            "[gameplay_review][controller] register_session session_game_id={} frames={}",
+            payload.game_id,
+            payload.frames.len()
+        );
+        let result = crate::openhuman::gameplay_review::rpc::register_session(payload).await?;
+        debug!(
+            "[gameplay_review][controller] register_session complete session_id={} game_id={}",
+            result.value.session_id,
+            result.value.game_id
+        );
+        to_json(result)
     })
 }
 
 fn handle_analyze_session(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<GameplayReviewAnalysisInput>(params)?;
-        to_json(crate::openhuman::gameplay_review::rpc::analyze_session(payload).await?)
+        debug!(
+            "[gameplay_review][controller] analyze_session session_id={} max_highlights={:?} platforms={}",
+            payload.session_id,
+            payload.max_highlights,
+            payload.platforms.len()
+        );
+        let result = crate::openhuman::gameplay_review::rpc::analyze_session(payload).await?;
+        debug!(
+            "[gameplay_review][controller] analyze_session complete session_id={} analyzed={}",
+            result.value.session_id,
+            result.value.analyzed_at_ms.is_some()
+        );
+        to_json(result)
     })
 }
 
 fn handle_get_session(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<SessionIdParams>(params)?;
-        to_json(crate::openhuman::gameplay_review::rpc::get_session(payload.session_id).await?)
+        debug!(
+            "[gameplay_review][controller] get_session session_id={}",
+            payload.session_id
+        );
+        let result = crate::openhuman::gameplay_review::rpc::get_session(payload.session_id).await?;
+        debug!(
+            "[gameplay_review][controller] get_session complete session_id={} game_id={}",
+            result.value.session_id,
+            result.value.game_id
+        );
+        to_json(result)
     })
 }
 
@@ -144,32 +179,86 @@ fn handle_list_sessions(params: Map<String, Value>) -> ControllerFuture {
             game_id: Option<String>,
         }
         let payload = deserialize_params::<Params>(params)?;
-        to_json(crate::openhuman::gameplay_review::rpc::list_sessions(payload.game_id).await?)
+        debug!(
+            "[gameplay_review][controller] list_sessions game_id_filter={:?}",
+            payload.game_id
+        );
+        let result = crate::openhuman::gameplay_review::rpc::list_sessions(payload.game_id).await?;
+        debug!(
+            "[gameplay_review][controller] list_sessions complete count={}",
+            result.value.len()
+        );
+        to_json(result)
     })
 }
 
 fn handle_set_preset(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<GameplayPresetInput>(params)?;
-        to_json(crate::openhuman::gameplay_review::rpc::set_preset(payload).await?)
+        debug!(
+            "[gameplay_review][controller] set_preset game_id={} display_name={} focus_items={}",
+            payload.game_id,
+            payload.display_name,
+            payload.coaching_focus.len()
+        );
+        let result = crate::openhuman::gameplay_review::rpc::set_preset(payload).await?;
+        debug!(
+            "[gameplay_review][controller] set_preset complete game_id={}",
+            result.value.game_id
+        );
+        to_json(result)
     })
 }
 
 fn handle_list_presets(_params: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move { to_json(crate::openhuman::gameplay_review::rpc::list_presets().await?) })
+    Box::pin(async move {
+        debug!("[gameplay_review][controller] list_presets start");
+        let result = crate::openhuman::gameplay_review::rpc::list_presets().await?;
+        debug!(
+            "[gameplay_review][controller] list_presets complete count={}",
+            result.value.len()
+        );
+        to_json(result)
+    })
 }
 
 fn handle_ask_session(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<GameplayReviewQuestionInput>(params)?;
-        to_json(crate::openhuman::gameplay_review::rpc::ask_session(payload).await?)
+        let session_id = payload.session_id.clone();
+        debug!(
+            "[gameplay_review][controller] ask_session session_id={} question_len={}",
+            session_id,
+            payload.question.len()
+        );
+        let result = crate::openhuman::gameplay_review::rpc::ask_session(payload).await?;
+        debug!(
+            "[gameplay_review][controller] ask_session complete session_id={} matched_highlights={} suggested_follow_up={}",
+            session_id,
+            result.value.matched_highlights.len(),
+            result.value.suggested_follow_up.len()
+        );
+        to_json(result)
     })
 }
 
 fn handle_draft_clip_metadata(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<GameplayReviewClipInput>(params)?;
-        to_json(crate::openhuman::gameplay_review::rpc::draft_clip_metadata(payload).await?)
+        let session_id = payload.session_id.clone();
+        debug!(
+            "[gameplay_review][controller] draft_clip_metadata session_id={} platform={:?} highlight_id={:?}",
+            session_id,
+            payload.platform,
+            payload.highlight_id
+        );
+        let result = crate::openhuman::gameplay_review::rpc::draft_clip_metadata(payload).await?;
+        debug!(
+            "[gameplay_review][controller] draft_clip_metadata complete session_id={} drafts={}",
+            session_id,
+            result.value.len()
+        );
+        to_json(result)
     })
 }
 

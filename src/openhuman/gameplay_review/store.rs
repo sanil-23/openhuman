@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use log::{debug, trace, warn};
+
 use crate::openhuman::config::Config;
 
 use super::types::{GameplayPresetInput, GameplayReviewPreset, GameplayReviewSession};
@@ -45,10 +47,28 @@ pub fn slugify(value: &str) -> String {
 }
 
 pub fn ensure_dirs(workspace_dir: &Path) -> Result<(), String> {
+    debug!(
+        "[gameplay_review][store] ensure_dirs workspace_dir={}",
+        workspace_dir.display()
+    );
     fs::create_dir_all(sessions_dir(workspace_dir))
         .map_err(|err| format!("failed to create gameplay review sessions dir: {err}"))?;
     fs::create_dir_all(presets_dir(workspace_dir))
         .map_err(|err| format!("failed to create gameplay review presets dir: {err}"))?;
+    Ok(())
+}
+
+fn write_json_atomic(path: &Path, entity: &str, payload: &str) -> Result<(), String> {
+    let tmp_path = path.with_extension("json.tmp");
+    trace!(
+        "[gameplay_review][store] write_json_atomic entity={} path={} tmp_path={}",
+        entity,
+        path.display(),
+        tmp_path.display()
+    );
+    fs::write(&tmp_path, payload)
+        .map_err(|err| format!("failed to write {entity} tmp: {err}"))?;
+    fs::rename(&tmp_path, path).map_err(|err| format!("failed to move {entity} into place: {err}"))?;
     Ok(())
 }
 
@@ -63,28 +83,58 @@ pub fn preset_path(workspace_dir: &Path, game_id: &str) -> PathBuf {
 pub fn save_session(workspace_dir: &Path, session: &GameplayReviewSession) -> Result<(), String> {
     ensure_dirs(workspace_dir)?;
     let path = session_path(workspace_dir, &session.session_id);
-    let tmp_path = path.with_extension("json.tmp");
+    debug!(
+        "[gameplay_review][store] save_session session_id={} game_id={} path={}",
+        session.session_id,
+        session.game_id,
+        path.display()
+    );
     let payload = serde_json::to_string_pretty(session)
         .map_err(|err| format!("failed to serialize session: {err}"))?;
-    fs::write(&tmp_path, payload).map_err(|err| format!("failed to write session tmp: {err}"))?;
-    fs::rename(&tmp_path, &path).map_err(|err| format!("failed to move session into place: {err}"))?;
+    write_json_atomic(&path, "session", &payload)?;
     Ok(())
 }
 
-pub fn load_session(workspace_dir: &Path, session_id: &str) -> Result<Option<GameplayReviewSession>, String> {
+pub fn load_session(
+    workspace_dir: &Path,
+    session_id: &str,
+) -> Result<Option<GameplayReviewSession>, String> {
     let path = session_path(workspace_dir, session_id);
+    trace!(
+        "[gameplay_review][store] load_session session_id={} path={}",
+        session_id,
+        path.display()
+    );
     if !path.exists() {
+        debug!(
+            "[gameplay_review][store] load_session missing session_id={} path={}",
+            session_id,
+            path.display()
+        );
         return Ok(None);
     }
     let raw = fs::read_to_string(&path).map_err(|err| format!("failed to read session: {err}"))?;
     let session = serde_json::from_str(&raw)
         .map_err(|err| format!("failed to parse session {}: {err}", path.display()))?;
+    debug!(
+        "[gameplay_review][store] load_session loaded session_id={} path={}",
+        session_id,
+        path.display()
+    );
     Ok(Some(session))
 }
 
 pub fn list_sessions(workspace_dir: &Path) -> Result<Vec<GameplayReviewSession>, String> {
     let dir = sessions_dir(workspace_dir);
+    trace!(
+        "[gameplay_review][store] list_sessions dir={}",
+        dir.display()
+    );
     if !dir.exists() {
+        debug!(
+            "[gameplay_review][store] list_sessions empty dir={}",
+            dir.display()
+        );
         return Ok(Vec::new());
     }
 
@@ -97,8 +147,13 @@ pub fn list_sessions(workspace_dir: &Path) -> Result<Vec<GameplayReviewSession>,
         }
         let raw = fs::read_to_string(&path)
             .map_err(|err| format!("failed to read session {}: {err}", path.display()))?;
-        if let Ok(session) = serde_json::from_str::<GameplayReviewSession>(&raw) {
-            sessions.push(session);
+        match serde_json::from_str::<GameplayReviewSession>(&raw) {
+            Ok(session) => sessions.push(session),
+            Err(err) => warn!(
+                "[gameplay_review][store] list_sessions skipped invalid session path={} error={}",
+                path.display(),
+                err
+            ),
         }
     }
 
@@ -108,15 +163,25 @@ pub fn list_sessions(workspace_dir: &Path) -> Result<Vec<GameplayReviewSession>,
             .cmp(&left.imported_at_ms)
             .then(right.analyzed_at_ms.cmp(&left.analyzed_at_ms))
     });
+    debug!(
+        "[gameplay_review][store] list_sessions complete dir={} count={}",
+        dir.display(),
+        sessions.len()
+    );
     Ok(sessions)
 }
 
 pub fn save_preset(workspace_dir: &Path, preset: &GameplayReviewPreset) -> Result<(), String> {
     ensure_dirs(workspace_dir)?;
     let path = preset_path(workspace_dir, &preset.game_id);
+    debug!(
+        "[gameplay_review][store] save_preset game_id={} path={}",
+        preset.game_id,
+        path.display()
+    );
     let payload = serde_json::to_string_pretty(preset)
         .map_err(|err| format!("failed to serialize preset: {err}"))?;
-    fs::write(&path, payload).map_err(|err| format!("failed to write preset: {err}"))?;
+    write_json_atomic(&path, "preset", &payload)?;
     Ok(())
 }
 
@@ -125,18 +190,41 @@ pub fn load_preset(
     game_id: &str,
 ) -> Result<Option<GameplayReviewPreset>, String> {
     let path = preset_path(workspace_dir, game_id);
+    trace!(
+        "[gameplay_review][store] load_preset game_id={} path={}",
+        game_id,
+        path.display()
+    );
     if !path.exists() {
+        debug!(
+            "[gameplay_review][store] load_preset missing game_id={} path={}",
+            game_id,
+            path.display()
+        );
         return Ok(None);
     }
     let raw = fs::read_to_string(&path).map_err(|err| format!("failed to read preset: {err}"))?;
     let preset = serde_json::from_str(&raw)
         .map_err(|err| format!("failed to parse preset {}: {err}", path.display()))?;
+    debug!(
+        "[gameplay_review][store] load_preset loaded game_id={} path={}",
+        game_id,
+        path.display()
+    );
     Ok(Some(preset))
 }
 
 pub fn list_presets(workspace_dir: &Path) -> Result<Vec<GameplayReviewPreset>, String> {
     let dir = presets_dir(workspace_dir);
+    trace!(
+        "[gameplay_review][store] list_presets dir={}",
+        dir.display()
+    );
     if !dir.exists() {
+        debug!(
+            "[gameplay_review][store] list_presets empty dir={}",
+            dir.display()
+        );
         return Ok(Vec::new());
     }
 
@@ -149,12 +237,22 @@ pub fn list_presets(workspace_dir: &Path) -> Result<Vec<GameplayReviewPreset>, S
         }
         let raw = fs::read_to_string(&path)
             .map_err(|err| format!("failed to read preset {}: {err}", path.display()))?;
-        if let Ok(preset) = serde_json::from_str::<GameplayReviewPreset>(&raw) {
-            presets.push(preset);
+        match serde_json::from_str::<GameplayReviewPreset>(&raw) {
+            Ok(preset) => presets.push(preset),
+            Err(err) => warn!(
+                "[gameplay_review][store] list_presets skipped invalid preset path={} error={}",
+                path.display(),
+                err
+            ),
         }
     }
 
     presets.sort_by(|left, right| left.display_name.cmp(&right.display_name));
+    debug!(
+        "[gameplay_review][store] list_presets complete dir={} count={}",
+        dir.display(),
+        presets.len()
+    );
     Ok(presets)
 }
 

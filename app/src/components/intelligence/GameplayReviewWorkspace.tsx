@@ -79,13 +79,11 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
     try {
       const sessions = await listGameplaySessions();
       setRecentSessions(sessions);
-      if (!activeSession && sessions.length > 0) {
-        setActiveSession(sessions[0]);
-      }
+      setActiveSession(currentSession => currentSession ?? sessions[0] ?? null);
     } catch (err) {
       setError(normalizeGameplayError(err));
     }
-  }, [activeSession]);
+  }, []);
 
   useEffect(() => {
     void refreshSessions();
