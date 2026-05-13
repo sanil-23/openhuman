@@ -243,6 +243,41 @@ fn handle_sio_packet_unknown_type_is_noop() {
     assert_eq!(*shared.status.read(), ConnectionStatus::Connected);
 }
 
+// ── log_connection_failure ─────────────────────────────────────
+
+/// Verify that `log_connection_failure` does not panic for any call count
+/// (below, at, or above the threshold). The one-shot escalation fires at
+/// exactly `FAIL_ESCALATE_THRESHOLD`; above it reverts to `warn`. We can't
+/// assert on log output in unit tests, but the no-panic invariant combined
+/// with `fail_escalate_threshold_is_five` keeps the doc comment honest.
+#[test]
+fn log_connection_failure_does_not_panic_below_threshold() {
+    // Calls 1 through threshold-1 stay at warn — must complete without panic.
+    for i in 1..FAIL_ESCALATE_THRESHOLD {
+        log_connection_failure(i, "simulated transient failure");
+    }
+}
+
+#[test]
+fn log_connection_failure_does_not_panic_at_and_above_threshold() {
+    // Calls at and above threshold escalate to error — must also not panic.
+    for i in FAIL_ESCALATE_THRESHOLD..=FAIL_ESCALATE_THRESHOLD + 3 {
+        log_connection_failure(i, "simulated sustained failure");
+    }
+}
+
+#[test]
+fn fail_escalate_threshold_is_five() {
+    // Threshold of 5 is load-bearing (doc says "~15s of accumulated backoff").
+    // If the value changes the doc comment and the backoff math must be updated
+    // together — this test surfaces the discrepancy immediately.
+    assert_eq!(
+        FAIL_ESCALATE_THRESHOLD, 5,
+        "FAIL_ESCALATE_THRESHOLD changed — update the doc comment to reflect the \
+         new backoff accumulation before the first Sentry event"
+    );
+}
+
 // ── End-to-end handshake tests against a local WS server ───────
 //
 // These tests drive the real `ws_loop` / `run_connection` code path
@@ -499,13 +534,17 @@ fn connect_behavior_variants_are_distinct() {
 /// with an empty string the loop must bail immediately rather than spin a
 /// doomed reconnect cycle that fires Sentry events on every retry. The
 /// status must end up `Disconnected` and the function must return without
-/// ever opening a socket.
+/// completing the reconnect loop.
 #[tokio::test]
 async fn ws_loop_refuses_to_start_with_empty_token() {
     let shared = make_shared();
     *shared.status.write() = ConnectionStatus::Connecting;
     *shared.socket_id.write() = Some("stale".into());
 
+    // `_emit_tx` is kept alive so the emit channel is not closed before the
+    // task starts — a closed sender would give ws_loop an `emit_rx` that
+    // immediately returns `None`, potentially exiting via the Shutdown arm
+    // before the empty-token guard is ever reached and masking a regression.
     let (_emit_tx, emit_rx) = mpsc::unbounded_channel::<String>();
     // Shutdown channel is never signalled — if the guard fails, the test
     // will time out waiting for the spawned task to complete.
@@ -529,8 +568,8 @@ async fn ws_loop_refuses_to_start_with_empty_token() {
 
     let res = tokio::time::timeout(tokio::time::Duration::from_secs(2), handle).await;
     assert!(
-        res.is_ok(),
-        "ws_loop must return immediately on empty token, not spin"
+        matches!(res, Ok(Ok(()))),
+        "ws_loop must return cleanly on empty token (no timeout, no panic)"
     );
 
     assert_eq!(*shared.status.read(), ConnectionStatus::Disconnected);
