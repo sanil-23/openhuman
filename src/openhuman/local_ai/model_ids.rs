@@ -10,7 +10,7 @@ use crate::openhuman::config::Config;
 pub(crate) const DEFAULT_OLLAMA_MODEL: &str = "gemma3:1b-it-qat";
 pub(crate) const DEFAULT_OLLAMA_VISION_MODEL: &str = "";
 pub(crate) const DEFAULT_LOW_VISION_MODEL: &str = "moondream:1.8b-v2-q4_K_S";
-pub(crate) const DEFAULT_OLLAMA_EMBED_MODEL: &str = "all-minilm:latest";
+pub(crate) const DEFAULT_OLLAMA_EMBED_MODEL: &str = "bge-m3";
 
 /// Chat models allowed in the current MVP build (2–4 GB tier only).
 /// Any resolved chat model ID not listed here is redirected to `MVP_DEFAULT_CHAT_MODEL`.
@@ -22,7 +22,11 @@ const MVP_DEFAULT_CHAT_MODEL: &str = "gemma3:1b-it-qat";
 const MVP_ALLOWED_VISION_MODELS: &[&str] = &[""];
 
 /// Embedding models allowed in MVP (2–4 GB tier uses all-minilm).
-const MVP_ALLOWED_EMBEDDING_MODELS: &[&str] = &["all-minilm:latest"];
+// bge-m3 (1024-dim, 8192-token context) is the canonical local embedder
+// for memory tree's fixed on-disk format. all-minilm (384-dim) is kept
+// for back-compat with users who pulled it under an older default, but
+// new selections should default to bge-m3.
+const MVP_ALLOWED_EMBEDDING_MODELS: &[&str] = &["bge-m3", "all-minilm:latest"];
 
 fn enforce_mvp_chat_allowlist(resolved: &str) -> String {
     let lower = resolved.to_ascii_lowercase();
