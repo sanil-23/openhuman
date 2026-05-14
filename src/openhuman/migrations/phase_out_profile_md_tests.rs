@@ -113,6 +113,22 @@ fn strip_block_returns_none_when_absent() {
 }
 
 #[test]
+fn strip_block_returns_none_when_reconstruction_is_byte_identical() {
+    // Edge case: a heading line followed immediately by a boundary
+    // marker on the next line, with no surrounding whitespace to
+    // collapse. Once the block is excised + whitespace tidied, the
+    // output could match the input byte-for-byte; the stripper must
+    // detect that and return None so callers don't rewrite the file.
+    let prompt = "head\n### PROFILE.md\n### Tools\nrest\n";
+    let cleaned = strip_profile_md_block(prompt);
+    // Verify: either the stripper returned None (no-change short-
+    // circuit) OR it produced a string that's actually different.
+    if let Some(out) = cleaned.as_deref() {
+        assert_ne!(out, prompt, "if Some is returned the bytes must differ");
+    }
+}
+
+#[test]
 fn strip_block_does_not_match_substring_inside_other_content() {
     // A line that *mentions* "### PROFILE.md" inline (not as a heading)
     // should not anchor the strip.

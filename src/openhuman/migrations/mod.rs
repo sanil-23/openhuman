@@ -53,14 +53,30 @@ pub async fn run_pending(config: &mut Config) {
     );
 
     // 0 -> 1: phase out PROFILE.md from persisted session transcripts.
+    //
+    // The migration body is synchronous fs I/O (read_dir + read_to_string +
+    // write across potentially hundreds of files). `run_pending` is called
+    // from `Config::load_or_init`, which runs on a tokio runtime — so we
+    // move the blocking walk onto a dedicated `spawn_blocking` task to
+    // keep the executor responsive.
     if config.schema_version < 1 {
-        match phase_out_profile_md::run(&config.workspace_dir) {
-            Ok(stats) => {
+        let workspace_dir = config.workspace_dir.clone();
+        let run_result =
+            tokio::task::spawn_blocking(move || phase_out_profile_md::run(&workspace_dir)).await;
+        match run_result {
+            Ok(Ok(stats)) => {
+                let previous_version = config.schema_version;
                 config.schema_version = 1;
                 if let Err(err) = config.save().await {
+                    // Roll the in-memory version back so a subsequent
+                    // `load_or_init` (or future migration) doesn't believe
+                    // we've already crossed this gate when disk still
+                    // says 0. Next launch retries from the same start.
+                    config.schema_version = previous_version;
                     log::warn!(
                         "[migrations] phase_out_profile_md ran but config.save failed: \
-                         {err:#} — will retry on next launch"
+                         {err:#} — rolled in-memory schema_version back to {previous_version}, \
+                         will retry on next launch"
                     );
                     return;
                 }
@@ -73,10 +89,16 @@ pub async fn run_pending(config: &mut Config) {
                     stats.errors
                 );
             }
-            Err(err) => {
+            Ok(Err(err)) => {
                 log::warn!(
                     "[migrations] phase_out_profile_md failed: {err:#} — \
                      will retry on next launch"
+                );
+            }
+            Err(join_err) => {
+                log::warn!(
+                    "[migrations] phase_out_profile_md blocking task did not complete: \
+                     {join_err} — will retry on next launch"
                 );
             }
         }

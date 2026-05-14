@@ -104,6 +104,28 @@ async fn run_pending_bumps_version_on_fresh_install() {
 }
 
 #[tokio::test]
+async fn run_pending_rolls_back_schema_version_when_save_fails() {
+    let tmp = TempDir::new().unwrap();
+    seed_tainted_transcript(&tmp.path().join("workspace"));
+
+    let mut config = config_in(&tmp);
+    // Point config.save() at a path whose parent directory cannot be
+    // created (a regular file occupies that name), forcing save() to
+    // error after the migration body has succeeded.
+    let blocker = tmp.path().join("blocker");
+    fs::write(&blocker, "not a directory").unwrap();
+    config.config_path = blocker.join("nested").join("config.toml");
+
+    assert_eq!(config.schema_version, 0);
+    run_pending(&mut config).await;
+
+    assert_eq!(
+        config.schema_version, 0,
+        "save failed → in-memory schema_version must be rolled back to 0"
+    );
+}
+
+#[tokio::test]
 async fn run_pending_is_a_no_op_on_second_invocation() {
     let tmp = TempDir::new().unwrap();
     seed_tainted_transcript(&tmp.path().join("workspace"));

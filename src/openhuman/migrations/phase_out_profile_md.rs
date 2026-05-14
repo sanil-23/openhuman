@@ -153,6 +153,16 @@ pub fn run(workspace_dir: &Path) -> Result<PhaseOutStats> {
 /// each transcript — conversations and proofs stay intact, only the
 /// PROFILE.md section is removed.
 ///
+/// **Layout assumption (one level deep).** The walk descends exactly one
+/// level — into `sessions/<date>/*.md` — matching the layout produced
+/// by [`crate::openhuman::agent::harness::session::transcript`]
+/// (`sessions/YYYY_MM_DD/{stem}.md` for the new format, legacy
+/// `sessions/DDMMYYYY/{stem}.md` for the date-grouped fallback). The
+/// JSONL walk in [`collect_jsonl_transcripts`] makes the same
+/// assumption. If a future change starts producing deeper nesting
+/// (e.g. `sessions/YYYY/MM/DD/`), both walkers will silently miss the
+/// inner files and this comment needs to be revisited.
+///
 /// Read/IO errors are folded into `stats.errors` and the walk continues.
 fn sweep_tainted_md_companions(workspace_dir: &Path, stats: &mut PhaseOutStats) -> usize {
     let sessions_root = workspace_dir.join("sessions");
@@ -336,6 +346,13 @@ pub(super) fn strip_profile_md_block(prompt: &str) -> Option<String> {
             out.push_str("\n\n");
         }
         out.push_str(&tail);
+    }
+    // Defensive: a `### PROFILE.md` heading was located but the
+    // reconstructed string is byte-identical to the input (degenerate
+    // whitespace shapes can land here). Treat that as "no change" so
+    // callers don't churn the file uselessly or under-count skips.
+    if out == prompt {
+        return None;
     }
     Some(out)
 }
