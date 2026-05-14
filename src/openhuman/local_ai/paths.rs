@@ -449,8 +449,21 @@ mod tests {
 
     #[test]
     fn resolve_tts_voice_path_appends_onnx_for_voice_ids() {
+        // The installer drop-zone (`bin/piper/voices/<id>.onnx`) is probed
+        // FIRST by `resolve_tts_voice_path`, and lives under the shared
+        // root (`~/.openhuman/`) — not the temp config. If a sibling
+        // install_piper test runs in parallel with the default voice id
+        // and leaves a stub there, this test sees that file and the
+        // assertion fails. Serialise via the shared install guard and
+        // wipe the installer path so the legacy `models/local-ai/tts/`
+        // candidate is the only match.
+        let _g = shared_install_lock();
         let (_tmp, mut config) = temp_config();
         config.local_ai.tts_voice_id = "en_US-lessac-medium".to_string();
+        let installer_onnx = workspace_piper_voice_paths(&config, "en_US-lessac-medium")
+            .map(|(onnx, _)| onnx)
+            .expect("installer onnx path");
+        let _ = std::fs::remove_file(&installer_onnx);
         let model_path = workspace_local_models_dir(&config)
             .join("tts")
             .join("en_US-lessac-medium.onnx");
