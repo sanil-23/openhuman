@@ -29,11 +29,25 @@ const ComposioPanel = () => {
   const { navigateBack, breadcrumbs } = useSettingsNavigation();
 
   const [mode, setMode] = useState<Mode>('backend');
+  // Tracks the mode that's actually persisted on disk — distinct from
+  // the in-flight `mode` radio selection so we can tell whether a Save
+  // click constitutes a Backend → Direct *transition* (which needs a
+  // confirmation gate) vs. just persisting a new API key while already
+  // in Direct mode.
+  const [persistedMode, setPersistedMode] = useState<Mode>('backend');
   const [apiKey, setApiKey] = useState('');
   const [apiKeyStored, setApiKeyStored] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error' | 'cleared'>('idle');
+  // Confirmation gate for the Backend → Direct transition. The state
+  // machine has two arms: `idle` (Save acts immediately) and
+  // `awaiting` (Save was clicked while transitioning Backend → Direct
+  // with a fresh key — the user sees the warning copy and must hit
+  // "I understand, switch to Direct" or "Cancel"). Direct → Backend
+  // doesn't need this because that recovery is reversible (re-paste
+  // the key to flip back).
+  const [confirmGate, setConfirmGate] = useState<'idle' | 'awaiting'>('idle');
   const saveStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── load current mode status on mount ────────────────────────────
@@ -46,6 +60,7 @@ const ComposioPanel = () => {
         if (!status) return;
         const normalizedMode: Mode = status.mode === 'direct' ? 'direct' : 'backend';
         setMode(normalizedMode);
+        setPersistedMode(normalizedMode);
         setApiKeyStored(Boolean(status.api_key_set));
       })
       .catch(err => {
@@ -88,14 +103,20 @@ const ComposioPanel = () => {
     }
   };
 
-  const handleSave = async () => {
+  // Indicates this Save click would transition the persisted mode from
+  // Backend to Direct *with* a freshly-pasted key. We gate this exact
+  // transition on a confirmation step because the consequences are not
+  // obvious from the radio toggle alone — the user's previously-linked
+  // integrations (Gmail, Slack, GitHub, …) live in TinyHumans' Composio
+  // tenant and will simply disappear from the integrations panel until
+  // they re-link them through their personal app.composio.dev account.
+  const isBackendToDirectTransition = (): boolean => {
     const trimmed = apiKey.trim();
-    if (mode === 'direct' && trimmed.length === 0 && !apiKeyStored) {
-      // Direct mode without a key is a no-op — flag it clearly instead
-      // of round-tripping to the backend just to get an error string.
-      setSaveStatus('error');
-      return;
-    }
+    return persistedMode === 'backend' && mode === 'direct' && trimmed.length > 0;
+  };
+
+  const performSave = async () => {
+    const trimmed = apiKey.trim();
     setSaving(true);
     try {
       if (mode === 'direct' && trimmed.length > 0) {
@@ -106,12 +127,14 @@ const ComposioPanel = () => {
         // truth in the encrypted keychain.
         setApiKey('');
         setApiKeyStored(true);
+        setPersistedMode('direct');
         flashSaved('saved');
       } else if (mode === 'backend') {
         // Switching to backend — clear the stored key and reset mode.
         await openhumanComposioClearApiKey();
         setApiKey('');
         setApiKeyStored(false);
+        setPersistedMode('backend');
         flashSaved('cleared');
       } else {
         // Direct selected, no new key but one already stored — nothing
@@ -127,7 +150,38 @@ const ComposioPanel = () => {
       setSaveStatus('error');
     } finally {
       setSaving(false);
+      setConfirmGate('idle');
     }
+  };
+
+  const handleSave = async () => {
+    const trimmed = apiKey.trim();
+    if (mode === 'direct' && trimmed.length === 0 && !apiKeyStored) {
+      // Direct mode without a key is a no-op — flag it clearly instead
+      // of round-tripping to the backend just to get an error string.
+      setSaveStatus('error');
+      return;
+    }
+    if (isBackendToDirectTransition()) {
+      // [composio-direct] Show the confirmation step instead of saving
+      // straight away. The user-visible consequences (existing
+      // integrations disappear, triggers don't fire) aren't obvious
+      // from the radio toggle alone.
+      console.debug('[composio-direct] Backend → Direct transition pending user confirmation');
+      setConfirmGate('awaiting');
+      return;
+    }
+    await performSave();
+  };
+
+  const handleConfirmTransition = async () => {
+    console.debug('[composio-direct] Backend → Direct transition confirmed by user');
+    await performSave();
+  };
+
+  const handleCancelTransition = () => {
+    console.debug('[composio-direct] Backend → Direct transition cancelled by user');
+    setConfirmGate('idle');
   };
 
   if (loading) {
@@ -245,13 +299,64 @@ const ComposioPanel = () => {
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving}
-          className="w-full py-2 rounded-xl bg-primary-600 text-white text-sm font-medium hover:bg-primary-500 transition-colors disabled:opacity-50">
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+        {confirmGate === 'awaiting' ? (
+          // [composio-direct] Inline confirmation step — kept as a
+          // sibling state rather than a portal modal so the warning
+          // copy stays in the same scroll context as the toggle the
+          // user just changed. Easier to dismiss with the keyboard and
+          // composes more naturally with the existing settings panel
+          // chrome.
+          <div
+            role="alertdialog"
+            aria-labelledby="composio-confirm-title"
+            className="rounded-2xl border border-amber-200 bg-amber-50/80 p-4 space-y-3">
+            <p id="composio-confirm-title" className="text-sm font-medium text-amber-900">
+              ⚠️ Switching to Direct mode
+            </p>
+            <div className="text-xs text-amber-900 space-y-2">
+              <p>
+                Your existing integrations (Gmail, Slack, GitHub, etc. linked through OpenHuman){' '}
+                <span className="font-semibold">won&apos;t be visible</span> — they live in
+                TinyHumans&apos; Composio tenant.
+              </p>
+              <p>You&apos;ll need:</p>
+              <ol className="list-decimal list-inside space-y-0.5 ml-2">
+                <li>
+                  An account at <span className="font-mono">app.composio.dev</span> with an API key
+                </li>
+                <li>To re-link each integration through your personal Composio account</li>
+                <li>
+                  Note: Composio triggers (real-time webhooks) don&apos;t fire in Direct mode yet —
+                  only synchronous tool calls
+                </li>
+              </ol>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleCancelTransition}
+                disabled={saving}
+                className="flex-1 py-2 rounded-xl border border-stone-300 bg-white text-stone-800 text-sm font-medium hover:bg-stone-50 transition-colors disabled:opacity-50">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmTransition}
+                disabled={saving}
+                className="flex-1 py-2 rounded-xl bg-amber-600 text-white text-sm font-medium hover:bg-amber-500 transition-colors disabled:opacity-50">
+                {saving ? 'Switching…' : 'I understand, switch to Direct'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="w-full py-2 rounded-xl bg-primary-600 text-white text-sm font-medium hover:bg-primary-500 transition-colors disabled:opacity-50">
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        )}
 
         {saveStatus === 'saved' && (
           <p className="text-xs text-center text-green-600">Settings saved</p>
