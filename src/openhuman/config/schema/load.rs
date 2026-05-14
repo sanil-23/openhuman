@@ -738,6 +738,7 @@ impl Config {
                 recovered = config_was_corrupted,
                 "Config loaded"
             );
+            crate::openhuman::migrations::run_pending(&mut config).await;
             Ok(config)
         } else {
             let mut config = Config {
@@ -762,6 +763,7 @@ impl Config {
                 initialized = true,
                 "Config loaded"
             );
+            crate::openhuman::migrations::run_pending(&mut config).await;
             Ok(config)
         }
     }
