@@ -180,6 +180,46 @@ async fn connection_subscriber_skips_when_no_provider_registered() {
     .await;
 }
 
+// ── ComposioConfigChangedSubscriber ───────────────────────────────
+
+#[tokio::test]
+async fn config_changed_subscriber_invalidates_cache() {
+    let sub = ComposioConfigChangedSubscriber::new();
+    // Should not panic and should log-invalidate without a config in
+    // hand — the cache invalidate path is pure-memory and never
+    // touches the network.
+    sub.handle(&DomainEvent::ComposioConfigChanged {
+        mode: "direct".into(),
+        api_key_set: true,
+    })
+    .await;
+    sub.handle(&DomainEvent::ComposioConfigChanged {
+        mode: "backend".into(),
+        api_key_set: false,
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn config_changed_subscriber_ignores_unrelated_variants() {
+    let sub = ComposioConfigChangedSubscriber::new();
+    sub.handle(&DomainEvent::ComposioConnectionCreated {
+        toolkit: "gmail".into(),
+        connection_id: "c-1".into(),
+        connect_url: "url".into(),
+    })
+    .await;
+    // No panic = pass.
+}
+
+#[test]
+fn config_changed_subscriber_has_stable_name_and_domain() {
+    let s = ComposioConfigChangedSubscriber::new();
+    assert_eq!(s.name(), "composio::config_changed");
+    assert_eq!(s.domains(), Some(["composio"].as_ref()));
+    let _ = ComposioConfigChangedSubscriber::default();
+}
+
 #[test]
 fn wait_error_variants_construct_and_format() {
     let e = WaitError::Timeout {

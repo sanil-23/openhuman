@@ -81,6 +81,7 @@ const CONNECTION_READY_MAX_BACKOFF: Duration = Duration::from_secs(4);
 
 static COMPOSIO_TRIGGER_HANDLE: OnceLock<SubscriptionHandle> = OnceLock::new();
 static COMPOSIO_CONNECTION_HANDLE: OnceLock<SubscriptionHandle> = OnceLock::new();
+static COMPOSIO_CONFIG_HANDLE: OnceLock<SubscriptionHandle> = OnceLock::new();
 
 /// Register both long-lived composio subscribers on the global event
 /// bus, and initialise the default provider registry. Idempotent.
@@ -113,6 +114,20 @@ pub fn register_composio_trigger_subscriber() {
             None => {
                 log::warn!(
                     "[event_bus] failed to register composio connection_created subscriber — bus not initialized"
+                );
+            }
+        }
+    }
+
+    if COMPOSIO_CONFIG_HANDLE.get().is_none() {
+        match subscribe_global(Arc::new(ComposioConfigChangedSubscriber::new())) {
+            Some(handle) => {
+                let _ = COMPOSIO_CONFIG_HANDLE.set(handle);
+                log::debug!("[event_bus] composio config_changed subscriber registered");
+            }
+            None => {
+                log::warn!(
+                    "[event_bus] failed to register composio config_changed subscriber — bus not initialized"
                 );
             }
         }
@@ -589,6 +604,60 @@ async fn wait_for_connection_active(
 
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(CONNECTION_READY_MAX_BACKOFF);
+    }
+}
+
+// ── Config-changed subscriber ───────────────────────────────────────
+
+/// Drops the prompt-level integrations cache whenever the user flips
+/// `config.composio.mode` between `"backend"` and `"direct"` or
+/// stores/clears the direct-mode API key. Without this, the chat
+/// runtime keeps the old tenant's tool catalogue / connection list
+/// pinned for up to `CACHE_TTL` (60s) — that's the regression behind
+/// "I switched to Direct and my old integrations are still showing"
+/// (#1710).
+///
+/// The subscriber is intentionally tiny: it only clears the cache,
+/// which guarantees the very next `fetch_connected_integrations` /
+/// `cached_active_integrations` read hits the new client. We don't
+/// eagerly warm the cache here because we don't have a config handle
+/// in the event payload and `load_config_with_timeout` would race the
+/// concurrent `cfg_mut.save()` call that produced this event.
+pub struct ComposioConfigChangedSubscriber;
+
+impl ComposioConfigChangedSubscriber {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ComposioConfigChangedSubscriber {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl EventHandler for ComposioConfigChangedSubscriber {
+    fn name(&self) -> &str {
+        "composio::config_changed"
+    }
+
+    fn domains(&self) -> Option<&[&str]> {
+        Some(&["composio"])
+    }
+
+    async fn handle(&self, event: &DomainEvent) {
+        let DomainEvent::ComposioConfigChanged { mode, api_key_set } = event else {
+            return;
+        };
+
+        tracing::info!(
+            mode = %mode,
+            api_key_set = api_key_set,
+            "[composio-cache] config changed — invalidating integrations cache"
+        );
+        super::ops::invalidate_connected_integrations_cache();
     }
 }
 

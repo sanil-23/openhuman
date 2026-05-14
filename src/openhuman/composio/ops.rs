@@ -1374,6 +1374,24 @@ pub async fn composio_set_api_key(
     } else {
         config.composio.mode.clone()
     };
+
+    // [composio-cache] Broadcast a ComposioConfigChanged event so any
+    // tenant-scoped caches (chat-runtime integrations snapshot, agent
+    // tool catalogue, frontend useComposioIntegrations poll) can drop
+    // stale entries and re-fetch against the new client. Without this
+    // the chat panel keeps showing backend-tenant integrations even
+    // though the user just switched to direct mode (#1710).
+    crate::core::event_bus::publish_global(
+        crate::core::event_bus::DomainEvent::ComposioConfigChanged {
+            mode: effective_mode.clone(),
+            api_key_set: true,
+        },
+    );
+    tracing::debug!(
+        mode = %effective_mode,
+        "[composio-cache] published ComposioConfigChanged after set_api_key"
+    );
+
     Ok(RpcOutcome::new(
         serde_json::json!({
             "stored": true,
@@ -1399,6 +1417,19 @@ pub async fn composio_clear_api_key(config: &Config) -> OpResult<RpcOutcome<serd
         .save()
         .await
         .map_err(|e| format!("[composio-direct] save config failed: {e}"))?;
+
+    // [composio-cache] Symmetric with composio_set_api_key — any
+    // tenant-scoped caches that were populated while the user was in
+    // direct mode must be invalidated when we drop back to backend
+    // mode, otherwise the chat panel would keep showing the (now
+    // empty) direct-tenant state instead of the live backend tenant.
+    crate::core::event_bus::publish_global(
+        crate::core::event_bus::DomainEvent::ComposioConfigChanged {
+            mode: "backend".to_string(),
+            api_key_set: false,
+        },
+    );
+    tracing::debug!("[composio-cache] published ComposioConfigChanged after clear_api_key");
 
     Ok(RpcOutcome::new(
         serde_json::json!({ "cleared": true, "mode": "backend" }),

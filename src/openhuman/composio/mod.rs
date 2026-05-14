@@ -48,7 +48,10 @@ pub mod trigger_history;
 pub mod types;
 
 pub use action_tool::ComposioActionTool;
-pub use bus::{register_composio_trigger_subscriber, ComposioTriggerSubscriber};
+pub use bus::{
+    register_composio_trigger_subscriber, ComposioConfigChangedSubscriber,
+    ComposioTriggerSubscriber,
+};
 pub use client::{build_composio_client, ComposioClient};
 pub use ops::{
     cached_active_integrations, connected_set_hash, fetch_connected_integrations,
