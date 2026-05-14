@@ -251,13 +251,22 @@ pub async fn download_to_file(
                 ));
             }
         };
-        let bytes = chunk.map_err(|e| format!("{log_prefix} body stream: {e}"))?;
+        let bytes = match chunk {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                drop(file);
+                let _ = tokio::fs::remove_file(&part_path).await;
+                return Err(format!("{log_prefix} body stream: {e}"));
+            }
+        };
         if let Some(h) = hasher.as_mut() {
             h.update(&bytes);
         }
-        file.write_all(&bytes)
-            .await
-            .map_err(|e| format!("{log_prefix} write {}: {e}", part_path.display()))?;
+        if let Err(e) = file.write_all(&bytes).await {
+            drop(file);
+            let _ = tokio::fs::remove_file(&part_path).await;
+            return Err(format!("{log_prefix} write {}: {e}", part_path.display()));
+        }
         downloaded = downloaded.saturating_add(bytes.len() as u64);
         on_progress(downloaded, total);
     }

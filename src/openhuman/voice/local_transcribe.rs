@@ -163,12 +163,14 @@ pub async fn transcribe_whisper(
         file_path.display()
     );
 
-    // Resolve the on-disk model path; the model id may be the bare basename
-    // (whisper.cpp's installer convention) or an absolute path. If the user
-    // has not downloaded a model that matches `model_id` we surface a clear
-    // error and skip the subprocess entirely.
-    let model_path = crate::openhuman::local_ai::paths::resolve_stt_model_path(config)
-        .map_err(|e| format!("{LOG_PREFIX} {e}"))?;
+    // Resolve the on-disk model path using the effective model_id (which may
+    // have been overridden by the request options). Without threading model_id
+    // through here the resolver would ignore the override and use whatever the
+    // config default is, producing a mismatch between the returned model_id
+    // and the model actually used for transcription.
+    let model_path =
+        crate::openhuman::local_ai::paths::resolve_stt_model_path_by_id(&model_id, config)
+            .map_err(|e| format!("{LOG_PREFIX} {e}"))?;
     debug!("{LOG_PREFIX} resolved STT model path={model_path}");
 
     let mut args: Vec<String> = vec![
@@ -204,7 +206,16 @@ pub async fn transcribe_whisper(
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000);
     }
-    let output_result = cmd.output().await;
+    // Cap the subprocess so a stalled whisper-cli never hangs the RPC
+    // caller indefinitely. 120 s is generous for any reasonable audio
+    // fragment but avoids an infinite wait on a hung process.
+    const WHISPER_TIMEOUT_SECS: u64 = 120;
+    let output_result = tokio::time::timeout(
+        std::time::Duration::from_secs(WHISPER_TIMEOUT_SECS),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| format!("{LOG_PREFIX} whisper-cli timed out after {WHISPER_TIMEOUT_SECS}s"))?;
 
     // Always clean up the staged audio file; warn but don't fail on cleanup.
     if let Err(e) = tokio::fs::remove_file(&file_path).await {

@@ -215,7 +215,8 @@ const aiModelsSettingsItems = [
   {
     id: 'voice',
     title: 'Voice (STT & TTS)',
-    description: 'Choose between cloud and local providers for speech-to-text (Whisper) and text-to-speech (Piper)',
+    description:
+      'Choose between cloud and local providers for speech-to-text (Whisper) and text-to-speech (Piper)',
     route: 'voice',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

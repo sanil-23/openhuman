@@ -306,7 +306,16 @@ pub(crate) fn workspace_piper_binary_candidates(config: &Config) -> Vec<PathBuf>
 
 pub(crate) fn resolve_stt_model_path(config: &Config) -> Result<String, String> {
     let id = model_ids::effective_stt_model_id(config);
-    let path = PathBuf::from(&id);
+    resolve_stt_model_path_by_id(&id, config)
+}
+
+/// Resolve the on-disk GGML model path for an explicit `model_id`.
+///
+/// Used when the caller has already computed the effective model id (e.g.
+/// from a per-request override) and needs the path without re-reading the
+/// config default. Probes the same candidate set as `resolve_stt_model_path`.
+pub(crate) fn resolve_stt_model_path_by_id(id: &str, config: &Config) -> Result<String, String> {
+    let path = PathBuf::from(id);
     if path.is_file() {
         return Ok(path.display().to_string());
     }
@@ -315,11 +324,11 @@ pub(crate) fn resolve_stt_model_path(config: &Config) -> Result<String, String> 
     // local-AI flow stages STT models under `workspace_local_models_dir`.
     // Probe both so a user who installed via the new Install button
     // doesn't need to redo anything.
-    let legacy = workspace_local_models_dir(config).join("stt").join(&id);
+    let legacy = workspace_local_models_dir(config).join("stt").join(id);
     if legacy.is_file() {
         return Ok(legacy.display().to_string());
     }
-    let installer = workspace_whisper_dir(config).join(&id);
+    let installer = workspace_whisper_dir(config).join(id);
     if installer.is_file() {
         return Ok(installer.display().to_string());
     }

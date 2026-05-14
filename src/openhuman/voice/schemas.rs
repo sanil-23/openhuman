@@ -510,20 +510,38 @@ fn handle_voice_reply_synthesize(params: Map<String, Value>) -> ControllerFuture
         // selecting "piper" persisted to config but conversation replies
         // still hit the cloud TTS proxy.
         let provider_name = effective_tts_provider(&config);
+        // Only default to the Piper voice id when the active provider is
+        // actually Piper. Passing a Piper voice id to a cloud TTS provider
+        // would send an invalid voice to the upstream API.
         let voice = p
             .voice_id
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| crate::openhuman::voice::DEFAULT_PIPER_VOICE.to_string());
+            .unwrap_or_else(|| {
+                if provider_name == "piper" {
+                    crate::openhuman::voice::DEFAULT_PIPER_VOICE.to_string()
+                } else {
+                    String::new()
+                }
+            });
+        let effective_voice = if voice.is_empty() {
+            None
+        } else {
+            Some(voice.as_str())
+        };
         log::debug!(
             "[voice-factory] voice_reply_synthesize dispatch provider={provider_name} voice={voice}"
         );
         let provider =
             crate::openhuman::voice::create_tts_provider(&provider_name, &voice, &config)
                 .map_err(|e| e.to_string())?;
-        to_json(provider.synthesize(&config, &p.text, Some(&voice)).await?)
+        to_json(
+            provider
+                .synthesize(&config, &p.text, effective_voice)
+                .await?,
+        )
     })
 }
 
@@ -601,13 +619,26 @@ fn handle_voice_tts_dispatch(params: Map<String, Value>) -> ControllerFuture {
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| effective_tts_provider(&config));
+        // Only fall back to the Piper default voice id when the provider is
+        // Piper; sending a Piper voice id to a cloud TTS endpoint is invalid.
         let voice = p
             .voice
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| crate::openhuman::voice::DEFAULT_PIPER_VOICE.to_string());
+            .unwrap_or_else(|| {
+                if provider_name == "piper" {
+                    crate::openhuman::voice::DEFAULT_PIPER_VOICE.to_string()
+                } else {
+                    String::new()
+                }
+            });
+        let effective_voice = if voice.is_empty() {
+            None
+        } else {
+            Some(voice.as_str())
+        };
 
         log::debug!(
             "[voice-factory] RPC voice_tts_dispatch provider={provider_name} voice={voice}"
@@ -615,7 +646,9 @@ fn handle_voice_tts_dispatch(params: Map<String, Value>) -> ControllerFuture {
         let provider =
             crate::openhuman::voice::create_tts_provider(&provider_name, &voice, &config)
                 .map_err(|e| e.to_string())?;
-        let outcome = provider.synthesize(&config, &p.text, Some(&voice)).await?;
+        let outcome = provider
+            .synthesize(&config, &p.text, effective_voice)
+            .await?;
         to_json(outcome)
     })
 }

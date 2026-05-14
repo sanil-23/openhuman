@@ -126,20 +126,24 @@ const VoicePanel = () => {
       setSavedSettings(settingsResponse.result);
       setServerStatus(serverResponse);
       setVoiceStatus(voiceResponse);
-      // Seed provider dropdowns from core state on first load. Avoid
-      // clobbering an in-flight user edit by only writing when local
-      // state is still empty.
-      if (!sttProvider && voiceResponse.stt_provider) {
-        setSttProvider(voiceResponse.stt_provider === 'whisper' ? 'whisper' : 'cloud');
+      // Seed provider dropdowns from core state on first load. Use the
+      // functional updater form so the check reads *current* state rather
+      // than the stale closure captured when the interval was created —
+      // otherwise every poll tick could re-apply the server value and
+      // clobber an in-flight user edit.
+      if (voiceResponse.stt_provider) {
+        const seeded = voiceResponse.stt_provider === 'whisper' ? 'whisper' : 'cloud';
+        setSttProvider(prev => prev || seeded);
       }
-      if (!ttsProvider && voiceResponse.tts_provider) {
-        setTtsProvider(voiceResponse.tts_provider === 'piper' ? 'piper' : 'cloud');
+      if (voiceResponse.tts_provider) {
+        const seeded = voiceResponse.tts_provider === 'piper' ? 'piper' : 'cloud';
+        setTtsProvider(prev => prev || seeded);
       }
-      if (!sttModel && voiceResponse.stt_model_id) {
-        setSttModel(voiceResponse.stt_model_id);
+      if (voiceResponse.stt_model_id) {
+        setSttModel(prev => prev || voiceResponse.stt_model_id);
       }
-      if (!ttsVoice && voiceResponse.tts_voice_id) {
-        setTtsVoice(voiceResponse.tts_voice_id);
+      if (voiceResponse.tts_voice_id) {
+        setTtsVoice(prev => prev || voiceResponse.tts_voice_id);
       }
       const sttAssetState = assetsResponse.result.stt?.state;
       const sttAssetOk = sttAssetState === 'ready' || sttAssetState === 'ondemand';
@@ -469,7 +473,10 @@ const VoicePanel = () => {
                       // if missing, status polling renders the download
                       // progress in the Install button inline.
                       void installWhisper({ modelSize: nextModel }).catch(err =>
-                        console.warn('[voice-install:whisper] auto-install on model change failed:', err)
+                        console.warn(
+                          '[voice-install:whisper] auto-install on model change failed:',
+                          err
+                        )
                       );
                     }}
                     className="w-full rounded-md border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:outline-none focus:ring-1 focus:ring-primary-400">
@@ -557,7 +564,10 @@ const VoicePanel = () => {
                       // install_piper is fire-and-forget; status polling
                       // shows download progress in the Install button.
                       void installPiper({ voiceId: next }).catch(err =>
-                        console.warn('[voice-install:piper] auto-install on voice change failed:', err)
+                        console.warn(
+                          '[voice-install:piper] auto-install on voice change failed:',
+                          err
+                        )
                       );
                     }}
                     className="w-full rounded-md border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:outline-none focus:ring-1 focus:ring-primary-400">
@@ -580,7 +590,10 @@ const VoicePanel = () => {
                         if (ttsVoice && ttsVoice !== voiceStatus?.tts_voice_id) {
                           void persistProviders({ tts_voice: ttsVoice });
                           void installPiper({ voiceId: ttsVoice }).catch(err =>
-                            console.warn('[voice-install:piper] auto-install on custom voice failed:', err)
+                            console.warn(
+                              '[voice-install:piper] auto-install on custom voice failed:',
+                              err
+                            )
                           );
                         }
                       }}
@@ -589,8 +602,9 @@ const VoicePanel = () => {
                   )}
                   <p className="text-[11px] text-stone-500 mt-0.5">
                     Voices come from{' '}
-                    <code className="font-mono">huggingface.co/rhasspy/piper-voices</code>. Switching
-                    voices may require an Install/Reinstall click to download the new <code>.onnx</code>.
+                    <code className="font-mono">huggingface.co/rhasspy/piper-voices</code>.
+                    Switching voices may require an Install/Reinstall click to download the new{' '}
+                    <code>.onnx</code>.
                   </p>
                 </label>
               )}

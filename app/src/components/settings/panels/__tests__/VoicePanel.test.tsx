@@ -277,7 +277,10 @@ describe('VoicePanel', () => {
     expect(ttsSelect.value).toBe('piper');
     // The Whisper model picker only appears when the STT provider is local.
     expect(screen.getByTestId('stt-model-select')).toBeInTheDocument();
-    expect(screen.getByTestId('tts-voice-input')).toBeInTheDocument();
+    // tts_voice_id is seeded to 'en_US-lessac-medium' which is a known preset,
+    // so the UI should render the preset select, not the free-text input.
+    expect(screen.getByTestId('tts-voice-select')).toBeInTheDocument();
+    expect(screen.queryByTestId('tts-voice-input')).not.toBeInTheDocument();
   });
 
   it('persists STT provider changes through openhumanVoiceSetProviders', async () => {
