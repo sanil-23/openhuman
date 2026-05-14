@@ -538,11 +538,13 @@ mod tests {
         );
         let legacy_short = workspace_whisper_model_path(&config, "ggml-tiny.bin");
         assert!(legacy_short.to_string_lossy().ends_with("ggml-tiny.bin"));
-        // Empty size falls back to the recommended default.
+        // Empty size falls back to the default model size (medium).
         let default = workspace_whisper_model_path(&config, "");
-        assert!(default
-            .to_string_lossy()
-            .ends_with("ggml-large-v3-turbo.bin"));
+        assert!(
+            default.to_string_lossy().ends_with("ggml-medium.bin"),
+            "empty size should fall back to ggml-medium.bin: {}",
+            default.display()
+        );
     }
 
     #[test]

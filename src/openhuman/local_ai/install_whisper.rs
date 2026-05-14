@@ -432,7 +432,11 @@ mod tests {
     fn status_promotes_to_installed_when_model_present() {
         let _g = shared_install_lock();
         reset_status(ENGINE_WHISPER);
-        let (_tmp, config) = temp_config();
+        let (_tmp, mut config) = temp_config();
+        // The status helper derives installed state from effective_stt_model_id,
+        // so config must agree with the file we create. Pin it to the default
+        // model size so the on-disk lookup matches.
+        config.local_ai.stt_model_id = DEFAULT_WHISPER_MODEL_SIZE.to_string();
         wipe_shared_install_dir(&config);
         let path = paths::workspace_whisper_model_path(&config, DEFAULT_WHISPER_MODEL_SIZE);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

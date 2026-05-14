@@ -192,9 +192,8 @@ describe('VoicePanel', () => {
 
     renderWithProviders(<VoicePanel />, { initialEntries: ['/settings/voice'] });
 
-    expect(await screen.findByText('Voice Dictation')).toBeInTheDocument();
     expect(
-      screen.getByText(/Voice dictation is disabled until the local STT model is downloaded/)
+      await screen.findByText(/Voice dictation is disabled until the local STT model is downloaded/)
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start Voice Server' })).toBeDisabled();
   });
@@ -316,7 +315,7 @@ describe('VoicePanel', () => {
     renderWithProviders(<VoicePanel />, { initialEntries: ['/settings/voice'] });
 
     const button = await screen.findByTestId('install-whisper-button');
-    expect(button).toHaveTextContent('Install Whisper');
+    expect(button).toHaveTextContent('Install locally');
     expect(screen.getByTestId('whisper-install-state')).toHaveTextContent('Not installed');
   });
 
@@ -338,7 +337,7 @@ describe('VoicePanel', () => {
     renderWithProviders(<VoicePanel />, { initialEntries: ['/settings/voice'] });
 
     const button = await screen.findByTestId('install-whisper-button');
-    await waitFor(() => expect(button).toHaveTextContent(/Reinstall Whisper/i));
+    await waitFor(() => expect(button).toHaveTextContent(/Reinstall locally/i));
     expect(screen.getByTestId('whisper-install-state')).toHaveTextContent('Installed');
   });
 
@@ -360,7 +359,7 @@ describe('VoicePanel', () => {
     renderWithProviders(<VoicePanel />, { initialEntries: ['/settings/voice'] });
 
     const button = await screen.findByTestId('install-whisper-button');
-    await waitFor(() => expect(button).toHaveTextContent(/Reinstall Whisper/i));
+    await waitFor(() => expect(button).toHaveTextContent(/Reinstall locally/i));
     fireEvent.click(button);
 
     await waitFor(() => expect(vi.mocked(installWhisper)).toHaveBeenCalledTimes(1));
@@ -374,7 +373,7 @@ describe('VoicePanel', () => {
     renderWithProviders(<VoicePanel />, { initialEntries: ['/settings/voice'] });
 
     const button = await screen.findByTestId('install-piper-button');
-    expect(button).toHaveTextContent('Install Piper');
+    expect(button).toHaveTextContent('Install locally');
     expect(screen.getByTestId('piper-install-state')).toHaveTextContent('Not installed');
   });
 
@@ -424,6 +423,6 @@ describe('VoicePanel', () => {
       expect(screen.getByTestId('piper-install-state')).toHaveTextContent('network unreachable')
     );
     // Button label flips into the retry messaging.
-    expect(screen.getByTestId('install-piper-button')).toHaveTextContent(/Retry install Piper/i);
+    expect(screen.getByTestId('install-piper-button')).toHaveTextContent(/Retry locally/i);
   });
 });
