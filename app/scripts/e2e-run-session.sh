@@ -63,11 +63,27 @@ cleanup() {
   fi
   if [ -n "$APP_PID" ]; then
     echo "[runner] Stopping CEF app (pid $APP_PID)..."
+    # CEF spawns helper child processes (zygote, GPU, renderers) that
+    # the parent does not reap on SIGTERM. If we only `kill $APP_PID`
+    # the parent exits but children keep writing into the temp
+    # workspace, and the `rm -rf` below races them and fails with
+    # "Directory not empty" on Linux runners — even though the WDIO
+    # spec itself passed. Reap the whole process tree before cleanup.
+    pkill -TERM -P "$APP_PID" 2>/dev/null || true
     kill "$APP_PID" 2>/dev/null || true
     wait "$APP_PID" 2>/dev/null || true
+    # Brief grace period for CEF helpers to release their file handles
+    # under Linux, then SIGKILL anything that ignored the SIGTERM.
+    sleep 1
+    pkill -KILL -P "$APP_PID" 2>/dev/null || true
   fi
   if [ -n "$CREATED_TEMP_WORKSPACE" ]; then
-    rm -rf "$CREATED_TEMP_WORKSPACE"
+    # Tolerate transient races: even after the kill above, a CEF helper
+    # may still be flushing CEF/Default/* on a slow Linux runner. The
+    # workspace is a per-run mktemp under /tmp; anything left behind is
+    # collected by the next CI tmp-cleanup pass. We must not fail the
+    # whole job on cleanup leftovers when the test itself passed.
+    rm -rf "$CREATED_TEMP_WORKSPACE" 2>/dev/null || true
   fi
   if [ -n "$E2E_CONFIG_BACKUP" ] && [ -f "$E2E_CONFIG_BACKUP" ]; then
     mv "$E2E_CONFIG_BACKUP" "$E2E_CONFIG_FILE"
