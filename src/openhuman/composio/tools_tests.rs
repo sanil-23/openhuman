@@ -1,23 +1,15 @@
 use super::*;
-use crate::openhuman::integrations::IntegrationClient;
 use std::sync::Arc;
 
-/// Build a `ComposioClient` wired to a dummy backend. No network calls
-/// are made in these tests — we only exercise the `Tool` trait's
-/// metadata methods (`name`, `category`, `permission_level`, …), which
-/// are pure accessors that don't touch the HTTP client.
-fn fake_composio_client() -> ComposioClient {
-    let inner = IntegrationClient::new("http://127.0.0.1:0".to_string(), "test-token".to_string());
-    ComposioClient::new(Arc::new(inner))
-}
-
-/// Minimal `Arc<Config>` for the per-call-client tools
-/// (`ComposioListToolsTool`, `ComposioExecuteTool`) which no longer hold
-/// a pre-baked `ComposioClient`. Config defaults set
-/// `composio.mode = "backend"` so the factory selects the backend
-/// variant — and `create_composio_client` then returns
+/// Minimal `Arc<Config>` for the agent-tool constructors. All five
+/// composio agent tools now resolve their client per call through
+/// `create_composio_client(&config)` rather than holding a pre-baked
+/// handle, so a `Config` is sufficient to instantiate them.
+///
+/// Config defaults set `composio.mode = "backend"` and stash a
+/// throwaway `config_path` under a tempdir. The factory then returns
 /// `Err("no backend session")` because no app-session token is stored
-/// in the test keychain. That error path is the one we want for the
+/// in the test keychain — that error path is the one we want for the
 /// "executes without backend session" failure-mode tests; tests that
 /// need a session token override the keychain explicitly.
 fn fake_config_arc() -> Arc<crate::openhuman::config::Config> {
@@ -38,12 +30,11 @@ fn fake_config_arc() -> Arc<crate::openhuman::config::Config> {
 /// `System` (the default from the `Tool` trait) and fails loudly.
 #[test]
 fn all_composio_tools_are_in_skill_category() {
-    let client = fake_composio_client();
     let config = fake_config_arc();
     let tools: Vec<Box<dyn Tool>> = vec![
-        Box::new(ComposioListToolkitsTool::new(client.clone())),
-        Box::new(ComposioListConnectionsTool::new(client.clone())),
-        Box::new(ComposioAuthorizeTool::new(client)),
+        Box::new(ComposioListToolkitsTool::new(config.clone())),
+        Box::new(ComposioListConnectionsTool::new(config.clone())),
+        Box::new(ComposioAuthorizeTool::new(config.clone())),
         Box::new(ComposioListToolsTool::new(config.clone())),
         Box::new(ComposioExecuteTool::new(config)),
     ];
@@ -71,7 +62,7 @@ fn all_composio_tools_are_in_skill_category() {
 
 #[test]
 fn list_toolkits_tool_metadata_is_stable() {
-    let t = ComposioListToolkitsTool::new(fake_composio_client());
+    let t = ComposioListToolkitsTool::new(fake_config_arc());
     assert_eq!(t.name(), "composio_list_toolkits");
     assert_eq!(t.permission_level(), PermissionLevel::ReadOnly);
     assert!(!t.description().is_empty());
@@ -86,14 +77,14 @@ fn list_toolkits_tool_metadata_is_stable() {
 
 #[test]
 fn list_connections_tool_metadata_is_stable() {
-    let t = ComposioListConnectionsTool::new(fake_composio_client());
+    let t = ComposioListConnectionsTool::new(fake_config_arc());
     assert_eq!(t.name(), "composio_list_connections");
     assert_eq!(t.permission_level(), PermissionLevel::ReadOnly);
 }
 
 #[test]
 fn authorize_tool_requires_toolkit_argument() {
-    let t = ComposioAuthorizeTool::new(fake_composio_client());
+    let t = ComposioAuthorizeTool::new(fake_config_arc());
     assert_eq!(t.permission_level(), PermissionLevel::Write);
     let s = t.parameters_schema();
     let required: Vec<&str> = s["required"]
@@ -107,7 +98,7 @@ fn authorize_tool_requires_toolkit_argument() {
 
 #[tokio::test]
 async fn authorize_tool_execute_rejects_missing_toolkit() {
-    let t = ComposioAuthorizeTool::new(fake_composio_client());
+    let t = ComposioAuthorizeTool::new(fake_config_arc());
     let result = t
         .execute(serde_json::json!({}))
         .await
@@ -128,7 +119,7 @@ async fn authorize_tool_execute_rejects_missing_toolkit() {
 
 #[tokio::test]
 async fn authorize_tool_execute_rejects_whitespace_toolkit() {
-    let t = ComposioAuthorizeTool::new(fake_composio_client());
+    let t = ComposioAuthorizeTool::new(fake_config_arc());
     let result = t
         .execute(serde_json::json!({ "toolkit": "   " }))
         .await
@@ -215,7 +206,7 @@ fn all_composio_agent_tools_registers_five_when_session_available() {
 // These tests stand alone from the backend client — they only exercise
 // the gate added to `ComposioExecuteTool::execute` that keys on the
 // `CURRENT_AGENT_SANDBOX_MODE` task-local. The backend is never reached
-// when the gate rejects, so `fake_composio_client()` is fine.
+// when the gate rejects, so `fake_config_arc()` is fine.
 
 fn error_text(result: &ToolResult) -> String {
     result
@@ -462,10 +453,15 @@ fn render_tools_markdown_handles_empty_response() {
 
 // ── Direct-mode routing (#1710) ─────────────────────────────────────
 //
-// These tests guard the bug-fix where `ComposioExecuteTool` /
-// `ComposioListToolsTool` used to hold a pre-baked backend client. After
-// the fix, both tools resolve the client through `create_composio_client`
-// per call so the live `composio.mode` toggle is honoured.
+// These tests guard the bug-fix where every composio agent tool used
+// to hold a pre-baked backend client. After the fix, all five tools
+// resolve the client through `create_composio_client` per call so the
+// live `composio.mode` toggle is honoured. Read-shaped tools
+// (list_toolkits, list_connections, list_tools) short-circuit to an
+// empty response in direct mode mirroring the existing ops.rs
+// pattern; `composio_authorize` returns an explicit "use
+// app.composio.dev" error; `composio_execute` dispatches through the
+// direct client.
 
 /// Helper: build a `Config` with `composio.mode = "direct"` plus an
 /// inline api_key so the keychain isn't required.
@@ -588,6 +584,98 @@ async fn execute_tool_per_call_factory_means_no_baked_client() {
     assert!(
         msg.contains("direct mode") && msg.contains("api key"),
         "expected direct-mode key error, got: {msg}"
+    );
+    assert!(
+        !msg.contains("staging-api") && !msg.contains("agent-integrations"),
+        "must not leak backend-tenant routing artifacts in direct mode: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn list_toolkits_in_direct_mode_returns_empty_without_hitting_backend() {
+    // Same shape as `list_tools_in_direct_mode_returns_empty_without_hitting_backend`
+    // — verifies the per-call factory routing for `composio_list_toolkits`.
+    // Pre-fix this would have called
+    // `staging-api.tinyhumans.ai/agent-integrations/composio/toolkits`
+    // regardless of mode and surfaced whatever the backend allowlist
+    // returned for the tinyhumans tenant.
+    let config = Arc::new(direct_mode_config());
+    let tool = ComposioListToolkitsTool::new(config);
+    let result = tool
+        .execute(serde_json::json!({}))
+        .await
+        .expect("execute should not bubble anyhow");
+    assert!(
+        !result.is_error,
+        "direct-mode list_toolkits should return success+empty, got error: {}",
+        error_text(&result)
+    );
+    let body = result
+        .content
+        .iter()
+        .find_map(|c| match c {
+            crate::openhuman::tools::traits::ToolContent::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert!(
+        body.contains("\"toolkits\":[]") || body.contains("\"toolkits\": []"),
+        "direct-mode list_toolkits body should contain an empty toolkits array: {body}"
+    );
+}
+
+#[tokio::test]
+async fn list_connections_in_direct_mode_returns_empty_without_hitting_backend() {
+    // Closes the "I switched to Direct and my old integrations are
+    // still showing" symptom on the agent-tool surface (#1710). The
+    // RPC-layer fix lived in `ops::composio_list_connections`; this
+    // covers the agent-tool path that the autonomous loop calls.
+    let config = Arc::new(direct_mode_config());
+    let tool = ComposioListConnectionsTool::new(config);
+    let result = tool
+        .execute(serde_json::json!({}))
+        .await
+        .expect("execute should not bubble anyhow");
+    assert!(
+        !result.is_error,
+        "direct-mode list_connections should return success+empty, got error: {}",
+        error_text(&result)
+    );
+    let body = result
+        .content
+        .iter()
+        .find_map(|c| match c {
+            crate::openhuman::tools::traits::ToolContent::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert!(
+        body.contains("\"connections\":[]") || body.contains("\"connections\": []"),
+        "direct-mode list_connections body should contain an empty connections array: {body}"
+    );
+}
+
+#[tokio::test]
+async fn authorize_in_direct_mode_refuses_with_app_composio_dev_hint() {
+    // `composio_authorize` cannot meaningfully proceed in direct mode
+    // — the OAuth handoff has to happen through the user's personal
+    // Composio account, not the backend's
+    // `/agent-integrations/composio/authorize` route. Pre-fix the tool
+    // would have silently hit the backend regardless.
+    let config = Arc::new(direct_mode_config());
+    let tool = ComposioAuthorizeTool::new(config);
+    let result = tool
+        .execute(serde_json::json!({ "toolkit": "gmail" }))
+        .await
+        .expect("execute should not bubble anyhow");
+    assert!(
+        result.is_error,
+        "direct-mode authorize must refuse, got success"
+    );
+    let msg = error_text(&result);
+    assert!(
+        msg.contains("direct mode") && msg.contains("app.composio.dev"),
+        "expected direct-mode hint to point at app.composio.dev, got: {msg}"
     );
     assert!(
         !msg.contains("staging-api") && !msg.contains("agent-integrations"),
