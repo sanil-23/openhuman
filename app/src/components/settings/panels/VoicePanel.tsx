@@ -311,7 +311,7 @@ const VoicePanel = () => {
   const installButtonLabel = (
     status: VoiceInstallStatus | null,
     busy: boolean,
-    engine: 'Whisper' | 'Piper'
+    _engine: 'Whisper' | 'Piper'
   ): string => {
     // Render based on the remote status — the install RPC is fire-and-forget,
     // so the local `busy` flag only covers the brief moment between click and
