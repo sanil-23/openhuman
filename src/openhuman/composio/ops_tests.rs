@@ -54,7 +54,14 @@ async fn composio_list_toolkits_errors_without_session() {
     let tmp = tempfile::tempdir().unwrap();
     let config = test_config(&tmp);
     let err = composio_list_toolkits(&config).await.unwrap_err();
-    assert!(err.contains("composio unavailable"));
+    // Backend-mode (default) without a session — the mode-aware factory
+    // surfaces "no backend session token" so we accept either the
+    // legacy `composio unavailable` prefix or the new factory message.
+    assert!(
+        err.to_lowercase().contains("composio")
+            && (err.contains("no backend session") || err.contains("unavailable")),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -62,7 +69,11 @@ async fn composio_list_connections_errors_without_session() {
     let tmp = tempfile::tempdir().unwrap();
     let config = test_config(&tmp);
     let err = composio_list_connections(&config).await.unwrap_err();
-    assert!(err.contains("composio unavailable"));
+    assert!(
+        err.to_lowercase().contains("composio")
+            && (err.contains("no backend session") || err.contains("unavailable")),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -930,4 +941,70 @@ async fn composio_disable_trigger_propagates_backend_error() {
         .await
         .unwrap_err();
     assert!(err.contains("disable_trigger failed"), "unexpected: {err}");
+}
+
+// ── Direct-mode list_* short-circuits ─────────────────────────────
+//
+// [composio-direct] When `config.composio.mode == "direct"`, the
+// `composio_list_toolkits` / `composio_list_connections` ops must NOT
+// silently fall through to the backend tenant's data — that's the
+// bug the user reported in #1710 (toggled to Direct, still saw
+// tinyhumans-tenant connections). We return empty responses with
+// explicit log lines so the UI / agent surface stays honest about
+// where the data is (or isn't) coming from.
+
+/// Set up a config with `composio.mode = "direct"` and a stored
+/// direct-mode API key (so `create_composio_client` succeeds).
+fn direct_mode_config(tmp: &tempfile::TempDir) -> Config {
+    let mut c = Config::default();
+    c.workspace_dir = tmp.path().join("workspace");
+    c.config_path = tmp.path().join("config.toml");
+    c.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.into();
+    crate::openhuman::credentials::AuthService::from_config(&c)
+        .store_provider_token(
+            crate::openhuman::credentials::ops::COMPOSIO_DIRECT_PROVIDER,
+            crate::openhuman::credentials::DEFAULT_AUTH_PROFILE_NAME,
+            "ck_test_direct_key",
+            std::collections::HashMap::new(),
+            true,
+        )
+        .expect("store test direct-mode api key");
+    c
+}
+
+#[tokio::test]
+async fn composio_list_toolkits_returns_empty_in_direct_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = direct_mode_config(&tmp);
+    let outcome = composio_list_toolkits(&config)
+        .await
+        .expect("direct-mode list_toolkits must succeed without HTTP");
+    assert!(
+        outcome.value.toolkits.is_empty(),
+        "direct mode must not surface the backend allowlist"
+    );
+    assert!(
+        outcome.logs.iter().any(|l| l.contains("direct mode")),
+        "log line must call out direct mode explicitly, got {:?}",
+        outcome.logs
+    );
+}
+
+#[tokio::test]
+async fn composio_list_connections_returns_empty_in_direct_mode() {
+    let _guard = CACHE_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let config = direct_mode_config(&tmp);
+    let outcome = composio_list_connections(&config)
+        .await
+        .expect("direct-mode list_connections must succeed without HTTP");
+    assert!(
+        outcome.value.connections.is_empty(),
+        "direct mode must NOT surface backend-tenant connections"
+    );
+    assert!(
+        outcome.logs.iter().any(|l| l.contains("direct mode")),
+        "log line must call out direct mode explicitly, got {:?}",
+        outcome.logs
+    );
 }

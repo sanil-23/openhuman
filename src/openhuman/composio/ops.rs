@@ -21,7 +21,7 @@ type OpResult<T> = std::result::Result<T, String>;
 
 use std::sync::Arc;
 
-use super::client::{build_composio_client, ComposioClient};
+use super::client::{build_composio_client, create_composio_client, ComposioClient, ComposioClientKind};
 use super::providers::{
     get_provider, ProviderContext, ProviderUserProfile, SyncOutcome, SyncReason,
 };
@@ -54,16 +54,45 @@ pub async fn composio_list_toolkits(
     config: &Config,
 ) -> OpResult<RpcOutcome<ComposioToolkitsResponse>> {
     tracing::debug!("[composio] rpc list_toolkits");
-    let client = resolve_client(config)?;
-    let resp = client
-        .list_toolkits()
-        .await
-        .map_err(|e| format!("[composio] list_toolkits failed: {e:#}"))?;
-    let count = resp.toolkits.len();
-    Ok(RpcOutcome::new(
-        resp,
-        vec![format!("composio: {count} toolkit(s) enabled")],
-    ))
+    // Route through the mode-aware factory so direct-mode users do NOT
+    // silently fall through to the backend tinyhumans tenant's allowlist.
+    // [composio-direct] In direct mode we don't expose a toolkit
+    // allowlist at all — the user's personal Composio account governs
+    // what's available. Returning an empty list signals "no curated
+    // allowlist" to the UI and prompt-builder, which matches the
+    // sovereign expectation: Direct mode users manage their toolkits
+    // through app.composio.dev directly.
+    let kind = create_composio_client(config)
+        .map_err(|e| format!("[composio] list_toolkits: {e}"))?;
+    match kind {
+        ComposioClientKind::Backend(client) => {
+            tracing::debug!("[composio] list_toolkits: backend variant");
+            let resp = client
+                .list_toolkits()
+                .await
+                .map_err(|e| format!("[composio] list_toolkits failed: {e:#}"))?;
+            let count = resp.toolkits.len();
+            Ok(RpcOutcome::new(
+                resp,
+                vec![format!("composio: {count} toolkit(s) enabled")],
+            ))
+        }
+        ComposioClientKind::Direct(_) => {
+            tracing::info!(
+                "[composio-direct] list_toolkits: direct mode active — no \
+                 server-side allowlist is enforced; returning empty toolkits \
+                 list. Users manage available toolkits via app.composio.dev."
+            );
+            Ok(RpcOutcome::new(
+                ComposioToolkitsResponse::default(),
+                vec![
+                    "composio: direct mode — no curated allowlist (toolkits \
+                     managed via app.composio.dev)"
+                        .to_string(),
+                ],
+            ))
+        }
+    }
 }
 
 // ── Connections ─────────────────────────────────────────────────────
@@ -72,7 +101,47 @@ pub async fn composio_list_connections(
     config: &Config,
 ) -> OpResult<RpcOutcome<ComposioConnectionsResponse>> {
     tracing::debug!("[composio] rpc list_connections");
-    let client = resolve_client(config)?;
+    // Route through the mode-aware factory so direct-mode users do NOT
+    // accidentally see the tinyhumans-tenant connections from the
+    // backend-proxied path. Mixing the two tenants is the bug behind the
+    // user-reported "I switched to Direct and my old integrations are
+    // still showing" symptom (#1710).
+    let kind = create_composio_client(config)
+        .map_err(|e| format!("[composio] list_connections: {e}"))?;
+    let client = match kind {
+        ComposioClientKind::Backend(client) => {
+            tracing::debug!("[composio] list_connections: backend variant");
+            client
+        }
+        ComposioClientKind::Direct(_) => {
+            // [composio-direct] We deliberately do NOT translate this
+            // into a `backend.composio.dev/api/v3/connected_accounts`
+            // call yet. The direct REST surface is available (see
+            // `tools/impl/network/composio.rs`) but a full mapping into
+            // `ComposioConnectionsResponse` (id/toolkit/status/createdAt)
+            // is a follow-up — and silently falling back to backend mode
+            // is exactly the bug the user reported. Returning empty
+            // with an explicit log is the correct fail-mode.
+            tracing::info!(
+                "[composio-direct] list_connections: direct mode active — \
+                 returning empty connections list. Users must link \
+                 integrations through app.composio.dev for their personal \
+                 Composio tenant; backend-tenant connections are intentionally \
+                 NOT surfaced in direct mode."
+            );
+            // Reconcile cache against the empty live set so any stale
+            // backend-tenant entries get cleared.
+            sync_cache_with_connections(&[]);
+            return Ok(RpcOutcome::new(
+                ComposioConnectionsResponse::default(),
+                vec![
+                    "composio: direct mode — 0 connection(s) (link via \
+                     app.composio.dev)"
+                        .to_string(),
+                ],
+            ));
+        }
+    };
     let resp = client
         .list_connections()
         .await
@@ -1228,6 +1297,113 @@ pub async fn fetch_toolkit_actions(
         "[composio] fetch_toolkit_actions: done"
     );
     Ok(actions)
+}
+
+// ── Direct mode (BYO API key) ───────────────────────────────────────
+
+/// Read the current Composio routing mode and whether a direct-mode API
+/// key is stored. **The key itself is never returned** — only a boolean
+/// flag so the UI can show a "Connected" / "Not set" status.
+pub async fn composio_get_mode(config: &Config) -> OpResult<RpcOutcome<serde_json::Value>> {
+    let mode = config.composio.mode.trim().to_string();
+    let key_present = crate::openhuman::credentials::get_composio_api_key(config)
+        .map_err(|e| format!("[composio-direct] get_composio_api_key failed: {e}"))?
+        .is_some();
+    tracing::debug!(
+        mode = %mode,
+        key_present = key_present,
+        "[composio-direct] get_mode"
+    );
+    let payload = serde_json::json!({
+        "mode": mode,
+        "api_key_set": key_present,
+    });
+    Ok(RpcOutcome::new(
+        payload,
+        vec![format!(
+            "composio: mode={mode}, api_key={}",
+            if key_present { "set" } else { "unset" }
+        )],
+    ))
+}
+
+/// Persist a user-provided Composio API key for direct mode and
+/// (optionally) flip `config.composio.mode` over to `"direct"`.
+///
+/// **Logging redacts the key** — only its length and presence are
+/// recorded. See the `[composio-direct]` debug-logging contract in
+/// CLAUDE.md.
+pub async fn composio_set_api_key(
+    config: &Config,
+    api_key: &str,
+    activate_direct: bool,
+) -> OpResult<RpcOutcome<serde_json::Value>> {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        return Err("composio.set_api_key: api_key must not be empty".to_string());
+    }
+    tracing::debug!(
+        key_len = trimmed.len(),
+        activate_direct,
+        "[composio-direct] set_api_key (redacted)"
+    );
+
+    crate::openhuman::credentials::store_composio_api_key(config, trimmed)
+        .await
+        .map_err(|e| format!("[composio-direct] store_composio_api_key failed: {e}"))?;
+
+    let mode_log = if activate_direct {
+        // Persist the mode flip too — we route through the standard
+        // config save path so the snapshot, watchers, and reload paths
+        // all observe it.
+        let mut cfg_mut = crate::openhuman::config::rpc::load_config_with_timeout()
+            .await
+            .map_err(|e| format!("[composio-direct] reload config failed: {e}"))?;
+        cfg_mut.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.into();
+        cfg_mut
+            .save()
+            .await
+            .map_err(|e| format!("[composio-direct] save config failed: {e}"))?;
+        "mode=direct"
+    } else {
+        "mode unchanged"
+    };
+
+    let effective_mode: String = if activate_direct {
+        "direct".to_string()
+    } else {
+        config.composio.mode.clone()
+    };
+    Ok(RpcOutcome::new(
+        serde_json::json!({
+            "stored": true,
+            "mode": effective_mode,
+        }),
+        vec![format!("composio: api key stored ({mode_log})")],
+    ))
+}
+
+/// Clear the stored direct-mode API key and reset
+/// `config.composio.mode` back to `"backend"`.
+pub async fn composio_clear_api_key(config: &Config) -> OpResult<RpcOutcome<serde_json::Value>> {
+    tracing::debug!("[composio-direct] clear_api_key");
+    crate::openhuman::credentials::clear_composio_api_key(config)
+        .await
+        .map_err(|e| format!("[composio-direct] clear_composio_api_key failed: {e}"))?;
+
+    let mut cfg_mut = crate::openhuman::config::rpc::load_config_with_timeout()
+        .await
+        .map_err(|e| format!("[composio-direct] reload config failed: {e}"))?;
+    cfg_mut.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_BACKEND.into();
+    cfg_mut
+        .save()
+        .await
+        .map_err(|e| format!("[composio-direct] save config failed: {e}"))?;
+
+    Ok(RpcOutcome::new(
+        serde_json::json!({ "cleared": true, "mode": "backend" }),
+        vec!["composio: api key cleared, mode reset to backend".into()],
+    ))
 }
 
 #[cfg(test)]
