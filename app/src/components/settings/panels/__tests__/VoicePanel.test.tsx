@@ -425,4 +425,76 @@ describe('VoicePanel', () => {
     // Button label flips into the retry messaging.
     expect(screen.getByTestId('install-piper-button')).toHaveTextContent(/Retry locally/i);
   });
+
+  it('shows an error notice when installWhisper rejects', async () => {
+    // Freeze subsequent loadData calls so the error isn't cleared by the
+    // automatic reload that fires in the finally block.
+    vi.mocked(installWhisper).mockRejectedValueOnce(new Error('disk full'));
+    vi.mocked(openhumanGetVoiceServerSettings).mockImplementation(
+      () => new Promise(() => {}) // hang — prevents error being wiped by reload
+    );
+    renderWithProviders(<VoicePanel />, { initialEntries: ['/settings/voice'] });
+
+    // Wait for the initial load to complete (which uses the pre-hang impl)
+    await screen.findByTestId('install-whisper-button');
+    // Now freeze subsequent calls and click
+    const button = screen.getByTestId('install-whisper-button');
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.queryByText('disk full')).toBeInTheDocument());
+  });
+
+  it('shows an error notice when installPiper rejects', async () => {
+    vi.mocked(installPiper).mockRejectedValueOnce(new Error('no space left'));
+    vi.mocked(openhumanGetVoiceServerSettings).mockImplementation(
+      () => new Promise(() => {}) // hang — prevents error being wiped by reload
+    );
+    renderWithProviders(<VoicePanel />, { initialEntries: ['/settings/voice'] });
+
+    await screen.findByTestId('install-piper-button');
+    const button = screen.getByTestId('install-piper-button');
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.queryByText('no space left')).toBeInTheDocument());
+  });
+
+  it('shows an error when persistProviders fails', async () => {
+    vi.mocked(openhumanVoiceSetProviders).mockRejectedValueOnce(new Error('RPC timeout'));
+    renderWithProviders(<VoicePanel />, { initialEntries: ['/settings/voice'] });
+
+    const sttSelect = (await screen.findByTestId('stt-provider-select')) as HTMLSelectElement;
+    fireEvent.change(sttSelect, { target: { value: 'whisper' } });
+
+    await waitFor(() => expect(screen.getByText('RPC timeout')).toBeInTheDocument());
+  });
+
+  it('shows a Piper installing label with percentage', async () => {
+    runtime.piperStatus = makeInstallStatus('piper', {
+      state: 'installing',
+      progress: 55,
+      stage: 'downloading voice',
+    });
+    renderWithProviders(<VoicePanel />, { initialEntries: ['/settings/voice'] });
+
+    const stateSpan = await screen.findByTestId('piper-install-state');
+    await waitFor(() => expect(stateSpan).toHaveTextContent(/downloading voice/i));
+  });
+
+  it('renders a preset select and auto-installs when a Piper voice preset is changed', async () => {
+    runtime.voiceStatus.tts_provider = 'piper';
+    runtime.voiceStatus.tts_voice_id = 'en_US-lessac-medium';
+    renderWithProviders(<VoicePanel />, { initialEntries: ['/settings/voice'] });
+
+    const ttsSelect = (await screen.findByTestId('tts-provider-select')) as HTMLSelectElement;
+    await waitFor(() => expect(ttsSelect.value).toBe('piper'));
+
+    const voiceSelect = (await screen.findByTestId('tts-voice-select')) as HTMLSelectElement;
+    fireEvent.change(voiceSelect, { target: { value: 'en_US-ryan-medium' } });
+
+    await waitFor(() =>
+      expect(vi.mocked(openhumanVoiceSetProviders)).toHaveBeenCalledWith(
+        expect.objectContaining({ tts_voice: 'en_US-ryan-medium' })
+      )
+    );
+  });
 });
