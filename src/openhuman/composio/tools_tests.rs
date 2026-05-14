@@ -11,6 +11,26 @@ fn fake_composio_client() -> ComposioClient {
     ComposioClient::new(Arc::new(inner))
 }
 
+/// Minimal `Arc<Config>` for the per-call-client tools
+/// (`ComposioListToolsTool`, `ComposioExecuteTool`) which no longer hold
+/// a pre-baked `ComposioClient`. Config defaults set
+/// `composio.mode = "backend"` so the factory selects the backend
+/// variant — and `create_composio_client` then returns
+/// `Err("no backend session")` because no app-session token is stored
+/// in the test keychain. That error path is the one we want for the
+/// "executes without backend session" failure-mode tests; tests that
+/// need a session token override the keychain explicitly.
+fn fake_config_arc() -> Arc<crate::openhuman::config::Config> {
+    let tmp = tempfile::tempdir().expect("tempdir for fake_config_arc");
+    let mut config = crate::openhuman::config::Config::default();
+    config.config_path = tmp.path().join("config.toml");
+    // Leak the tempdir so the path remains valid for the test's lifetime
+    // — `Config::config_path` is just used as a lookup key here, not
+    // actually written to.
+    std::mem::forget(tmp);
+    Arc::new(config)
+}
+
 /// Every composio tool must report `ToolCategory::Skill` so the
 /// skills sub-agent (`category_filter = "skill"`) picks them up.
 ///
@@ -19,12 +39,13 @@ fn fake_composio_client() -> ComposioClient {
 #[test]
 fn all_composio_tools_are_in_skill_category() {
     let client = fake_composio_client();
+    let config = fake_config_arc();
     let tools: Vec<Box<dyn Tool>> = vec![
         Box::new(ComposioListToolkitsTool::new(client.clone())),
         Box::new(ComposioListConnectionsTool::new(client.clone())),
-        Box::new(ComposioAuthorizeTool::new(client.clone())),
-        Box::new(ComposioListToolsTool::new(client.clone())),
-        Box::new(ComposioExecuteTool::new(client)),
+        Box::new(ComposioAuthorizeTool::new(client)),
+        Box::new(ComposioListToolsTool::new(config.clone())),
+        Box::new(ComposioExecuteTool::new(config)),
     ];
 
     for t in &tools {
@@ -117,7 +138,7 @@ async fn authorize_tool_execute_rejects_whitespace_toolkit() {
 
 #[test]
 fn list_tools_tool_metadata_accepts_optional_toolkits_filter() {
-    let t = ComposioListToolsTool::new(fake_composio_client());
+    let t = ComposioListToolsTool::new(fake_config_arc());
     let s = t.parameters_schema();
     // toolkits is optional (not in required[])
     let required = s
@@ -131,7 +152,7 @@ fn list_tools_tool_metadata_accepts_optional_toolkits_filter() {
 
 #[test]
 fn execute_tool_requires_tool_argument() {
-    let t = ComposioExecuteTool::new(fake_composio_client());
+    let t = ComposioExecuteTool::new(fake_config_arc());
     assert_eq!(t.permission_level(), PermissionLevel::Write);
     let s = t.parameters_schema();
     let required: Vec<&str> = s["required"]
@@ -145,7 +166,7 @@ fn execute_tool_requires_tool_argument() {
 
 #[tokio::test]
 async fn execute_tool_execute_rejects_missing_tool() {
-    let t = ComposioExecuteTool::new(fake_composio_client());
+    let t = ComposioExecuteTool::new(fake_config_arc());
     let result = t.execute(serde_json::json!({})).await.unwrap();
     assert!(result.is_error);
     let txt = result
@@ -210,7 +231,7 @@ fn error_text(result: &ToolResult) -> String {
 
 #[tokio::test]
 async fn sandbox_read_only_blocks_write_scope_action() {
-    let t = ComposioExecuteTool::new(fake_composio_client());
+    let t = ComposioExecuteTool::new(fake_config_arc());
     let result =
         crate::openhuman::agent::harness::with_current_sandbox_mode(SandboxMode::ReadOnly, async {
             t.execute(serde_json::json!({ "tool": "GMAIL_SEND_EMAIL" }))
@@ -229,7 +250,7 @@ async fn sandbox_read_only_blocks_write_scope_action() {
 
 #[tokio::test]
 async fn sandbox_read_only_blocks_admin_scope_action() {
-    let t = ComposioExecuteTool::new(fake_composio_client());
+    let t = ComposioExecuteTool::new(fake_config_arc());
     let result =
         crate::openhuman::agent::harness::with_current_sandbox_mode(SandboxMode::ReadOnly, async {
             t.execute(serde_json::json!({ "tool": "GMAIL_DELETE_EMAIL" }))
@@ -248,7 +269,7 @@ async fn sandbox_read_only_passes_through_read_scope_actions_to_downstream_gates
     // still be rejected by the user's scope-pref check or the
     // curated-catalog check downstream, but the sandbox layer itself
     // must not block them.
-    let t = ComposioExecuteTool::new(fake_composio_client());
+    let t = ComposioExecuteTool::new(fake_config_arc());
     let result =
         crate::openhuman::agent::harness::with_current_sandbox_mode(SandboxMode::ReadOnly, async {
             t.execute(serde_json::json!({ "tool": "GMAIL_FETCH_EMAILS" }))
@@ -268,7 +289,7 @@ async fn sandbox_unset_leaves_all_scopes_to_downstream_gates() {
     // Outside any `with_current_sandbox_mode` scope the task-local
     // returns `None` and the gate becomes a no-op (backward
     // compatible — this is the CLI / JSON-RPC / unit-test path).
-    let t = ComposioExecuteTool::new(fake_composio_client());
+    let t = ComposioExecuteTool::new(fake_config_arc());
     let result = t
         .execute(serde_json::json!({ "tool": "GMAIL_SEND_EMAIL" }))
         .await
@@ -285,7 +306,7 @@ async fn sandbox_sandboxed_mode_does_not_trigger_readonly_gate() {
     // `SandboxMode::Sandboxed` is a privilege-drop / filesystem
     // restriction — orthogonal to write permissions on external
     // APIs. The gate only fires for `ReadOnly`, by design.
-    let t = ComposioExecuteTool::new(fake_composio_client());
+    let t = ComposioExecuteTool::new(fake_config_arc());
     let result = crate::openhuman::agent::harness::with_current_sandbox_mode(
         SandboxMode::Sandboxed,
         async {
@@ -437,4 +458,139 @@ fn render_tools_markdown_handles_empty_response() {
     let resp = ComposioToolsResponse { tools: vec![] };
     let md = render_tools_markdown(&resp);
     assert!(md.contains("No composio tools available"));
+}
+
+// ── Direct-mode routing (#1710) ─────────────────────────────────────
+//
+// These tests guard the bug-fix where `ComposioExecuteTool` /
+// `ComposioListToolsTool` used to hold a pre-baked backend client. After
+// the fix, both tools resolve the client through `create_composio_client`
+// per call so the live `composio.mode` toggle is honoured.
+
+/// Helper: build a `Config` with `composio.mode = "direct"` plus an
+/// inline api_key so the keychain isn't required.
+fn direct_mode_config() -> crate::openhuman::config::Config {
+    let tmp = tempfile::tempdir().expect("tempdir for direct_mode_config");
+    let mut config = crate::openhuman::config::Config::default();
+    config.config_path = tmp.path().join("config.toml");
+    config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.to_string();
+    config.composio.api_key = Some("test-direct-key".to_string());
+    std::mem::forget(tmp);
+    config
+}
+
+#[test]
+fn execute_tool_resolves_to_direct_kind_when_mode_is_direct() {
+    // The whole point of fix #1710: the live `config.composio.mode`
+    // governs which client variant `ComposioExecuteTool` dispatches
+    // through. The pre-baked-client version of this code would have
+    // routed through the backend regardless — silent direct-mode
+    // breakage. We assert by independently calling the same factory the
+    // tool calls per-execute.
+    let config = direct_mode_config();
+    let kind = crate::openhuman::composio::client::create_composio_client(&config)
+        .expect("direct mode with inline api_key must resolve");
+    assert_eq!(
+        kind.mode(),
+        crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT,
+        "factory should pick the direct variant when mode=direct"
+    );
+}
+
+#[test]
+fn execute_tool_resolves_to_backend_kind_when_mode_is_backend() {
+    // Reverse of the above — confirms the backend path still wins when
+    // the user is on default (mode = "backend") and a session token is
+    // present. Without the token, `create_composio_client` returns
+    // Err("no backend session"); store one to get past that gate.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = crate::openhuman::config::Config::default();
+    config.config_path = tmp.path().join("config.toml");
+    crate::openhuman::credentials::AuthService::from_config(&config)
+        .store_provider_token(
+            crate::openhuman::credentials::APP_SESSION_PROVIDER,
+            crate::openhuman::credentials::DEFAULT_AUTH_PROFILE_NAME,
+            "test-token",
+            std::collections::HashMap::new(),
+            true,
+        )
+        .expect("store test session token");
+    let kind = crate::openhuman::composio::client::create_composio_client(&config)
+        .expect("backend mode with session token must resolve");
+    assert_eq!(
+        kind.mode(),
+        crate::openhuman::config::schema::COMPOSIO_MODE_BACKEND,
+        "factory should pick the backend variant when mode=backend"
+    );
+}
+
+#[tokio::test]
+async fn list_tools_in_direct_mode_returns_empty_without_hitting_backend() {
+    // In direct mode `composio_list_tools` deliberately returns an empty
+    // `ComposioToolsResponse` and logs an info-level note (matches the
+    // ops.rs pattern for list_toolkits/list_connections). The critical
+    // assertion is that this short-circuits **before** any backend
+    // call — if it didn't, the tool would otherwise try to reach
+    // `staging-api.tinyhumans.ai` and fail with a network error, which
+    // would still surface as an error ToolResult.
+    let config = Arc::new(direct_mode_config());
+    let tool = ComposioListToolsTool::new(config);
+    let result = tool
+        .execute(serde_json::json!({}))
+        .await
+        .expect("execute should not bubble anyhow");
+    assert!(
+        !result.is_error,
+        "direct-mode list_tools should return success+empty, got error: {}",
+        error_text(&result)
+    );
+    let body = result
+        .content
+        .iter()
+        .find_map(|c| match c {
+            crate::openhuman::tools::traits::ToolContent::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    // Empty `tools` array.
+    assert!(
+        body.contains("\"tools\":[]") || body.contains("\"tools\": []"),
+        "direct-mode list_tools body should contain an empty tools array: {body}"
+    );
+}
+
+#[tokio::test]
+async fn execute_tool_per_call_factory_means_no_baked_client() {
+    // Regression check for the structural fix: `ComposioExecuteTool::new`
+    // takes `Arc<Config>` rather than `ComposioClient`, so a user
+    // toggling `composio.mode` mid-session is observed on the very next
+    // execute. We exercise this by constructing the tool with a
+    // *direct*-mode config but no api_key. The factory must fail with
+    // the direct-mode key-missing error rather than silently routing
+    // through the backend client. Pre-fix, the tool would have held a
+    // backend `ComposioClient` and ignored the mode entirely.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = crate::openhuman::config::Config::default();
+    config.config_path = tmp.path().join("config.toml");
+    config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.to_string();
+    // No api_key here — direct-mode factory must reject.
+    let tool = ComposioExecuteTool::new(Arc::new(config));
+    // Use a read-scoped slug so the scope/sandbox gates don't short-
+    // circuit before the dispatch site.
+    let result = tool
+        .execute(serde_json::json!({ "tool": "GMAIL_FETCH_EMAILS" }))
+        .await
+        .unwrap();
+    assert!(result.is_error, "direct mode without key must error");
+    let msg = error_text(&result);
+    // Error must mention direct-mode key configuration, NOT a backend
+    // session / staging-api artifact.
+    assert!(
+        msg.contains("direct mode") && msg.contains("api key"),
+        "expected direct-mode key error, got: {msg}"
+    );
+    assert!(
+        !msg.contains("staging-api") && !msg.contains("agent-integrations"),
+        "must not leak backend-tenant routing artifacts in direct mode: {msg}"
+    );
 }
