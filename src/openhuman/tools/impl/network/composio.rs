@@ -120,6 +120,55 @@ impl ComposioTool {
         Ok(body.items)
     }
 
+    /// List v3 tool definitions for one or more toolkits, preserving the
+    /// raw `input_parameters` JSON schema each action carries.
+    ///
+    /// Sibling of [`Self::list_actions`] but kept distinct because
+    /// `list_actions` flattens to `Vec<ComposioAction>` (no parameters)
+    /// for the legacy agent-discovery shape, whereas
+    /// `composio_list_tools`'s direct-mode branch needs the full schema
+    /// so the LLM agent can supply valid arguments without a separate
+    /// round trip.
+    ///
+    /// `toolkits` may contain one or many slugs; when non-empty they are
+    /// sent as a comma-separated `toolkits=` filter to constrain the v3
+    /// catalogue scan. Empty filter returns every action across every
+    /// toolkit on the user's tenant (potentially large; callers should
+    /// pass a non-empty filter in practice).
+    pub(crate) async fn list_tool_schemas_v3(
+        &self,
+        toolkits: &[&str],
+    ) -> anyhow::Result<Vec<ComposioToolSchemaV3>> {
+        let url = format!("{COMPOSIO_API_BASE_V3}/tools");
+        let mut req = self.client().get(&url).header("x-api-key", &self.api_key);
+        req = req.query(&[("limit", "200")]);
+        let trimmed: Vec<&str> = toolkits
+            .iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .collect();
+        if !trimmed.is_empty() {
+            let csv = trimmed.join(",");
+            req = req.query(&[("toolkits", csv.as_str())]);
+        }
+
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            let err = response_error(resp).await;
+            anyhow::bail!("Composio v3 list_tool_schemas: {err}");
+        }
+
+        let body: ComposioToolsResponse = resp
+            .json()
+            .await
+            .context("Failed to decode Composio v3 tools response")?;
+        Ok(body
+            .items
+            .into_iter()
+            .map(ComposioToolSchemaV3::from_v3_tool)
+            .collect())
+    }
+
     /// Execute a Composio action/tool with given parameters.
     ///
     /// Uses v3 endpoint first and falls back to v2 for compatibility.
@@ -740,6 +789,13 @@ struct ComposioV3Tool {
     app_name: Option<String>,
     #[serde(default)]
     toolkit: Option<ComposioToolkitRef>,
+    /// JSON schema for the tool parameters. Composio v3 names this
+    /// `input_parameters`; older payloads use `parameters`. Either
+    /// shape deserialises into this field, and we re-emit it as
+    /// `ComposioToolFunction::parameters` so direct-mode users get
+    /// the same model-callable schema backend mode surfaces.
+    #[serde(default, alias = "parameters")]
+    input_parameters: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -783,6 +839,44 @@ pub struct ComposioAction {
     pub description: Option<String>,
     #[serde(default)]
     pub enabled: bool,
+}
+
+/// Direct-mode tool definition lifted from Composio v3 `/tools`.
+///
+/// Carries the `input_parameters` JSON schema so the upstream
+/// `composio_list_tools` direct branch can hand the LLM agent a
+/// model-callable function shape — same fields backend mode surfaces
+/// through `ComposioToolSchema`.
+///
+/// Kept distinct from `ComposioAction` (legacy flattened shape) so
+/// new callers explicitly opt into the schema-preserving variant.
+#[derive(Debug, Clone)]
+pub struct ComposioToolSchemaV3 {
+    pub slug: String,
+    pub description: Option<String>,
+    pub toolkit_slug: Option<String>,
+    pub input_parameters: Option<serde_json::Value>,
+}
+
+impl ComposioToolSchemaV3 {
+    fn from_v3_tool(item: ComposioV3Tool) -> Self {
+        let slug = item
+            .slug
+            .clone()
+            .or_else(|| item.name.clone())
+            .unwrap_or_default();
+        let toolkit_slug = item
+            .toolkit
+            .as_ref()
+            .and_then(|t| t.slug.clone().or(t.name.clone()))
+            .or(item.app_name);
+        Self {
+            slug,
+            description: item.description.or(item.name),
+            toolkit_slug,
+            input_parameters: item.input_parameters,
+        }
+    }
 }
 
 // ── v3 /connected_accounts envelope ─────────────────────────────────

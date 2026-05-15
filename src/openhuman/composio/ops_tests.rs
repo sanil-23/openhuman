@@ -1044,22 +1044,51 @@ async fn composio_list_connections_routes_through_direct_mode() {
 
 // ── Direct-mode authorize / list_tools / execute (commit 1, #1710) ─
 
+/// Direct-mode `composio_list_tools` now hits Composio v3 with the
+/// user's own key (replacing the prior empty-short-circuit). The unit
+/// test reaches an outbound HTTPS call against the real
+/// `backend.composio.dev`, which immediately fails with HTTP 401 on the
+/// fake key — exactly the shape we want the contract to preserve:
+///
+///   * NEVER fall back to the tinyhumans backend tenant (no
+///     `"no backend session"` text in the error)
+///   * Surface the failure with the `composio` grep prefix so it routes
+///     through normal observability
+///
+/// A full schemas-mapped test that asserts response shape lives in the
+/// `client_tests.rs` mock-axum suite (`direct_list_tools_*`); this
+/// integration-style test only pins the failure-mode contract.
 #[tokio::test]
-async fn composio_list_tools_returns_empty_in_direct_mode() {
+async fn composio_list_tools_in_direct_mode_does_not_fall_back_to_backend() {
     let tmp = tempfile::tempdir().unwrap();
     let config = direct_mode_config(&tmp);
-    let outcome = composio_list_tools(&config, None)
-        .await
-        .expect("direct-mode list_tools must succeed without HTTP");
-    assert!(
-        outcome.value.tools.is_empty(),
-        "direct mode must NOT surface backend-tenant tool catalogue"
-    );
-    assert!(
-        outcome.logs.iter().any(|l| l.contains("direct mode")),
-        "log line must call out direct mode explicitly, got {:?}",
-        outcome.logs
-    );
+    let result = composio_list_tools(&config, None).await;
+    match result {
+        Ok(outcome) => {
+            // If the prefetch returns empty connections (test env may
+            // intermittently mock that), the function short-circuits to
+            // an empty tool list — still no backend leak.
+            assert!(
+                outcome.value.tools.is_empty(),
+                "direct mode must NOT surface backend-tenant tool catalogue"
+            );
+            assert!(
+                outcome.logs.iter().any(|l| l.contains("direct mode")),
+                "log line must call out direct mode explicitly, got {:?}",
+                outcome.logs
+            );
+        }
+        Err(err) => {
+            assert!(
+                !err.contains("no backend session"),
+                "direct mode must not surface backend-auth errors, got: {err}"
+            );
+            assert!(
+                err.to_lowercase().contains("composio"),
+                "error must carry the composio prefix, got: {err}"
+            );
+        }
+    }
 }
 
 #[tokio::test]

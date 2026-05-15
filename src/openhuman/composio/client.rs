@@ -839,6 +839,51 @@ pub async fn direct_list_connections(
     Ok(ComposioConnectionsResponse { connections })
 }
 
+/// Direct-mode counterpart to [`ComposioClient::list_tools`]. Calls
+/// Composio v3 `/tools?toolkits=<csv>` via
+/// [`crate::openhuman::tools::ComposioTool::list_tool_schemas_v3`] and
+/// reshapes each item into the same [`ComposioToolSchema`] envelope the
+/// backend-proxied path returns.
+///
+/// `toolkits` may be empty (full direct-tenant catalogue) or scoped to
+/// the user's connected toolkits (preferred — keeps response size bounded
+/// and skips schemas the agent can't actually call). `composio_list_tools`'s
+/// direct branch passes `direct_list_connections`'s active set.
+///
+/// Schemas surfaced here are tenant-agnostic — Composio's action
+/// definitions are the same across tenants, so direct-mode users get
+/// the same model-callable shape backend-mode does. Downstream curated-
+/// whitelist filtering (`evaluate_tool_visibility` / `find_curated`)
+/// still applies at the `ops::composio_list_tools` layer.
+pub(super) async fn direct_list_tools(
+    direct: &Arc<crate::openhuman::tools::ComposioTool>,
+    toolkits: &[String],
+) -> anyhow::Result<ComposioToolsResponse> {
+    let toolkit_refs: Vec<&str> = toolkits.iter().map(|s| s.as_str()).collect();
+    tracing::debug!(
+        toolkits = toolkit_refs.len(),
+        "[composio-direct] list_tools: GET v3 /tools"
+    );
+    let items = direct.list_tool_schemas_v3(&toolkit_refs).await?;
+    let tools: Vec<super::types::ComposioToolSchema> = items
+        .into_iter()
+        .filter(|item| !item.slug.is_empty())
+        .map(|item| super::types::ComposioToolSchema {
+            kind: "function".to_string(),
+            function: super::types::ComposioToolFunction {
+                name: item.slug,
+                description: item.description,
+                parameters: item.input_parameters,
+            },
+        })
+        .collect();
+    tracing::debug!(
+        count = tools.len(),
+        "[composio-direct] list_tools: mapped v3 tool schemas"
+    );
+    Ok(ComposioToolsResponse { tools })
+}
+
 #[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;

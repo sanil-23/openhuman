@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use super::client::{
     build_composio_client, create_composio_client, direct_authorize, direct_execute,
-    direct_list_connections, ComposioClient, ComposioClientKind,
+    direct_list_connections, direct_list_tools, ComposioClient, ComposioClientKind,
 };
 use super::providers::{
     get_provider, ProviderContext, ProviderUserProfile, SyncOutcome, SyncReason,
@@ -348,20 +348,115 @@ pub async fn composio_list_tools(
                 vec![format!("composio: {count} tool(s) listed")],
             ))
         }
-        ComposioClientKind::Direct(_) => {
-            tracing::info!(
-                "[composio-direct] list_tools: direct mode active — discovery is \
-                 delegated to the user's personal Composio account; returning empty \
-                 tool list (backend-tenant catalogue is intentionally NOT surfaced)."
+        ComposioClientKind::Direct(direct) => {
+            // [composio-direct] Discovery now hits Composio v3 `/tools`
+            // directly with the user's own API key. Tenant isolation is
+            // preserved (we never surface backend-tenant catalogue here),
+            // and the schemas Composio returns are tenant-agnostic so
+            // the LLM agent gets the same model-callable shape backend
+            // mode surfaces. Scope the request to the user's connected
+            // toolkits when no explicit filter was supplied — keeps the
+            // response bounded and skips schemas the agent can't call.
+            let scope: Vec<String> = match toolkits {
+                Some(list) if !list.is_empty() => list,
+                _ => {
+                    let conns = direct_list_connections(&direct).await.map_err(|e| {
+                        format!("[composio-direct] list_tools: prefetch connections failed: {e:#}")
+                    })?;
+                    let mut v: Vec<String> = conns
+                        .connections
+                        .iter()
+                        .filter(|c| c.is_active())
+                        .map(|c| c.normalized_toolkit())
+                        .filter(|t| !t.is_empty())
+                        .collect();
+                    v.sort();
+                    v.dedup();
+                    v
+                }
+            };
+            if scope.is_empty() {
+                tracing::info!(
+                    "[composio-direct] list_tools: no connected toolkits on this tenant — \
+                     returning empty tool list"
+                );
+                return Ok(RpcOutcome::new(
+                    ComposioToolsResponse::default(),
+                    vec!["composio: direct mode — 0 tool(s) listed (no connected \
+                         toolkits on this tenant)"
+                        .to_string()],
+                ));
+            }
+            tracing::debug!(
+                toolkits = scope.len(),
+                "[composio-direct] list_tools: fetching v3 tool schemas"
             );
+            let mut resp = direct_list_tools(&direct, &scope)
+                .await
+                .map_err(|e| format!("[composio-direct] list_tools failed: {e:#}"))?;
+            // Apply the same curated-whitelist + user-scope filter the
+            // backend path runs — schemas may be tenant-agnostic but
+            // OpenHuman's curation policy isn't, and direct-mode users
+            // should benefit from the same safety net (e.g. dangerous
+            // destructive actions hidden by default).
+            let before = resp.tools.len();
+            filter_list_tools_response_for_direct(&mut resp).await;
+            let after = resp.tools.len();
+            tracing::debug!(
+                before,
+                after,
+                dropped = before - after,
+                "[composio-direct] list_tools: curated filter applied"
+            );
+            let count = resp.tools.len();
             Ok(RpcOutcome::new(
-                ComposioToolsResponse::default(),
-                vec!["composio: direct mode — 0 tool(s) listed (discovery via \
-                     app.composio.dev)"
-                    .to_string()],
+                resp,
+                vec![format!(
+                    "composio: direct mode — {count} tool(s) listed across \
+                     {} toolkit(s)",
+                    scope.len()
+                )],
             ))
         }
     }
+}
+
+/// Apply OpenHuman's curated-whitelist + user-scope visibility filter to
+/// a fresh `ComposioToolsResponse` in direct mode. Mirrors the per-call
+/// filter loop in `tools.rs::filter_list_tools_response` so backend and
+/// direct surfaces share the same safety net.
+async fn filter_list_tools_response_for_direct(resp: &mut ComposioToolsResponse) {
+    use super::providers::{
+        catalog_for_toolkit, classify_unknown, find_curated, get_provider,
+        load_user_scope_or_default, toolkit_from_slug,
+    };
+
+    let mut keep: Vec<bool> = Vec::with_capacity(resp.tools.len());
+    for t in &resp.tools {
+        let slug = &t.function.name;
+        let Some(toolkit) = toolkit_from_slug(slug) else {
+            keep.push(true);
+            continue;
+        };
+        let pref = load_user_scope_or_default(&toolkit).await;
+        let catalog = get_provider(&toolkit)
+            .and_then(|p| p.curated_tools())
+            .or_else(|| catalog_for_toolkit(&toolkit));
+        let allowed = match catalog {
+            Some(cat) => match find_curated(cat, slug) {
+                Some(curated) => pref.allows(curated.scope),
+                None => false,
+            },
+            None => pref.allows(classify_unknown(slug)),
+        };
+        keep.push(allowed);
+    }
+    let drained: Vec<_> = resp.tools.drain(..).collect();
+    resp.tools = drained
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(tool, keep_it)| if keep_it { Some(tool) } else { None })
+        .collect();
 }
 
 // ── Execute ─────────────────────────────────────────────────────────
