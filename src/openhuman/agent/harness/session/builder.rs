@@ -297,7 +297,7 @@ impl AgentBuilder {
         // (backward compat). When populated, only allowlisted tools
         // appear in the function-calling schema so the LLM literally
         // cannot call skill tools directly — it must use spawn_subagent.
-        let visible_tool_specs: Vec<ToolSpec> = if visible_names.is_empty() {
+        let visible_tool_specs_unfiltered: Vec<ToolSpec> = if visible_names.is_empty() {
             tool_specs.clone()
         } else {
             tool_specs
@@ -305,6 +305,38 @@ impl AgentBuilder {
                 .filter(|spec| visible_names.contains(&spec.name))
                 .cloned()
                 .collect()
+        };
+
+        // Dedupe by tool name. Anthropic (and other strict providers)
+        // rejects a chat/completions request that lists two tools with
+        // the same name — OpenHuman's own backend and OpenAI silently
+        // accept duplicates, which hid this bug until #1710's per-role
+        // routing started sending the same tool list to Anthropic.
+        //
+        // The collision in practice is the researcher sub-agent's
+        // delegate (whose `delegate_name = "research"`) colliding with a
+        // skill of the same name. First wins — the order of `tool_specs`
+        // is the order tools were registered, so the underlying tool
+        // route resolution is unchanged.
+        let visible_tool_specs: Vec<ToolSpec> = {
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut deduped: Vec<ToolSpec> = Vec::with_capacity(visible_tool_specs_unfiltered.len());
+            let mut dropped: Vec<String> = Vec::new();
+            for spec in visible_tool_specs_unfiltered {
+                if seen.insert(spec.name.clone()) {
+                    deduped.push(spec);
+                } else {
+                    dropped.push(spec.name);
+                }
+            }
+            if !dropped.is_empty() {
+                log::warn!(
+                    "[agent] dropped {} duplicate tool spec(s) before sending to provider: {:?}",
+                    dropped.len(),
+                    dropped
+                );
+            }
+            deduped
         };
 
         log::info!(
