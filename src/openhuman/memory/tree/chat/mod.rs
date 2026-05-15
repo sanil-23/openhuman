@@ -242,8 +242,14 @@ mod tests {
 
     #[test]
     fn build_provider_returns_local_when_configured() {
+        // After #1710 the local-vs-cloud decision is driven by
+        // `memory_provider` (via `Config::workload_uses_local("memory")`),
+        // not the legacy `memory_tree.llm_backend` flag — so the test
+        // needs to set the new workload field. Endpoint + model on
+        // `memory_tree` are still consumed for endpoint/model resolution
+        // inside the local branch.
         let mut cfg = Config::default();
-        cfg.memory_tree.llm_backend = LlmBackend::Local;
+        cfg.memory_provider = Some("ollama:qwen2.5:0.5b".into());
         cfg.memory_tree.llm_extractor_endpoint = Some("http://localhost:11434".into());
         cfg.memory_tree.llm_extractor_model = Some("qwen2.5:0.5b".into());
         let provider = build_chat_provider(&cfg, ChatConsumer::Extract).unwrap();

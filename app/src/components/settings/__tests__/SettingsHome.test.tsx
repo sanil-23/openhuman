@@ -114,13 +114,16 @@ describe('SettingsHome', () => {
       );
     });
 
-    it('places Features, AI & Models under Features & AI', () => {
+    it('places Features and AI under Features & AI', () => {
+      // After #1710: the catch-all "AI & Models" row collapsed into a
+      // nested "AI" section page (with LLM + Voice as children), so
+      // the home tile label changed from "AI & Models" to just "AI".
       renderSettingsHome();
       const header = screen.getByText('Features & AI');
       expect(header.compareDocumentPosition(screen.getByText('Features'))).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING
       );
-      expect(header.compareDocumentPosition(screen.getByText('AI & Models'))).toBe(
+      expect(header.compareDocumentPosition(screen.getByText('AI'))).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING
       );
     });
