@@ -82,45 +82,44 @@ pub trait Summariser: Send + Sync {
 /// by reference to `append_leaf` and `route_leaf_to_topic_trees`
 /// without threading a generic type parameter through every caller.
 pub fn build_summariser(config: &Config) -> Arc<dyn Summariser> {
-    use crate::openhuman::config::{LlmBackend, DEFAULT_CLOUD_LLM_MODEL};
+    use crate::openhuman::config::DEFAULT_CLOUD_LLM_MODEL;
     use crate::openhuman::memory::tree::chat::{build_chat_provider, ChatConsumer};
 
     // Resolve the model identifier to log alongside the provider name.
-    // Returns None (→ inert fallback) only when llm_backend=local and the legacy
+    // Returns None (→ inert fallback) only when memory_provider=local and the legacy
     // llm_summariser_endpoint/_model fields are not both set.
-    let model: Option<String> = match config.memory_tree.llm_backend {
-        LlmBackend::Cloud => Some(
+    let model: Option<String> = if config.workload_uses_local("memory") {
+        let endpoint = config
+            .memory_tree
+            .llm_summariser_endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let m = config
+            .memory_tree
+            .llm_summariser_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        match (endpoint, m) {
+            (Some(_), Some(m)) => Some(m.to_string()),
+            _ => None,
+        }
+    } else {
+        Some(
             config
                 .memory_tree
                 .cloud_llm_model
                 .clone()
                 .unwrap_or_else(|| DEFAULT_CLOUD_LLM_MODEL.to_string()),
-        ),
-        LlmBackend::Local => {
-            let endpoint = config
-                .memory_tree
-                .llm_summariser_endpoint
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty());
-            let m = config
-                .memory_tree
-                .llm_summariser_model
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty());
-            match (endpoint, m) {
-                (Some(_), Some(m)) => Some(m.to_string()),
-                _ => None,
-            }
-        }
+        )
     };
 
     let Some(model) = model else {
         log::debug!(
-            "[tree_source::summariser] llm_summariser not configured for llm_backend={} \
+            "[tree_source::summariser] llm_summariser not configured for memory_provider={:?} \
              — using InertSummariser",
-            config.memory_tree.llm_backend.as_str()
+            config.memory_provider.as_deref().unwrap_or("cloud")
         );
         return Arc::new(inert::InertSummariser::new());
     };

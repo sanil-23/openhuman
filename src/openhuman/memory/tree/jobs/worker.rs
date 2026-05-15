@@ -149,12 +149,11 @@ pub async fn run_once(config: &Config) -> Result<bool> {
         // drop the permit so multiple workers can run cloud
         // extract/summarise calls in parallel (the worker pool
         // itself, sized to `WORKER_COUNT`, is the upstream bound).
-        match config.memory_tree.llm_backend {
-            crate::openhuman::config::LlmBackend::Local => gate_permit,
-            crate::openhuman::config::LlmBackend::Cloud => {
-                drop(gate_permit);
-                None
-            }
+        if config.workload_uses_local("memory") {
+            gate_permit
+        } else {
+            drop(gate_permit);
+            None
         }
     } else {
         // Non-LLM jobs don't need the global slot; release it so an

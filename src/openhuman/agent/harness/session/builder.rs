@@ -603,9 +603,10 @@ impl Agent {
             &config.workspace_dir,
         ));
 
+        let local_embedding = config.workload_local_model("embeddings");
         let memory: Arc<dyn Memory> = Arc::from(memory::create_memory_with_local_ai(
             &config.memory,
-            &config.local_ai,
+            local_embedding.as_deref(),
             &config.embedding_routes,
             Some(&config.storage.provider.config),
             &config.workspace_dir,

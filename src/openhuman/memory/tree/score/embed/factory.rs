@@ -80,16 +80,15 @@ pub fn build_embedder_from_config(config: &Config) -> Result<Box<dyn Embedder>> 
             )))
         }
         _ => {
-            // Honor the Local AI Settings "Memory embeddings" checkbox.
-            // `use_local_for_embeddings()` is `runtime_enabled && usage.embeddings`
-            // so we never route to a disabled local runtime.
-            if config.local_ai.use_local_for_embeddings() {
-                let model = config.local_ai.embedding_model_id.clone();
+            // Honour the unified AI settings: `embeddings_provider` is the
+            // single source of truth. When it parses as `ollama:<model>` we
+            // route locally; otherwise we fall back to the cloud session.
+            if let Some(model) = config.workload_local_model("embeddings") {
                 let endpoint = ollama_base_url();
                 let timeout_ms = tree_cfg.embedding_timeout_ms.unwrap_or(0);
                 log::debug!(
-                    "[memory_tree::embed::factory] usage.embeddings=true — using local Ollama endpoint={} model={} timeout_ms={}",
-                    endpoint, model, timeout_ms
+                    "[memory_tree::embed::factory] embeddings_provider=ollama:{} — using local Ollama endpoint={} timeout_ms={}",
+                    model, endpoint, timeout_ms
                 );
                 Ok(Box::new(OllamaEmbedder::new(endpoint, model, timeout_ms)))
             } else if cloud_session_available(config) {
