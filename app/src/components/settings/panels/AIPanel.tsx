@@ -59,7 +59,7 @@ type CloudProvider = {
   defaultModel: string;
 };
 
-type OllamaState = 'missing' | 'stopped' | 'starting' | 'running' | 'error';
+type OllamaState = 'disabled' | 'missing' | 'stopped' | 'starting' | 'running' | 'error';
 
 type OllamaModel = {
   id: string;
@@ -329,11 +329,17 @@ function useOllamaStatus() {
   }, [refresh]);
 
   // Translate to the OllamaState the panel UI expects.
+  //
+  // `disabled` is the config-side master switch (user turned local AI off
+  // via the toggle). `missing` is "user wants local AI but the daemon
+  // isn't installed". Keep them distinct so the toggle's `checked` state
+  // and the Install/Retry button can render the right thing.
   const state: OllamaState = useMemo(() => {
     if (!snapshot) return 'stopped';
-    if (snapshot.diagnostics?.ollama_running) return 'running';
     const stateStr = snapshot.status?.state ?? '';
-    if (stateStr === 'disabled' || stateStr === 'missing') return 'missing';
+    if (stateStr === 'disabled') return 'disabled';
+    if (snapshot.diagnostics?.ollama_running) return 'running';
+    if (stateStr === 'missing') return 'missing';
     if (stateStr === 'starting' || stateStr === 'downloading') return 'starting';
     if (stateStr === 'error') return 'error';
     return 'stopped';
@@ -772,7 +778,55 @@ const AIPanel = () => {
         <section className="space-y-3">
           <SectionLabel>Local provider</SectionLabel>
 
-          <div className="overflow-hidden rounded-lg border border-stone-200 bg-stone-50">
+          {/* Master enable / disable for the Ollama runtime.
+              The `state` field is the source of truth: when
+              `runtime_enabled = false` in config, bootstrap forces
+              status.state = "disabled". Flipping ON also has to kick
+              `local_ai_download` because bootstrap only auto-fires from
+              "idle"/"degraded" — "disabled" → "ready" is NOT an automatic
+              transition. */}
+          <label className="flex items-start gap-3 rounded-lg border border-stone-200 bg-white px-3 py-2.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={ollama.state !== 'disabled'}
+              onChange={async (e) => {
+                const next = e.target.checked;
+                setBusyAction('toggle-local');
+                try {
+                  await localProvider.setEnabled(next);
+                  if (next) {
+                    // Kick the bootstrap so the daemon moves out of
+                    // "disabled" without the user having to also click
+                    // Install/Retry below.
+                    await localProvider.download(false);
+                  }
+                } catch (err) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  // eslint-disable-next-line no-console
+                  console.warn('[ai-settings] toggle local AI failed', msg);
+                } finally {
+                  setBusyAction(null);
+                  await ollama.refresh();
+                  await reload();
+                }
+              }}
+              disabled={busyAction === 'toggle-local'}
+              className="mt-0.5"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-stone-900">Enable local AI (Ollama)</div>
+              <div className="text-xs text-stone-500">
+                Manages the on-device Ollama daemon used by any workload routed to
+                <span className="font-mono"> ollama:&lt;model&gt;</span>. Turn off if you
+                only use cloud providers — saves CPU + RAM.
+              </div>
+            </div>
+          </label>
+
+          <div
+            className={`overflow-hidden rounded-lg border border-stone-200 bg-stone-50 ${
+              ollama.state === 'disabled' ? 'opacity-60' : ''
+            }`}>
             <div className="flex items-center gap-2 border-b border-stone-200 px-3 py-2.5">
               <StatusDot state={ollama.state} />
               <div className="min-w-0 flex-1">
@@ -801,8 +855,13 @@ const AIPanel = () => {
                     await ollama.refresh();
                   }
                 }}
-                disabled={busyAction === 'download'}
-                className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-2 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50">
+                disabled={busyAction === 'download' || ollama.state === 'disabled'}
+                className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-2 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+                title={
+                  ollama.state === 'disabled'
+                    ? 'Enable local AI above first'
+                    : undefined
+                }>
                 <LuPower className="h-3 w-3" />
                 {ollama.state === 'missing' ? 'Install' : 'Retry'}
               </button>

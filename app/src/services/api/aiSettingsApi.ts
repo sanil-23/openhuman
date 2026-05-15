@@ -28,6 +28,7 @@ import {
   type ClientConfig,
   type ModelSettingsUpdate,
   openhumanGetClientConfig,
+  openhumanUpdateLocalAiSettings,
   openhumanUpdateModelSettings,
 } from '../../utils/tauriCommands/config';
 import {
@@ -286,10 +287,21 @@ export async function loadLocalProviderSnapshot(): Promise<LocalProviderSnapshot
   };
 }
 
+/**
+ * Toggle the master local-AI runtime (Ollama daemon orchestration). When
+ * `false`, every workload routed to `ollama:*` will fail to build at the
+ * factory level — the user should leave routes set to "cloud" while local
+ * AI is disabled. The new AI panel surfaces this as a single switch.
+ */
+export async function setLocalRuntimeEnabled(enabled: boolean): Promise<void> {
+  await openhumanUpdateLocalAiSettings({ runtime_enabled: enabled });
+}
+
 /** Convenience helpers re-exported so the panel imports from one place. */
 export const localProvider = {
   applyPreset: (tier: string) => openhumanLocalAiApplyPreset(tier),
   download: (retry: boolean) => openhumanLocalAiDownload(retry),
+  setEnabled: (enabled: boolean) => setLocalRuntimeEnabled(enabled),
 };
 
 export type { ModelPresetResult };
