@@ -322,9 +322,22 @@ fn fp(
 
 #[test]
 fn fingerprint_identical_inputs_are_cache_hit() {
-    let a = fp(None, None, "orchestrator", Some("anthropic:claude-sonnet-4-6"));
-    let b = fp(None, None, "orchestrator", Some("anthropic:claude-sonnet-4-6"));
-    assert_eq!(a, b, "identical fingerprints must compare equal (cache hit)");
+    let a = fp(
+        None,
+        None,
+        "orchestrator",
+        Some("anthropic:claude-sonnet-4-6"),
+    );
+    let b = fp(
+        None,
+        None,
+        "orchestrator",
+        Some("anthropic:claude-sonnet-4-6"),
+    );
+    assert_eq!(
+        a, b,
+        "identical fingerprints must compare equal (cache hit)"
+    );
 }
 
 #[test]
@@ -334,8 +347,12 @@ fn fingerprint_reasoning_provider_change_forces_rebuild() {
     // must invalidate the cached agent so the next turn rebuilds with
     // the new provider.
     let warm = fp(None, None, "orchestrator", Some("cloud"));
-    let after_settings_change =
-        fp(None, None, "orchestrator", Some("anthropic:claude-sonnet-4-6"));
+    let after_settings_change = fp(
+        None,
+        None,
+        "orchestrator",
+        Some("anthropic:claude-sonnet-4-6"),
+    );
     assert_ne!(
         warm, after_settings_change,
         "reasoning_provider change must produce a different fingerprint (cache miss → rebuild)"

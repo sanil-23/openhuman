@@ -176,7 +176,9 @@ fn derive_workload_providers(config: &mut Config, stats: &mut MigrationStats) {
 
     // Memory summariser — `memory_tree.llm_backend` is `LlmBackend::Cloud | Local`.
     let memory_value = match config.memory_tree.llm_backend {
-        crate::openhuman::config::schema::LlmBackend::Local if runtime_on && !chat_model.is_empty() => {
+        crate::openhuman::config::schema::LlmBackend::Local
+            if runtime_on && !chat_model.is_empty() =>
+        {
             format!("ollama:{}", chat_model)
         }
         _ => "cloud".to_string(),
@@ -184,16 +186,17 @@ fn derive_workload_providers(config: &mut Config, stats: &mut MigrationStats) {
     set_field(&mut config.memory_provider, memory_value, stats);
 
     // Embeddings — uses the embedding_model_id, not chat_model_id.
-    let embeddings_value = if config.local_ai.usage.embeddings && runtime_on && !embed_model.is_empty()
-    {
-        format!("ollama:{}", embed_model)
-    } else {
-        "cloud".to_string()
-    };
+    let embeddings_value =
+        if config.local_ai.usage.embeddings && runtime_on && !embed_model.is_empty() {
+            format!("ollama:{}", embed_model)
+        } else {
+            "cloud".to_string()
+        };
     set_field(&mut config.embeddings_provider, embeddings_value, stats);
 
     // The remaining three use the chat model when local.
-    let heartbeat_value = if config.local_ai.usage.heartbeat && runtime_on && !chat_model.is_empty() {
+    let heartbeat_value = if config.local_ai.usage.heartbeat && runtime_on && !chat_model.is_empty()
+    {
         format!("ollama:{}", chat_model)
     } else {
         "cloud".to_string()

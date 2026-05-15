@@ -161,7 +161,11 @@ mod tests {
                 assert_eq!(runs.len(), 0, "spawn failure must not persist a run");
             } else {
                 let runs = cron::list_runs(&cfg, &job.id, 10).unwrap();
-                assert_eq!(runs.len(), 1, "successful run must persist exactly one entry");
+                assert_eq!(
+                    runs.len(),
+                    1,
+                    "successful run must persist exactly one entry"
+                );
             }
         } else {
             assert!(!result.is_error, "{:?}", result.output());

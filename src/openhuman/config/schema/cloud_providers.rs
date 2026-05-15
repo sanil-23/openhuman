@@ -112,7 +112,9 @@ pub fn generate_provider_id(t: &CloudProviderType) -> String {
     let mut seed = nanos as usize;
     for _ in 0..5 {
         suffix.push(chars[seed % chars.len()] as char);
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         seed = (seed >> 33) ^ seed;
     }
     format!("p_{}_{}", t.as_str(), suffix)

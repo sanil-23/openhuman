@@ -180,7 +180,6 @@ pub struct Config {
     //
     // Per-workload fields default to None, which the factory treats as "cloud".
     // Changing `primary_cloud` instantly re-routes every "cloud" workload.
-
     /// Registered cloud providers. Index 0 is always the built-in OpenHuman
     /// entry; additional entries are user-added third-party backends.
     #[serde(default)]

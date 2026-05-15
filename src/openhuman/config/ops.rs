@@ -185,9 +185,8 @@ pub struct ModelSettingsPatch {
     /// the supplied entries (each lacking the API key — those live in
     /// `auth-profiles.json` via [`crate::openhuman::credentials::AuthService`]).
     /// Pass `Some(vec![])` to clear all third-party cloud providers.
-    pub cloud_providers: Option<
-        Vec<crate::openhuman::config::schema::cloud_providers::CloudProviderCreds>,
-    >,
+    pub cloud_providers:
+        Option<Vec<crate::openhuman::config::schema::cloud_providers::CloudProviderCreds>>,
     /// Id of the `cloud_providers` entry used when a workload routes to
     /// `"cloud"`. Empty string clears (factory falls back to OpenHuman).
     pub primary_cloud: Option<String>,

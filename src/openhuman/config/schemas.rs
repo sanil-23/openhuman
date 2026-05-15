@@ -945,10 +945,9 @@ fn handle_update_model_settings(params: Map<String, Value>) -> ControllerFuture 
                             "openrouter" => CloudProviderType::Openrouter,
                             _ => CloudProviderType::Custom,
                         };
-                        let id = e
-                            .id
-                            .filter(|s| !s.trim().is_empty())
-                            .unwrap_or_else(|| generate_provider_id(&r#type));
+                        let id =
+                            e.id.filter(|s| !s.trim().is_empty())
+                                .unwrap_or_else(|| generate_provider_id(&r#type));
                         let default_model = e.default_model.unwrap_or_default();
                         CloudProviderCreds {
                             id,
