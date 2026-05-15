@@ -42,6 +42,7 @@ import {
   setCloudProviderKey,
 } from '../../../services/api/aiSettingsApi';
 import type { CloudProviderType as ApiCloudProviderType } from '../../../utils/tauriCommands/config';
+import { openUrl } from '../../../utils/openUrl';
 import SettingsHeader from '../components/SettingsHeader';
 import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
 
@@ -1020,11 +1021,29 @@ const AIPanel = () => {
                     </li>
                   ))}
                 </ul>
-                <div className="border-t border-stone-200 px-3 py-2">
-                  <button className="inline-flex items-center gap-1 rounded-md border border-dashed border-stone-300 bg-white px-2 py-1 text-xs font-medium text-stone-600 hover:border-primary-400 hover:text-primary-700">
+                <div className="space-y-2 border-t border-stone-200 px-3 py-2">
+                  {/* There's no "pull arbitrary model by name" RPC today
+                      — the existing local_ai_download_asset only pulls
+                      whatever model is configured per capability slot.
+                      So instead of a fake button, surface the real
+                      workflow: browse Ollama's library, run `ollama pull`
+                      from a terminal, and the installed-model list above
+                      picks it up automatically on the next poll. */}
+                  <button
+                    onClick={() => {
+                      void openUrl('https://ollama.com/library');
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md border border-dashed border-stone-300 bg-white px-2 py-1 text-xs font-medium text-stone-600 hover:border-primary-400 hover:text-primary-700">
                     <LuDownload className="h-3 w-3" />
-                    Pull a model
+                    Browse Ollama library
                   </button>
+                  <div className="text-[10px] text-stone-500">
+                    To add a model, run{' '}
+                    <span className="rounded bg-stone-100 px-1 py-0.5 font-mono text-[10px] text-stone-700">
+                      ollama pull &lt;model&gt;
+                    </span>{' '}
+                    in your terminal. Installed models appear here within ~5s.
+                  </div>
                 </div>
               </>
             )}
