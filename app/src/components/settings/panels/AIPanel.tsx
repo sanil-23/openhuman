@@ -753,10 +753,11 @@ const AIPanel = () => {
         const m = installed[0]?.id;
         next[w.id] = m ? { kind: 'local', model: m } : { kind: 'primary' };
       } else {
+        const firstModel = installed[0]?.id;
         next[w.id] =
-          w.group === 'chat'
+          w.group === 'chat' || !firstModel
             ? { kind: 'primary' }
-            : { kind: 'local', model: installed[0]?.id ?? '' };
+            : { kind: 'local', model: firstModel };
       }
     }
     setDraft({ ...draft, routing: next });
@@ -819,12 +820,29 @@ const AIPanel = () => {
                 isPrimary={p.id === draft.primaryCloudId}
                 onMakePrimary={() => setDraft({ ...draft, primaryCloudId: p.id })}
                 onEdit={() => setEditing(p)}
-                onRemove={() =>
+                onRemove={() => {
+                  const remaining = draft.cloudProviders.filter(cp => cp.id !== p.id);
+                  // If the removed provider was primary, clear or reassign.
+                  const nextPrimaryId =
+                    draft.primaryCloudId === p.id
+                      ? (remaining[0]?.id ?? null)
+                      : draft.primaryCloudId;
+                  // Scrub pinned workload routes that reference the removed provider.
+                  const nextRouting = Object.fromEntries(
+                    Object.entries(draft.routing).map(([wid, ref]) => [
+                      wid,
+                      ref.kind === 'cloud' && ref.providerId === p.id
+                        ? { kind: 'primary' as const }
+                        : ref,
+                    ])
+                  ) as typeof draft.routing;
                   setDraft({
                     ...draft,
-                    cloudProviders: draft.cloudProviders.filter(cp => cp.id !== p.id),
-                  })
-                }
+                    cloudProviders: remaining,
+                    primaryCloudId: nextPrimaryId,
+                    routing: nextRouting,
+                  });
+                }}
               />
             ))}
           </div>

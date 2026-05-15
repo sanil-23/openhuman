@@ -1696,22 +1696,6 @@ pub async fn set_llm_rpc(
     // the old one, so the next sidecar restart would silently revert.
     let mut staged = config.clone();
     staged.memory_tree.llm_backend = parsed;
-    // Mirror to the unified memory_provider so the factory (which now reads
-    // only Config::workload_uses_local) picks up the new routing. The
-    // extract model isn't applied to memory_provider — it's a hint for the
-    // separate extractor path, not a top-level provider switch.
-    staged.memory_provider = Some(match parsed {
-        crate::openhuman::config::schema::LlmBackend::Local => {
-            let m = staged
-                .memory_tree
-                .llm_summariser_model
-                .clone()
-                .or_else(|| staged.memory_tree.llm_extractor_model.clone())
-                .unwrap_or_else(|| staged.local_ai.chat_model_id.clone());
-            format!("ollama:{m}")
-        }
-        crate::openhuman::config::schema::LlmBackend::Cloud => "cloud".to_string(),
-    });
 
     let mut changed_models: Vec<&'static str> = Vec::new();
     if let Some(model) = req.cloud_model {
@@ -1738,6 +1722,23 @@ pub async fn set_llm_rpc(
         staged.memory_tree.llm_summariser_model = Some(model);
         changed_models.push("summariser_model");
     }
+
+    // Mirror to the unified memory_provider AFTER optional model overrides so
+    // the persisted routing reflects the final staged values. The extract
+    // model isn't applied to memory_provider — it's a hint for the separate
+    // extractor path, not a top-level provider switch.
+    staged.memory_provider = Some(match parsed {
+        crate::openhuman::config::schema::LlmBackend::Local => {
+            let m = staged
+                .memory_tree
+                .llm_summariser_model
+                .clone()
+                .or_else(|| staged.memory_tree.llm_extractor_model.clone())
+                .unwrap_or_else(|| staged.local_ai.chat_model_id.clone());
+            format!("ollama:{m}")
+        }
+        crate::openhuman::config::schema::LlmBackend::Cloud => "cloud".to_string(),
+    });
 
     // Persist the staged version to config.toml. Atomic write-temp +
     // rename per Config::save. Commit to the live config only after a

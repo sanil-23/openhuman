@@ -277,11 +277,10 @@ impl AuthProfilesStore {
                 Ok(v) => v,
                 Err(e) => {
                     log::warn!(
-                        "[auth] dropping unrecoverable profile id={} provider={}: {e}. \
+                        "[auth] dropping unrecoverable profile provider={}: {e}. \
                          Most likely cause: .secret_key was regenerated after this profile \
                          was stored. The store will be rewritten without this entry; \
                          re-authenticate to restore the session.",
-                        id,
                         p.provider
                     );
                     dropped_ids.push(id.clone());

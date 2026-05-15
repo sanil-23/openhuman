@@ -131,8 +131,7 @@ fn seed_cloud_providers(config: &mut Config, stats: &mut MigrationStats) {
             stats.cloud_providers_seeded += 1;
             log::info!(
                 "[migrations][unify-ai] seeded Custom cloud_providers entry from legacy \
-                 inference_url={}",
-                trimmed
+                 inference_url_present=true"
             );
         }
     }
@@ -230,9 +229,21 @@ fn derive_workload_providers(config: &mut Config, stats: &mut MigrationStats) {
 /// Used to decide whether a non-empty `inference_url` should be migrated
 /// into a Custom cloud provider entry. The default OpenHuman backend lives
 /// at api.openhuman.ai; staging and dev URLs use the same host pattern.
+///
+/// Matches only on the host component to avoid false positives from custom
+/// endpoints that happen to contain "openhuman" in a path or query string.
 fn looks_like_openhuman(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
-    lower.contains("openhuman")
+    let lower = url.trim().to_ascii_lowercase();
+    // Strip scheme if present.
+    let without_scheme = lower.split("://").nth(1).unwrap_or(&lower);
+    // Strip userinfo and take only the host[:port] part before any path.
+    let authority = without_scheme.split('/').next().unwrap_or("");
+    let host = authority.split('@').last().unwrap_or(authority);
+    let host_no_port = host.split(':').next().unwrap_or(host);
+    host_no_port == "api.openhuman.ai"
+        || host_no_port.ends_with(".openhuman.ai")
+        // Allow bare "openhuman" for local/dev names (e.g. Docker compose service names).
+        || host_no_port == "openhuman"
 }
 
 #[cfg(test)]

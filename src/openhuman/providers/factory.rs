@@ -213,11 +213,11 @@ fn resolve_cloud_primary(
                 );
             }
             log::info!(
-                "[providers][chat-factory] role={} resolved cloud→{}:{} endpoint={}",
+                "[providers][chat-factory] role={} resolved cloud→{}:{} endpoint_host={}",
                 role,
                 e.r#type.label(),
                 model,
-                e.endpoint
+                redact_endpoint(&e.endpoint)
             );
             let key = lookup_provider_key(&e.r#type, config)?;
             let p = make_openai_compatible_provider(&e.endpoint, &key)?;
@@ -272,9 +272,9 @@ fn make_ollama_provider(
     // Ollama exposes an OpenAI-compatible endpoint at /v1.
     let endpoint = format!("{}/v1", base_url.trim_end_matches('/'));
     log::info!(
-        "[providers][chat-factory] building ollama provider model={} endpoint={}",
+        "[providers][chat-factory] building ollama provider model={} endpoint_host={}",
         model,
-        endpoint
+        redact_endpoint(&endpoint)
     );
     let p = make_openai_compatible_provider(&endpoint, "")?;
     Ok((p, model.to_string()))
@@ -303,11 +303,11 @@ fn make_cloud_provider_by_type(
     })?;
 
     log::info!(
-        "[providers][chat-factory] role={} type={} model={} endpoint={}",
+        "[providers][chat-factory] role={} type={} model={} endpoint_host={}",
         role,
         provider_type.label(),
         model,
-        entry.endpoint
+        redact_endpoint(&entry.endpoint)
     );
     let key = lookup_provider_key(provider_type, config)?;
     let p = make_openai_compatible_provider(&entry.endpoint, &key)?;
@@ -367,6 +367,28 @@ fn make_openai_compatible_provider(
         key,
         AuthStyle::Bearer,
     )))
+}
+
+/// Return a safe-to-log representation of a URL endpoint: `scheme://host` only.
+///
+/// User-configured endpoints can embed API keys or tokens in the query string
+/// or even in the authority (e.g. `https://key@host/`). Logging the raw URL
+/// violates the "never log secrets" rule. This helper strips everything except
+/// the scheme and host so logs are still useful for debugging routing issues
+/// without leaking credentials.
+fn redact_endpoint(url: &str) -> String {
+    let trimmed = url.trim();
+    // Try to extract scheme://host by splitting on "://" and then on "/", "@", "?".
+    if let Some(rest) = trimmed.split_once("://") {
+        let scheme = rest.0;
+        // Strip any userinfo (user:pass@host) and take only up to the first path/query.
+        let authority = rest.1.split('/').next().unwrap_or("");
+        let host = authority.split('@').last().unwrap_or(authority);
+        let host_no_query = host.split('?').next().unwrap_or(host);
+        return format!("{}://{}", scheme, host_no_query);
+    }
+    // No "://" — probably a bare host or unrecognised; log a placeholder.
+    "<endpoint>".to_string()
 }
 
 /// Split `"openai:gpt-4o"` → `("openai", "gpt-4o")`, or `None` if unrecognised.

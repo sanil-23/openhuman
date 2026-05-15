@@ -108,7 +108,10 @@ pub async fn run_pending(config: &mut Config) {
     // 1 -> 2: unify scattered AI provider settings into per-workload
     // provider strings and seed the cloud_providers list. Pure in-memory
     // mutation of the Config struct — no I/O — so we run it inline.
-    if config.schema_version < 2 {
+    // Guard on `== 1` (not `< 2`) so a failed 0→1 migration doesn't
+    // accidentally get skipped: if schema_version is still 0 here the 0→1
+    // step did not complete and we must not advance to 2.
+    if config.schema_version == 1 {
         match unify_ai_provider_settings::run(config) {
             Ok(stats) => {
                 let previous_version = config.schema_version;

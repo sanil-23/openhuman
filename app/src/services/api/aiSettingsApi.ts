@@ -90,6 +90,7 @@ export interface AISettings {
 // ─── Read path: load + parse ───────────────────────────────────────────────
 
 const PROVIDER_PREFIXES: Record<string, CloudProviderType> = {
+  openhuman: 'openhuman',
   openai: 'openai',
   anthropic: 'anthropic',
   openrouter: 'openrouter',
@@ -103,7 +104,7 @@ const PROVIDER_PREFIXES: Record<string, CloudProviderType> = {
  */
 export function parseProviderString(s: string | null | undefined): ProviderRef {
   const trimmed = (s ?? '').trim();
-  if (!trimmed || trimmed === 'cloud' || trimmed === 'openhuman') {
+  if (!trimmed || trimmed === 'cloud') {
     return { kind: 'primary' };
   }
   if (trimmed.startsWith('ollama:')) {

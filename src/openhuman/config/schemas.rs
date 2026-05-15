@@ -931,33 +931,44 @@ fn handle_update_model_settings(params: Map<String, Value>) -> ControllerFuture 
                     })
                     .collect()
             }),
-            cloud_providers: update.cloud_providers.map(|entries| {
-                use crate::openhuman::config::schema::cloud_providers::{
-                    generate_provider_id, CloudProviderCreds, CloudProviderType,
-                };
-                entries
-                    .into_iter()
-                    .map(|e| {
-                        let r#type = match e.r#type.to_ascii_lowercase().as_str() {
-                            "openhuman" => CloudProviderType::Openhuman,
-                            "openai" => CloudProviderType::Openai,
-                            "anthropic" => CloudProviderType::Anthropic,
-                            "openrouter" => CloudProviderType::Openrouter,
-                            _ => CloudProviderType::Custom,
-                        };
-                        let id =
-                            e.id.filter(|s| !s.trim().is_empty())
-                                .unwrap_or_else(|| generate_provider_id(&r#type));
-                        let default_model = e.default_model.unwrap_or_default();
-                        CloudProviderCreds {
-                            id,
-                            r#type,
-                            endpoint: e.endpoint,
-                            default_model,
-                        }
-                    })
-                    .collect()
-            }),
+            cloud_providers: update
+                .cloud_providers
+                .map(|entries| {
+                    use crate::openhuman::config::schema::cloud_providers::{
+                        generate_provider_id, CloudProviderCreds, CloudProviderType,
+                    };
+                    entries
+                        .into_iter()
+                        .map(|e| {
+                            let r#type = match e.r#type.to_ascii_lowercase().as_str() {
+                                "openhuman" => CloudProviderType::Openhuman,
+                                "openai" => CloudProviderType::Openai,
+                                "anthropic" => CloudProviderType::Anthropic,
+                                "openrouter" => CloudProviderType::Openrouter,
+                                "custom" => CloudProviderType::Custom,
+                                other => {
+                                    return Err(format!(
+                                        "unknown cloud provider type '{}'; \
+                                         valid values: openhuman, openai, anthropic, \
+                                         openrouter, custom",
+                                        other
+                                    ))
+                                }
+                            };
+                            let id =
+                                e.id.filter(|s| !s.trim().is_empty())
+                                    .unwrap_or_else(|| generate_provider_id(&r#type));
+                            let default_model = e.default_model.unwrap_or_default();
+                            Ok(CloudProviderCreds {
+                                id,
+                                r#type,
+                                endpoint: e.endpoint,
+                                default_model,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, String>>()
+                })
+                .transpose()?,
             primary_cloud: update.primary_cloud,
             reasoning_provider: update.reasoning_provider,
             agentic_provider: update.agentic_provider,

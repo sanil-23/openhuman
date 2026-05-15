@@ -117,11 +117,17 @@ pub fn build_chat_provider(
     config: &Config,
     consumer: ChatConsumer,
 ) -> Result<Arc<dyn ChatProvider>> {
-    if config.workload_uses_local("memory") {
+    if let Some(routed_model) = config.workload_local_model("memory") {
         let (endpoint, model, timeout_ms) = match consumer {
             ChatConsumer::Extract => (
                 config.memory_tree.llm_extractor_endpoint.clone(),
-                config.memory_tree.llm_extractor_model.clone(),
+                // Prefer the legacy per-path model for back-compat; fall back
+                // to the unified workload_local_model from memory_provider.
+                config
+                    .memory_tree
+                    .llm_extractor_model
+                    .clone()
+                    .or_else(|| Some(routed_model.clone())),
                 config
                     .memory_tree
                     .llm_extractor_timeout_ms
@@ -129,7 +135,12 @@ pub fn build_chat_provider(
             ),
             ChatConsumer::Summarise => (
                 config.memory_tree.llm_summariser_endpoint.clone(),
-                config.memory_tree.llm_summariser_model.clone(),
+                // Same fallback for the summarise path.
+                config
+                    .memory_tree
+                    .llm_summariser_model
+                    .clone()
+                    .or_else(|| Some(routed_model)),
                 config
                     .memory_tree
                     .llm_summariser_timeout_ms
