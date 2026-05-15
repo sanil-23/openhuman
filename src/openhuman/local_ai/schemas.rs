@@ -651,8 +651,8 @@ fn handle_local_ai_status(_params: Map<String, Value>) -> ControllerFuture {
 
 fn handle_local_ai_shutdown_owned(_params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
-        let config = config_rpc::load_config_with_timeout().await?;
-        to_json(crate::openhuman::local_ai::rpc::local_ai_shutdown_owned(&config).await?)
+        let mut config = config_rpc::load_config_with_timeout().await?;
+        to_json(crate::openhuman::local_ai::rpc::local_ai_shutdown_owned(&mut config).await?)
     })
 }
 

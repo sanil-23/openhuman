@@ -154,26 +154,79 @@ pub async fn local_ai_status(
 }
 
 /// Stop the local-AI runtime, killing the Ollama daemon ONLY if OpenHuman
-/// spawned it.
+/// spawned it, and shift any workload routed to `ollama:<model>` back to
+/// `"cloud"` (= primary).
 ///
-/// External daemons (system service, user-launched `ollama serve`, daemons
-/// from another OpenHuman workspace) are left untouched — kill_ollama_server
-/// is a no-op when no spawn marker matches. Status is unconditionally set to
-/// `"disabled"` so the UI reflects the gate immediately, even when the
-/// underlying process keeps running externally. From the factory's
-/// perspective the result is identical: every workload routed to
-/// `ollama:<model>` will fail at build time, so nothing in OpenHuman talks
-/// to the daemon regardless of who owns it.
+/// Three coordinated effects:
+///
+/// 1. **Daemon shutdown** — `shutdown_owned_ollama` kills the child process
+///    only when the spawn marker matches. External daemons (system service,
+///    user-launched `ollama serve`, daemons from another OpenHuman workspace)
+///    are left untouched, per the same friendly-fire-avoidance rule
+///    `ensure_ollama_server` follows at startup.
+///
+/// 2. **Routing shift** — every `*_provider` field starting with `ollama:`
+///    is cleared (set to `None`, which resolves to `"cloud"` at the factory).
+///    Without this, the next chat call routed to `reasoning` (or any other
+///    workload the user had set to `ollama:<m>`) would fail at factory
+///    build time. The shift is one-way: re-enabling local AI does NOT
+///    restore the previous Ollama routes — the user re-picks.
+///
+/// 3. **Status forced to disabled** so the UI reflects the gate immediately.
 pub async fn local_ai_shutdown_owned(
-    config: &Config,
+    config: &mut Config,
 ) -> Result<RpcOutcome<local_ai::LocalAiStatus>, String> {
     let service = local_ai::global(config);
     service.shutdown_owned_ollama(config).await;
+
+    // Shift any ollama-routed workload back to "cloud" (= primary).
+    let cleared = clear_ollama_workload_routes(config);
+    if cleared > 0 {
+        log::info!(
+            "[local_ai] shutdown_owned: shifted {cleared} ollama-routed workload(s) back to cloud"
+        );
+        config.save().await.map_err(|e| e.to_string())?;
+    }
+
     service.mark_disabled(config);
     Ok(RpcOutcome::single_log(
         service.status(),
         "local ai runtime gated off (owned daemon killed if any)",
     ))
+}
+
+/// Clear every per-workload `*_provider` field whose stored value starts
+/// with `"ollama:"`. Returns the count of fields actually changed so the
+/// caller can decide whether to persist.
+fn clear_ollama_workload_routes(config: &mut Config) -> usize {
+    fn clear_if_ollama(field: &mut Option<String>) -> bool {
+        let is_ollama = field
+            .as_deref()
+            .map(|s| s.trim().starts_with("ollama:"))
+            .unwrap_or(false);
+        if is_ollama {
+            *field = None;
+            true
+        } else {
+            false
+        }
+    }
+    let mut changed = 0;
+    for field in [
+        &mut config.reasoning_provider,
+        &mut config.agentic_provider,
+        &mut config.coding_provider,
+        &mut config.memory_provider,
+        &mut config.embeddings_provider,
+        &mut config.heartbeat_provider,
+        &mut config.learning_provider,
+        &mut config.subconscious_provider,
+    ] {
+        if clear_if_ollama(field) {
+            changed += 1;
+        }
+    }
+    changed
 }
 
 /// Triggers a full download of all required local AI models.
