@@ -24,9 +24,10 @@
 use crate::openhuman::config::Config;
 
 mod phase_out_profile_md;
+mod unify_ai_provider_settings;
 
 /// Current target schema version. Bumped alongside every new migration.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// Run any migrations whose `schema_version` gate hasn't yet been
 /// crossed for this workspace.
@@ -99,6 +100,40 @@ pub async fn run_pending(config: &mut Config) {
                 log::warn!(
                     "[migrations] phase_out_profile_md blocking task did not complete: \
                      {join_err} — will retry on next launch"
+                );
+            }
+        }
+    }
+
+    // 1 -> 2: unify scattered AI provider settings into per-workload
+    // provider strings and seed the cloud_providers list. Pure in-memory
+    // mutation of the Config struct — no I/O — so we run it inline.
+    if config.schema_version < 2 {
+        match unify_ai_provider_settings::run(config) {
+            Ok(stats) => {
+                let previous_version = config.schema_version;
+                config.schema_version = 2;
+                if let Err(err) = config.save().await {
+                    config.schema_version = previous_version;
+                    log::warn!(
+                        "[migrations] unify_ai_provider_settings ran but config.save failed: \
+                         {err:#} — rolled in-memory schema_version back to {previous_version}, \
+                         will retry on next launch"
+                    );
+                    return;
+                }
+                log::info!(
+                    "[migrations] schema_version bumped to 2 (unify_ai_provider_settings \
+                     seeded={} primary_set={} workload_fields={})",
+                    stats.cloud_providers_seeded,
+                    stats.primary_cloud_set,
+                    stats.workload_fields_filled
+                );
+            }
+            Err(err) => {
+                log::warn!(
+                    "[migrations] unify_ai_provider_settings failed: {err:#} — \
+                     will retry on next launch"
                 );
             }
         }
