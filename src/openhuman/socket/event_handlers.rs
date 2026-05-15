@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 
 use crate::api::models::socket::ConnectionStatus;
 use crate::core::event_bus::{publish_global, DomainEvent};
+use crate::openhuman::util::floor_char_boundary;
 use crate::openhuman::webhooks::WebhookRequest;
 
 use super::manager::{emit_server_event, emit_state_change, SharedState};
@@ -27,15 +28,20 @@ pub(super) fn handle_sio_event(
     shared: &Arc<SharedState>,
 ) {
     // Log every incoming event for observability.
+    // Bind the JSON string once so the byte-cap and the char-boundary lookup
+    // operate on the same buffer — OPENHUMAN-TAURI-KC (#1814) traced a fatal
+    // panic to a multi-byte char straddling byte 500, so the slice must land
+    // on a UTF-8 boundary.
+    let payload = data.to_string();
     log::info!(
         "[socket] event received: name={} data_bytes={}",
         event_name,
-        data.to_string().len()
+        payload.len()
     );
     log::debug!(
         "[socket] event payload: name={} data={}",
         event_name,
-        &data.to_string()[..data.to_string().len().min(500)]
+        &payload[..floor_char_boundary(&payload, 500)]
     );
 
     match event_name {
@@ -391,5 +397,37 @@ mod tests {
         drop(rx); // receiver closed first
                   // Must not panic — error path just logs.
         emit_via_channel(&tx, "ping", json!({}));
+    }
+
+    // Regression: OPENHUMAN-TAURI-KC (#1814). A multi-byte UTF-8 char
+    // straddling byte 500 of `data.to_string()` used to panic the debug-log
+    // truncator with `byte index 500 is not a char boundary`, killing the
+    // core thread on every receipt of such an event.
+    #[test]
+    fn handle_sio_event_does_not_panic_on_multibyte_char_at_log_truncation_boundary() {
+        // Build a payload whose JSON serialization places the 2-byte Cyrillic
+        // `'н'` exactly at bytes 499..501. `json!({"data": <s>}).to_string()`
+        // emits `{"data":"<s>"}`, so the 9-byte prefix `{"data":"` plus 490
+        // ASCII bytes lands the next char at byte 499.
+        let mut s = "a".repeat(490);
+        s.push('н'); // 2 bytes — straddles byte 500
+        s.push_str(&"b".repeat(20)); // trailing pad past the 500-byte cap
+        let payload = json!({ "data": s });
+        let serialized = payload.to_string();
+        assert!(
+            serialized.len() > 500,
+            "fixture must exceed the 500-byte log cap"
+        );
+        assert!(
+            !serialized.is_char_boundary(500),
+            "fixture must place a multi-byte char across byte 500"
+        );
+
+        let shared = make_shared();
+        let (tx, _rx) = mpsc::unbounded_channel::<String>();
+        // Use an unhandled event name — the panic was in the unconditional
+        // pre-match log lines, so any event_name reproduces it.
+        handle_sio_event("anything.unhandled", payload, &tx, &shared);
+        assert_eq!(*shared.status.read(), ConnectionStatus::Disconnected);
     }
 }
