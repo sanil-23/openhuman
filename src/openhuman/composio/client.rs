@@ -150,6 +150,24 @@ impl ComposioClient {
 
     // ── Execute ─────────────────────────────────────────────────────
 
+    /// `POST /agent-integrations/composio/execute` — single, non-retrying
+    /// HTTP round-trip. Use this when the caller owns the retry loop
+    /// (e.g. `auth_retry`) to avoid double-retry.
+    pub(crate) async fn execute_tool_once(
+        &self,
+        tool: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> Result<ComposioExecuteResponse> {
+        let tool = tool.trim();
+        if tool.is_empty() {
+            anyhow::bail!("composio.execute_tool_once: tool slug must not be empty");
+        }
+        let arguments = arguments.unwrap_or(serde_json::Value::Object(Default::default()));
+        tracing::debug!(tool = %tool, "[composio] execute_tool_once (no built-in retry)");
+        let body = json!({ "tool": tool, "arguments": arguments });
+        self.post_execute_tool(&body).await
+    }
+
     /// `POST /agent-integrations/composio/execute` — run a Composio
     /// action and return the provider result + cost.
     pub async fn execute_tool(

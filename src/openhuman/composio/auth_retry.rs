@@ -66,7 +66,10 @@ pub(crate) async fn execute_with_auth_retry_inner(
         has_args = args.is_some(),
         "[composio][auth_retry] execute start"
     );
-    let first = client.execute_tool(slug, args.clone()).await?;
+    // Use execute_tool_once (no built-in retry) so we own the retry loop
+    // here and avoid double-retry. execute_tool has its own post-OAuth
+    // retry that would produce 4 total calls instead of the intended 2.
+    let first = client.execute_tool_once(slug, args.clone()).await?;
     if first.successful {
         tracing::debug!(
             target: "composio",
@@ -98,7 +101,7 @@ pub(crate) async fn execute_with_auth_retry_inner(
         "[composio] post-OAuth auth error on first action call; sleeping and retrying once (#1688)"
     );
     tokio::time::sleep(backoff).await;
-    let second = client.execute_tool(slug, args).await?;
+    let second = client.execute_tool_once(slug, args).await?;
     tracing::debug!(
         target: "composio",
         slug = %slug,
