@@ -657,26 +657,34 @@ impl Agent {
             }
         }
 
-        let model_name = config
-            .default_model
-            .as_deref()
-            .unwrap_or(crate::openhuman::config::DEFAULT_MODEL)
-            .to_string();
-
-        let provider_runtime_options = providers::ProviderRuntimeOptions {
+        // Route the main agent's chat through the unified per-workload
+        // factory so the user's "Reasoning" routing in the AI settings
+        // panel (e.g. `reasoning_provider = "anthropic:claude-..."`)
+        // actually takes effect. The factory returns a (Provider, model)
+        // tuple — the resolved model wins over the legacy `default_model`
+        // fallback so explicit picks like `anthropic:claude-sonnet-4-5`
+        // actually use claude-sonnet-4-5 end to end (sending the abstract
+        // "reasoning-v1" tier name to Anthropic would 404).
+        //
+        // When `reasoning_provider` is unset or `"cloud"`, the factory
+        // resolves to the primary cloud (OpenHuman by default), so the
+        // baseline behaviour is identical to the legacy
+        // `create_intelligent_routing_provider` path.
+        //
+        // What we deliberately lose for now: the ReliableProvider retry
+        // wrapper, model_routes translation, and intelligent local/cloud
+        // task hinting that the legacy router added on top of the raw
+        // backend. Those are valuable but orthogonal — they can be layered
+        // back on top of the factory's output in a follow-up without
+        // re-introducing the routing bypass.
+        let _ = providers::ProviderRuntimeOptions {
             auth_profile_override: None,
             openhuman_dir: config.config_path.parent().map(std::path::PathBuf::from),
             secrets_encrypt: config.secrets.encrypt,
             reasoning_enabled: config.runtime.reasoning_enabled,
         };
-
-        let provider: Box<dyn Provider> = providers::create_intelligent_routing_provider(
-            config.inference_url.as_deref(),
-            config.api_url.as_deref(),
-            config.api_key.as_deref(),
-            config,
-            &provider_runtime_options,
-        )?;
+        let (provider, model_name): (Box<dyn Provider>, String) =
+            crate::openhuman::providers::create_chat_provider("reasoning", config)?;
 
         // Dispatcher selection is deferred until after the tool list is
         // finalised (orchestrator tools are appended below). We capture
