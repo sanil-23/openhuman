@@ -279,15 +279,23 @@ fn validate_command_does_not_panic_on_multibyte_char_at_log_truncation_boundary(
         "command should be blocked, but did not panic"
     );
 
-    // And the high-risk-blocked path: cmd is allowed, and contains a chain
-    // operator (`|`) that elevates risk, exercising a different truncating
-    // warn! site.
+    // And the high-risk-blocked path: allowlist passes (curl is allowed), then
+    // risk gate fires (curl is a high-risk command), exercising the truncating
+    // warn! site at the block_high_risk_commands branch.
+    let prefix = "curl https://example.com/";
+    let filler = "a".repeat(80 - prefix.len() - 1);
+    let high_risk_cmd = format!("{prefix}{filler}魔");
+    assert!(
+        !high_risk_cmd.is_char_boundary(80),
+        "fixture must straddle byte 80 with a multi-byte char"
+    );
     let high_risk_policy = SecurityPolicy {
-        autonomy: AutonomyLevel::Supervised,
-        allowed_commands: vec!["cmd".into()],
+        allowed_commands: vec!["curl".into()],
         ..SecurityPolicy::default()
     };
-    let _ = high_risk_policy.validate_command_execution(cmd, true);
+    let blocked = high_risk_policy.validate_command_execution(&high_risk_cmd, true);
+    assert!(blocked.is_err());
+    assert!(blocked.unwrap_err().contains("high-risk"));
 }
 
 // Pathological short multi-byte command — exercises the boundary logic at the
