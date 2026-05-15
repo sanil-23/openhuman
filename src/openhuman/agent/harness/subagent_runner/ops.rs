@@ -202,63 +202,60 @@ async fn run_typed_mode(
 
     // ── Resolve provider + model + temperature ─────────────────────────
     //
-    // For a `Hint(workload)` model spec (e.g. integrations_agent's
-    // `[model] hint = "agentic"`) build a fresh provider via the
-    // per-workload factory so the user's AI-settings routing for that
-    // workload actually takes effect end-to-end. Without this, the
-    // sub-agent inherits the parent's reasoning-workload provider but
-    // calls it with the OpenHuman-tier model name `agentic-v1` —
-    // Anthropic and other strict providers 404 on that. With this,
-    // `agentic` resolves to whatever cloud entry the user picked for
-    // the agentic workload (or the primary, when no explicit pick)
-    // and uses that provider's real model id.
+    // Sub-agent provider selection is keyed on the agent's declarative
+    // `[model]` spec:
     //
-    // `Inherit` and `Exact` keep the legacy "share parent provider"
-    // path — `Inherit` because that's literally the contract, and
-    // `Exact` because the user named a specific model on purpose, so
-    // we shouldn't second-guess which provider it belongs to.
+    //   • `Inherit` — use the parent's provider AND model. Literally
+    //     "do what the parent does".
+    //
+    //   • `Hint(workload)` — build a fresh provider via the per-workload
+    //     factory (e.g. `integrations_agent`'s `[model] hint = "agentic"`
+    //     resolves to whatever `agentic_provider` is routed to in
+    //     AI Settings). The factory returns the *exact* model id for that
+    //     workload — the OpenHuman backend and every third-party provider
+    //     accept exact model names, so there's no `{hint}-v1` synthesis.
+    //
+    //   • `Exact(name)` — escape hatch: use the parent's provider with
+    //     this model name overriding the parent's. Callers are expected
+    //     to know the model is valid for the parent's provider; the
+    //     enum is the wrong place to encode provider switching, which
+    //     belongs to `Hint` + AI-settings routing.
+    //
+    // Factory / config-load failures fall back to the parent's provider
+    // and parent's current model name so a config glitch can't sink
+    // sub-agent execution entirely.
+    use crate::openhuman::agent::harness::definition::ModelSpec;
+
     let (subagent_provider, model): (Arc<dyn Provider>, String) = match &definition.model {
-        crate::openhuman::agent::harness::definition::ModelSpec::Hint(workload) => {
-            match crate::openhuman::config::Config::load_or_init().await {
-                Ok(config) => match crate::openhuman::providers::create_chat_provider(workload, &config) {
-                    Ok((p, m)) => {
-                        log::info!(
-                            "[subagent_runner] role={} agent_id={} resolved via workload factory model={}",
-                            workload,
-                            definition.id,
-                            m
-                        );
-                        (Arc::from(p), m)
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[subagent_runner] workload '{}' provider build failed ({}) for agent_id={} — \
-                             falling back to parent provider + '{}-v1'",
-                            workload,
-                            e,
-                            definition.id,
-                            workload
-                        );
-                        (parent.provider.clone(), format!("{workload}-v1"))
-                    }
-                },
+        ModelSpec::Hint(workload) => match crate::openhuman::config::Config::load_or_init().await {
+            Ok(cfg) => match crate::openhuman::providers::create_chat_provider(workload, &cfg) {
+                Ok((p, m)) => {
+                    log::info!(
+                        "[subagent_runner] role={} agent_id={} resolved via workload factory model={}",
+                        workload, definition.id, m
+                    );
+                    (Arc::from(p), m)
+                }
                 Err(e) => {
                     log::warn!(
-                        "[subagent_runner] config load failed for workload '{}' (agent_id={}): {} — \
-                         falling back to parent provider + '{}-v1'",
-                        workload,
-                        definition.id,
-                        e,
-                        workload
+                        "[subagent_runner] workload '{}' provider build failed ({}) for agent_id={} — \
+                         falling back to parent provider + parent model '{}'",
+                        workload, e, definition.id, parent.model_name
                     );
-                    (parent.provider.clone(), format!("{workload}-v1"))
+                    (parent.provider.clone(), parent.model_name.clone())
                 }
+            },
+            Err(e) => {
+                log::warn!(
+                    "[subagent_runner] config load failed for workload '{}' (agent_id={}): {} — \
+                     falling back to parent provider + parent model '{}'",
+                    workload, definition.id, e, parent.model_name
+                );
+                (parent.provider.clone(), parent.model_name.clone())
             }
-        }
-        _ => (
-            parent.provider.clone(),
-            definition.model.resolve(&parent.model_name),
-        ),
+        },
+        ModelSpec::Inherit => (parent.provider.clone(), parent.model_name.clone()),
+        ModelSpec::Exact(name) => (parent.provider.clone(), name.clone()),
     };
     let temperature = definition.temperature;
 
