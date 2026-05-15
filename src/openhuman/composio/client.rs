@@ -759,6 +759,10 @@ pub async fn direct_execute(
     arguments: Option<serde_json::Value>,
     entity_id: &str,
 ) -> anyhow::Result<ComposioExecuteResponse> {
+    let tool = tool.trim();
+    if tool.is_empty() {
+        anyhow::bail!("composio direct_execute: tool slug must not be empty");
+    }
     let params = arguments.unwrap_or_else(|| serde_json::Value::Object(Default::default()));
     let entity_id = entity_id.trim();
     let entity_id_opt = (!entity_id.is_empty()).then_some(entity_id);

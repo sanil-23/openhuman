@@ -384,10 +384,18 @@ impl ComposioTool {
             anyhow::bail!("Composio v3 connected_accounts failed: {err}");
         }
 
-        let body: ComposioConnectedAccountsResponse = resp
+        let mut body: ComposioConnectedAccountsResponse = resp
             .json()
             .await
             .context("Failed to decode Composio v3 connected_accounts response")?;
+        // Drop rows with a blank id — serde_default means id can be ""
+        // if the upstream response is malformed. An empty connectionId
+        // propagated downstream causes invalid v3 API calls.
+        body.items.retain(|item| !item.id.trim().is_empty());
+        tracing::debug!(
+            count = body.items.len(),
+            "[composio-direct] list_connected_accounts: fetched connected accounts"
+        );
         Ok(body.items)
     }
 

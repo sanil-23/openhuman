@@ -107,10 +107,20 @@ pub(crate) async fn collect_calendar_meetings(
             return Vec::new();
         }
     };
+    tracing::debug!(
+        mode = %config.composio.mode,
+        "[heartbeat:planner] composio client resolved for calendar collection"
+    );
 
     let connections = match &kind {
         ComposioClientKind::Backend(client) => match client.list_connections().await {
-            Ok(resp) => resp.connections,
+            Ok(resp) => {
+                tracing::debug!(
+                    count = resp.connections.len(),
+                    "[heartbeat:planner] composio list_connections (backend) fetched"
+                );
+                resp.connections
+            }
             Err(error) => {
                 tracing::warn!(
                     error = %error,
@@ -120,7 +130,13 @@ pub(crate) async fn collect_calendar_meetings(
             }
         },
         ComposioClientKind::Direct(direct) => match direct_list_connections(direct).await {
-            Ok(resp) => resp.connections,
+            Ok(resp) => {
+                tracing::debug!(
+                    count = resp.connections.len(),
+                    "[heartbeat:planner] composio list_connections (direct) fetched"
+                );
+                resp.connections
+            }
             Err(error) => {
                 tracing::warn!(
                     error = %error,

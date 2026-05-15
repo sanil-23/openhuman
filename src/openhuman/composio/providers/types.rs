@@ -206,7 +206,14 @@ mod tests {
     fn fake_config_backend() -> Arc<Config> {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut config = Config::default();
+        // Isolate both config_path and workspace_dir so create_composio_client
+        // cannot read ambient credentials from the test runner's real config or
+        // workspace. Both paths land inside the same tempdir which is leaked so
+        // the path stays valid for the test's lifetime.
         config.config_path = tmp.path().join("config.toml");
+        config.workspace_dir = tmp.path().join("workspace");
+        // Disable secret encryption — the tempdir has no OS-keyring .secret_key.
+        config.secrets.encrypt = false;
         std::mem::forget(tmp);
         Arc::new(config)
     }
@@ -215,6 +222,8 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut config = Config::default();
         config.config_path = tmp.path().join("config.toml");
+        config.workspace_dir = tmp.path().join("workspace");
+        config.secrets.encrypt = false;
         config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.to_string();
         config.composio.api_key = Some("test-direct-key".to_string());
         std::mem::forget(tmp);

@@ -663,34 +663,22 @@ async fn list_toolkits_in_direct_mode_returns_empty_without_hitting_backend() {
     );
 }
 
-#[tokio::test]
-async fn list_connections_in_direct_mode_returns_empty_without_hitting_backend() {
-    // Closes the "I switched to Direct and my old integrations are
-    // still showing" symptom on the agent-tool surface (#1710). The
-    // RPC-layer fix lived in `ops::composio_list_connections`; this
-    // covers the agent-tool path that the autonomous loop calls.
-    let config = Arc::new(direct_mode_config());
-    let tool = ComposioListConnectionsTool::new(config);
-    let result = tool
-        .execute(serde_json::json!({}))
-        .await
-        .expect("execute should not bubble anyhow");
-    assert!(
-        !result.is_error,
-        "direct-mode list_connections should return success+empty, got error: {}",
-        error_text(&result)
-    );
-    let body = result
-        .content
-        .iter()
-        .find_map(|c| match c {
-            crate::openhuman::tools::traits::ToolContent::Text { text } => Some(text.clone()),
-            _ => None,
-        })
-        .unwrap_or_default();
-    assert!(
-        body.contains("\"connections\":[]") || body.contains("\"connections\": []"),
-        "direct-mode list_connections body should contain an empty connections array: {body}"
+#[test]
+fn list_connections_in_direct_mode_resolves_to_direct_client_kind() {
+    // Verifies the routing property without making a network call:
+    // when mode=direct with an inline api_key, create_composio_client
+    // returns a Direct variant. The list_connections tool uses the same
+    // factory call, so if the factory picks Direct the tool will route
+    // to direct_list_connections (not the backend short-circuit).
+    // Previously the tool short-circuited to empty-success in direct mode
+    // which caused the agent to incorrectly see no connections (#1710).
+    let config = direct_mode_config();
+    let kind = crate::openhuman::composio::client::create_composio_client(&config)
+        .expect("direct mode with inline api_key must resolve");
+    assert_eq!(
+        kind.mode(),
+        crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT,
+        "list_connections tool: factory should pick the direct variant when mode=direct"
     );
 }
 

@@ -33,7 +33,9 @@ use crate::openhuman::tools::traits::{
     PermissionLevel, Tool, ToolCallOptions, ToolCategory, ToolResult,
 };
 
-use super::client::{create_composio_client, direct_execute, ComposioClientKind};
+use super::client::{
+    create_composio_client, direct_execute, direct_list_connections, ComposioClientKind,
+};
 use super::providers::{
     catalog_for_toolkit, classify_unknown, find_curated, get_provider, load_user_scope_or_default,
     toolkit_from_slug, ToolScope, UserScopePref,
@@ -392,27 +394,25 @@ impl Tool for ComposioListConnectionsTool {
     }
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         tracing::debug!("[composio] tool list_connections.execute");
-        // Mirror `ops::composio_list_connections`: in direct mode the
-        // user's backend-tenant connections must NOT be surfaced —
-        // that's the user-reported "I switched to Direct and my old
-        // integrations are still showing" symptom (#1710). Returning
-        // empty with an explicit log is the correct fail-mode.
-        let client = match create_composio_client(&self.config) {
+        // Mirror `ops::composio_list_connections`: route through the mode-aware
+        // factory so the agent sees the correct tenant's connections in both
+        // backend and direct mode. Before this fix, direct mode returned an
+        // empty list regardless of the user's actual Composio connections,
+        // which caused the agent to incorrectly conclude that no integrations
+        // were linked and prompt unnecessary re-authorization (#1710).
+        let mut resp = match create_composio_client(&self.config) {
             Ok(ComposioClientKind::Backend(client)) => {
                 tracing::debug!("[composio] list_connections.execute: backend variant");
                 client
+                    .list_connections()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("composio_list_connections (backend) failed: {e}"))?
             }
-            Ok(ComposioClientKind::Direct(_)) => {
-                tracing::info!(
-                    "[composio-direct] list_connections.execute: direct mode active — \
-                     returning empty connections list. Users must link integrations \
-                     through app.composio.dev for their personal Composio tenant; \
-                     backend-tenant connections are intentionally NOT surfaced."
-                );
-                let resp = super::types::ComposioConnectionsResponse::default();
-                return Ok(ToolResult::success(
-                    serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into()),
-                ));
+            Ok(ComposioClientKind::Direct(direct)) => {
+                tracing::debug!("[composio-direct] list_connections.execute: direct variant");
+                direct_list_connections(&direct)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("composio_list_connections (direct) failed: {e}"))?
             }
             Err(e) => {
                 return Ok(ToolResult::error(format!(
@@ -420,24 +420,19 @@ impl Tool for ComposioListConnectionsTool {
                 )));
             }
         };
-        match client.list_connections().await {
-            Ok(mut resp) => {
-                // Filter server-side-indistinguishable states here —
-                // callers should only ever see integrations the user
-                // can actually act on. Matches the same ACTIVE /
-                // CONNECTED allowlist used by
-                // `fetch_connected_integrations_uncached` so the tool
-                // output and the prompt's Delegation Guide agree on
-                // what counts as "connected".
-                resp.connections.retain(|c| c.is_active());
-                Ok(ToolResult::success(
-                    serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into()),
-                ))
-            }
-            Err(e) => Ok(ToolResult::error(format!(
-                "composio_list_connections failed: {e}"
-            ))),
-        }
+        // Filter server-side-indistinguishable states — callers should only
+        // see integrations the user can actually act on. Matches the same
+        // ACTIVE/CONNECTED allowlist used by `fetch_connected_integrations_uncached`
+        // so the tool output and the prompt's Delegation Guide agree on what
+        // counts as "connected".
+        resp.connections.retain(|c| c.is_active());
+        tracing::debug!(
+            count = resp.connections.len(),
+            "[composio] list_connections.execute: returning active connections"
+        );
+        Ok(ToolResult::success(
+            serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into()),
+        ))
     }
 }
 

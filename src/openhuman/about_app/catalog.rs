@@ -47,6 +47,15 @@ const GITHUB_RELEASES_METADATA: Option<CapabilityPrivacy> = Some(CapabilityPriva
     destinations: &["GitHub Releases"],
 });
 
+// Direct-mode Composio: the user's API key and tool arguments leave the
+// device — they are sent to backend.composio.dev, not the OpenHuman backend.
+// LOCAL_CREDENTIALS was incorrect here because leaves_device must be true.
+const COMPOSIO_DIRECT_CREDENTIALS: Option<CapabilityPrivacy> = Some(CapabilityPrivacy {
+    leaves_device: true,
+    data_kind: PrivacyDataKind::Credentials,
+    destinations: &["Composio (backend.composio.dev)"],
+});
+
 const CAPABILITIES: &[Capability] = &[
     Capability {
         id: "conversation.create",
@@ -418,7 +427,7 @@ const CAPABILITIES: &[Capability] = &[
              require backend mode.",
         how_to: "Settings > Skills > Composio > Direct mode",
         status: CapabilityStatus::Beta,
-        privacy: LOCAL_CREDENTIALS,
+        privacy: COMPOSIO_DIRECT_CREDENTIALS,
     },
     Capability {
         id: "composio.direct_mode_triggers_gap",

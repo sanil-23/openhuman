@@ -49,9 +49,11 @@ pub fn tools_schemas(function: &str) -> ControllerSchema {
         "tools_composio_execute" => ControllerSchema {
             namespace: "tools",
             function: "composio_execute",
-            description: "Execute a Composio action via the backend proxy. Thin wrapper \
-                          around `ComposioClient::execute_tool` exposed for Tauri-driven \
-                          flows (e.g. onboarding) that orchestrate tool calls themselves.",
+            description: "Execute a Composio action. Routes through the mode-aware \
+                          factory: backend mode proxies via the OpenHuman backend; \
+                          direct mode calls backend.composio.dev with the user's own \
+                          API key. Exposed for Tauri-driven flows (e.g. onboarding) \
+                          that orchestrate tool calls themselves.",
             inputs: vec![
                 FieldSchema {
                     name: "action",
@@ -251,17 +253,31 @@ fn handle_composio_execute(params: Map<String, Value>) -> ControllerFuture {
         };
         let kind =
             create_composio_client(&config).map_err(|e| format!("tools.composio_execute: {e}"))?;
+        tracing::debug!(
+            action = %action,
+            mode = %config.composio.mode,
+            "[tools][composio_execute] executing action"
+        );
         let resp = match kind {
-            ComposioClientKind::Backend(client) => client
-                .execute_tool(&action, action_args)
-                .await
-                .map_err(|e| format!("composio execute_tool (backend) failed: {e:#}"))?,
+            ComposioClientKind::Backend(client) => {
+                tracing::debug!(action = %action, "[tools][composio_execute] branch=backend");
+                client
+                    .execute_tool(&action, action_args)
+                    .await
+                    .map_err(|e| format!("composio execute_tool (backend) failed: {e:#}"))?
+            }
             ComposioClientKind::Direct(direct) => {
+                tracing::debug!(action = %action, "[tools][composio_execute] branch=direct");
                 direct_execute(&direct, &action, action_args, &config.composio.entity_id)
                     .await
                     .map_err(|e| format!("composio execute_tool (direct) failed: {e:#}"))?
             }
         };
+        tracing::debug!(
+            action = %action,
+            successful = resp.successful,
+            "[tools][composio_execute] complete"
+        );
 
         let payload = json!({
             "successful": resp.successful,
