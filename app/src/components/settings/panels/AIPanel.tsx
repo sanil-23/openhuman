@@ -826,23 +826,29 @@ const AIPanel = () => {
                   setBusyAction('toggle-local');
                   try {
                     await localProvider.setEnabled(next);
-                    if (next) {
-                      // Kick the bootstrap so the daemon moves out of
-                      // "disabled" without the user having to also click
-                      // Install/Retry below.
-                      await localProvider.download(false);
-                      // Poll every 500ms (up to 10s) until the state
-                      // actually transitions out of "disabled". Otherwise
-                      // the spinner clears the instant the RPC returns
-                      // and the user sees the checkbox flicker
-                      // off-then-on while the daemon is still booting.
-                      const startedAt = Date.now();
-                      while (Date.now() - startedAt < 10_000) {
-                        await new Promise((r) => setTimeout(r, 500));
-                        const fresh = await ollama.refresh();
-                        const freshState = fresh?.status?.state ?? '';
-                        if (freshState && freshState !== 'disabled') break;
-                      }
+                    // Force a state reset in BOTH directions:
+                    //   - When enabling: reset_to_idle → bootstrap → state
+                    //     transitions to "ready" (daemon comes up).
+                    //   - When disabling: reset_to_idle → bootstrap → seeing
+                    //     `runtime_enabled = false`, status is set to
+                    //     "disabled" immediately (see bootstrap.rs:122).
+                    // Without `force=true`, `runtime_enabled = false` would
+                    // be written but status would keep reading the still-
+                    // running daemon as "ready" — the checkbox would snap
+                    // back to checked and the user would think the click
+                    // did nothing.
+                    await localProvider.download(true);
+                    // Poll every 500ms (up to 10s) until the state actually
+                    // settles to the expected value. The spinner stays up
+                    // for the full transition, then clears.
+                    const startedAt = Date.now();
+                    const targetReached = (s: string) =>
+                      next ? Boolean(s) && s !== 'disabled' : s === 'disabled';
+                    while (Date.now() - startedAt < 10_000) {
+                      await new Promise((r) => setTimeout(r, 500));
+                      const fresh = await ollama.refresh();
+                      const freshState = fresh?.status?.state ?? '';
+                      if (targetReached(freshState)) break;
                     }
                   } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
