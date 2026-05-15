@@ -73,6 +73,73 @@ fn append_subagent_role_contract(base_prompt: String, agent_id: &str) -> String 
     prompt
 }
 
+/// Resolve a sub-agent's `(provider, model)` based on its declarative
+/// `[model]` spec.
+///
+///   - `Inherit` — use the parent's provider AND model. Literally
+///     "do what the parent does".
+///   - `Hint(workload)` — build a fresh provider via the per-workload
+///     factory (e.g. `integrations_agent`'s `[model] hint = "agentic"`
+///     resolves to whatever `agentic_provider` is routed to in
+///     AI Settings). The factory returns the *exact* model id for that
+///     workload — the OpenHuman backend and every third-party provider
+///     accept exact model names, so there's no `{hint}-v1` synthesis
+///     anywhere on this path.
+///   - `Exact(name)` — escape hatch: use the parent's provider with
+///     this model name overriding the parent's. Callers are expected
+///     to know the model is valid for the parent's provider; the enum
+///     is the wrong place to encode provider switching, which belongs
+///     to `Hint` + AI-settings routing.
+///
+/// `config` is `None` when the live `Config::load_or_init()` failed
+/// (rare — transient I/O). Both `None` config and factory build errors
+/// fall back to `(parent_provider, parent_model)` so a config glitch
+/// can't sink sub-agent execution entirely.
+///
+/// The async part (config load) is hoisted out of the caller so this
+/// helper stays sync and can be exercised by a focused unit test
+/// without spinning up a `tokio::test` runtime per case.
+pub(super) fn resolve_subagent_provider(
+    spec: &crate::openhuman::agent::harness::definition::ModelSpec,
+    agent_id: &str,
+    config: Option<&crate::openhuman::config::Config>,
+    parent_provider: std::sync::Arc<dyn Provider>,
+    parent_model: String,
+) -> (std::sync::Arc<dyn Provider>, String) {
+    use crate::openhuman::agent::harness::definition::ModelSpec;
+    match spec {
+        ModelSpec::Hint(workload) => match config {
+            Some(cfg) => match crate::openhuman::providers::create_chat_provider(workload, cfg) {
+                Ok((p, m)) => {
+                    log::info!(
+                        "[subagent_runner] role={} agent_id={} resolved via workload factory model={}",
+                        workload, agent_id, m
+                    );
+                    (std::sync::Arc::from(p), m)
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[subagent_runner] workload '{}' provider build failed ({}) for agent_id={} — \
+                         falling back to parent provider + parent model '{}'",
+                        workload, e, agent_id, parent_model
+                    );
+                    (parent_provider, parent_model)
+                }
+            },
+            None => {
+                log::warn!(
+                    "[subagent_runner] config load failed for workload '{}' (agent_id={}) — \
+                     falling back to parent provider + parent model '{}'",
+                    workload, agent_id, parent_model
+                );
+                (parent_provider, parent_model)
+            }
+        },
+        ModelSpec::Inherit => (parent_provider, parent_model),
+        ModelSpec::Exact(name) => (parent_provider, name.clone()),
+    }
+}
+
 /// Lazy resolver that lets `integrations_agent` recover when the model
 /// calls a Composio action slug that exists in the bound toolkit's full
 /// catalogue but was filtered out of the up-front fuzzy top-K. On a
@@ -200,63 +267,18 @@ async fn run_typed_mode(
 ) -> Result<SubagentRunOutcome, SubagentRunError> {
     let started = Instant::now();
 
-    // ── Resolve provider + model + temperature ─────────────────────────
-    //
-    // Sub-agent provider selection is keyed on the agent's declarative
-    // `[model]` spec:
-    //
-    //   • `Inherit` — use the parent's provider AND model. Literally
-    //     "do what the parent does".
-    //
-    //   • `Hint(workload)` — build a fresh provider via the per-workload
-    //     factory (e.g. `integrations_agent`'s `[model] hint = "agentic"`
-    //     resolves to whatever `agentic_provider` is routed to in
-    //     AI Settings). The factory returns the *exact* model id for that
-    //     workload — the OpenHuman backend and every third-party provider
-    //     accept exact model names, so there's no `{hint}-v1` synthesis.
-    //
-    //   • `Exact(name)` — escape hatch: use the parent's provider with
-    //     this model name overriding the parent's. Callers are expected
-    //     to know the model is valid for the parent's provider; the
-    //     enum is the wrong place to encode provider switching, which
-    //     belongs to `Hint` + AI-settings routing.
-    //
-    // Factory / config-load failures fall back to the parent's provider
-    // and parent's current model name so a config glitch can't sink
-    // sub-agent execution entirely.
-    use crate::openhuman::agent::harness::definition::ModelSpec;
-
-    let (subagent_provider, model): (Arc<dyn Provider>, String) = match &definition.model {
-        ModelSpec::Hint(workload) => match crate::openhuman::config::Config::load_or_init().await {
-            Ok(cfg) => match crate::openhuman::providers::create_chat_provider(workload, &cfg) {
-                Ok((p, m)) => {
-                    log::info!(
-                        "[subagent_runner] role={} agent_id={} resolved via workload factory model={}",
-                        workload, definition.id, m
-                    );
-                    (Arc::from(p), m)
-                }
-                Err(e) => {
-                    log::warn!(
-                        "[subagent_runner] workload '{}' provider build failed ({}) for agent_id={} — \
-                         falling back to parent provider + parent model '{}'",
-                        workload, e, definition.id, parent.model_name
-                    );
-                    (parent.provider.clone(), parent.model_name.clone())
-                }
-            },
-            Err(e) => {
-                log::warn!(
-                    "[subagent_runner] config load failed for workload '{}' (agent_id={}): {} — \
-                     falling back to parent provider + parent model '{}'",
-                    workload, definition.id, e, parent.model_name
-                );
-                (parent.provider.clone(), parent.model_name.clone())
-            }
-        },
-        ModelSpec::Inherit => (parent.provider.clone(), parent.model_name.clone()),
-        ModelSpec::Exact(name) => (parent.provider.clone(), name.clone()),
-    };
+    // Resolve provider + model. See `resolve_subagent_provider` for the
+    // semantics of each ModelSpec variant. `Config::load_or_init()` is
+    // async so the load is hoisted out of the helper — the helper itself
+    // is sync and unit-tested.
+    let config_loaded = crate::openhuman::config::Config::load_or_init().await;
+    let (subagent_provider, model) = resolve_subagent_provider(
+        &definition.model,
+        &definition.id,
+        config_loaded.as_ref().ok(),
+        parent.provider.clone(),
+        parent.model_name.clone(),
+    );
     let temperature = definition.temperature;
 
     // Archetype prompt loading is deferred until AFTER tool filtering so
