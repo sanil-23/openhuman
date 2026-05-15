@@ -232,13 +232,28 @@ fn make_openhuman_backend(config: &Config) -> anyhow::Result<(Box<dyn Provider>,
         .clone()
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| "reasoning-v1".to_string());
+    // Critical: pass the *config's* workspace directory through so the
+    // provider's `AuthService` reads `auth-profiles.json` from the
+    // same dir login wrote to. Without this, `ProviderRuntimeOptions::default()`
+    // leaves `openhuman_dir = None`, the provider falls back to
+    // `~/.openhuman`, and reads an unrelated (or empty)
+    // profile store — surfacing as "No backend session: store a JWT
+    // via auth (app-session)" even though login just succeeded in the
+    // user's actual workspace (e.g. test workspaces under OPENHUMAN_WORKSPACE).
+    let options = ProviderRuntimeOptions {
+        openhuman_dir: config.config_path.parent().map(std::path::PathBuf::from),
+        secrets_encrypt: config.secrets.encrypt,
+        ..ProviderRuntimeOptions::default()
+    };
     log::debug!(
-        "[providers][chat-factory] building openhuman backend provider model={}",
-        model
+        "[providers][chat-factory] building openhuman backend provider model={} state_dir={:?} secrets_encrypt={}",
+        model,
+        options.openhuman_dir,
+        options.secrets_encrypt
     );
     let p = Box::new(OpenHumanBackendProvider::new(
         config.api_url.as_deref(),
-        &ProviderRuntimeOptions::default(),
+        &options,
     ));
     Ok((p, model))
 }
