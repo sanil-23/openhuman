@@ -252,6 +252,27 @@ fn make_openhuman_backend(config: &Config) -> anyhow::Result<(Box<dyn Provider>,
         options.openhuman_dir,
         options.secrets_encrypt
     );
+    // Translate `hint:<tier>` model strings into the OpenHuman backend's
+    // canonical tier names. The legacy `create_intelligent_routing_provider`
+    // path did this inside `IntelligentRoutingProvider::resolve_remote_model`;
+    // #1710's factory bypassed that wrapper, which broke the web-chat
+    // `model_override` contract (json_rpc_e2e `routing_cases`):
+    // `hint:reasoning` was reaching the backend verbatim instead of
+    // `reasoning-v1`. We apply ONLY the model-name mapping here — not the
+    // full routing wrapper, which also injects local-AI health probing and
+    // a streaming shim that the web-chat SSE path doesn't tolerate (it
+    // hangs `chat_done`). Mapping mirrors `resolve_remote_model`'s
+    // heavy-tier arm exactly: known heavy tiers map to `<tier>-v1`;
+    // lightweight hints (`hint:reaction`, …) and already-exact tier names
+    // pass through untouched. Third-party cloud providers never see
+    // `hint:` strings, so this stays scoped to the OpenHuman backend.
+    let model = match model.strip_prefix("hint:") {
+        Some("reasoning") => crate::openhuman::config::MODEL_REASONING_V1.to_string(),
+        Some("chat") => crate::openhuman::config::MODEL_REASONING_QUICK_V1.to_string(),
+        Some("agentic") => crate::openhuman::config::MODEL_AGENTIC_V1.to_string(),
+        Some("coding") => crate::openhuman::config::MODEL_CODING_V1.to_string(),
+        _ => model,
+    };
     let p = Box::new(OpenHumanBackendProvider::new(
         config.api_url.as_deref(),
         &options,
