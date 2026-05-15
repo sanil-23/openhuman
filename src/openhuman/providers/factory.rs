@@ -51,7 +51,12 @@ pub fn provider_for_role(role: &str, config: &Config) -> String {
         "reasoning" => config.reasoning_provider.as_deref(),
         "agentic" => config.agentic_provider.as_deref(),
         "coding" => config.coding_provider.as_deref(),
-        "memory" => config.memory_provider.as_deref(),
+        // `memory_provider` covers both the memory-tree extract path and
+        // the summarizer sub-agent (whose definition declares
+        // `hint = "summarization"`). Both are "produce a condensed
+        // representation of input text" — same model class, no reason
+        // for a separate config knob.
+        "memory" | "summarization" => config.memory_provider.as_deref(),
         "embeddings" => config.embeddings_provider.as_deref(),
         "heartbeat" => config.heartbeat_provider.as_deref(),
         "learning" => config.learning_provider.as_deref(),
