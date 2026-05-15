@@ -48,6 +48,18 @@ struct SessionEntry {
     /// instead of invoking `build_session_agent` to re-resolve the
     /// target.
     target_agent_id: String,
+    /// `reasoning_provider` config value captured at build time. The
+    /// cached agent's provider was constructed from this string via
+    /// `create_chat_provider("reasoning", &config)`; if the user
+    /// changes their reasoning workload routing in Settings → AI
+    /// while a thread is warm, the next turn would otherwise reuse
+    /// the stale provider until the cache evicts.
+    ///
+    /// Other workloads (`agentic`, `coding`, `memory`, …) are read
+    /// per call inside the factory, so they don't need to participate
+    /// in cache invalidation — only the orchestrator's reasoning
+    /// provider is bound to the cached `Agent`.
+    reasoning_provider: Option<String>,
 }
 
 /// Decide which agent definition this turn should run with.
@@ -624,6 +636,14 @@ async fn run_chat_task(
     // turn from the cached welcome agent — the cache hit predicate
     // didn't know about the routing decision before Commit 13.
     let target_agent_id = pick_target_agent_id(&config).to_string();
+    // Capture the orchestrator's reasoning-workload routing string so the
+    // cache hit predicate can detect when the user changes it in Settings
+    // → AI → LLM. Other workloads (`agentic`, `coding`, `memory`, …) are
+    // re-resolved per call inside the factory, so they don't need cache
+    // invalidation — only the orchestrator's chat provider is bound at
+    // build time to whatever `reasoning_provider` was when this thread
+    // first warmed up.
+    let reasoning_provider = config.reasoning_provider.clone();
 
     let prior = {
         let mut sessions = THREAD_SESSIONS.lock().await;
@@ -634,7 +654,8 @@ async fn run_chat_task(
         Some(entry)
             if entry.model_override == model_override
                 && entry.temperature == temperature
-                && entry.target_agent_id == target_agent_id =>
+                && entry.target_agent_id == target_agent_id
+                && entry.reasoning_provider == reasoning_provider =>
         {
             log::info!(
                 "[web-channel] reusing cached session agent id={} for client={} thread={}",
@@ -646,9 +667,13 @@ async fn run_chat_task(
         }
         Some(prior_entry) => {
             log::info!(
-                "[web-channel] cache miss — rebuilding session agent (was id={}, now id={}) for client={} thread={}",
+                "[web-channel] cache miss — rebuilding session agent \
+                 (was id={}, now id={}; prior_reasoning_provider={:?}, now={:?}) \
+                 for client={} thread={}",
                 prior_entry.target_agent_id,
                 target_agent_id,
+                prior_entry.reasoning_provider,
+                reasoning_provider,
                 client_id,
                 thread_id
             );
@@ -784,6 +809,7 @@ async fn run_chat_task(
                 model_override,
                 temperature,
                 target_agent_id,
+                reasoning_provider,
             },
         );
     }
