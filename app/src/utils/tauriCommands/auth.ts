@@ -140,10 +140,7 @@ export async function authRemoveProviderCredentials(args: {
   }
   return await callCoreRpc<
     CommandResponse<{ removed: boolean; provider: string; profile: string }>
-  >({
-    method: 'openhuman.auth_remove_provider_credentials',
-    params: args,
-  });
+  >({ method: 'openhuman.auth_remove_provider_credentials', params: args });
 }
 
 /** List stored provider credential profiles, optionally filtered by provider. */

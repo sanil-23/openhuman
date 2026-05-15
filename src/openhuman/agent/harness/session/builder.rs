@@ -346,7 +346,8 @@ impl AgentBuilder {
         // the same name — OpenHuman's own backend and OpenAI silently
         // accept duplicates, which hid this bug until #1710's per-role
         // routing started sending the same tool list to Anthropic.
-        let visible_tool_specs: Vec<ToolSpec> = dedup_visible_tool_specs(visible_tool_specs_unfiltered);
+        let visible_tool_specs: Vec<ToolSpec> =
+            dedup_visible_tool_specs(visible_tool_specs_unfiltered);
 
         log::info!(
             "[agent] tool spec filter: total={} visible={} (filter_active={})",
@@ -1320,11 +1321,11 @@ mod dedup_tests {
         // are preserved (the underlying tool dispatch lookup-by-name
         // still resolves the right tool).
         let specs = vec![
-            spec("research"),       // skill
+            spec("research"), // skill
             spec("plan"),
-            spec("research"),       // delegate, dropped
+            spec("research"), // delegate, dropped
             spec("run_code"),
-            spec("plan"),           // dropped
+            spec("plan"), // dropped
         ];
 
         let deduped = dedup_visible_tool_specs(specs);
@@ -1365,6 +1366,9 @@ mod dedup_tests {
 
         assert_eq!(deduped.len(), 1);
         assert_eq!(deduped[0].description, "first alpha — should win");
-        assert_eq!(deduped[0].parameters, json!({"type": "object", "required": ["x"]}));
+        assert_eq!(
+            deduped[0].parameters,
+            json!({"type": "object", "required": ["x"]})
+        );
     }
 }

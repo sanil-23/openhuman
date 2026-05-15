@@ -130,7 +130,9 @@ pub(super) fn resolve_subagent_provider(
                 log::warn!(
                     "[subagent_runner] config load failed for workload '{}' (agent_id={}) — \
                      falling back to parent provider + parent model '{}'",
-                    workload, agent_id, parent_model
+                    workload,
+                    agent_id,
+                    parent_model
                 );
                 (parent_provider, parent_model)
             }

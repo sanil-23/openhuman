@@ -15,17 +15,16 @@
  * through this file. Keeps the wiring testable and the panel focused on
  * presentation.
  */
-
 import {
   authListProviderCredentials,
+  type AuthProfileSummary,
   authRemoveProviderCredentials,
   authStoreProviderCredentials,
-  type AuthProfileSummary,
 } from '../../utils/tauriCommands/auth';
 import {
+  type ClientConfig,
   type CloudProviderCreds,
   type CloudProviderType,
-  type ClientConfig,
   type ModelSettingsUpdate,
   openhumanGetClientConfig,
   openhumanUpdateLocalAiSettings,
@@ -35,7 +34,6 @@ import {
   type LocalAiDiagnostics,
   type LocalAiStatus,
   type ModelPresetResult,
-  type PresetsResponse,
   openhumanLocalAiApplyPreset,
   openhumanLocalAiDiagnostics,
   openhumanLocalAiDownload,
@@ -43,6 +41,7 @@ import {
   openhumanLocalAiSetOllamaPath,
   openhumanLocalAiShutdownOwned,
   openhumanLocalAiStatus,
+  type PresetsResponse,
 } from '../../utils/tauriCommands/localAi';
 
 // ─── Domain types — what the AIPanel consumes ──────────────────────────────
@@ -146,16 +145,14 @@ export function serializeProviderRef(ref: ProviderRef): string {
 export async function loadAISettings(): Promise<AISettings> {
   const [configRes, profilesRes] = await Promise.all([
     openhumanGetClientConfig(),
-    authListProviderCredentials().catch((): { result: AuthProfileSummary[] } => ({
-      result: [],
-    })),
+    authListProviderCredentials().catch((): { result: AuthProfileSummary[] } => ({ result: [] })),
   ]);
   const config: ClientConfig = configRes.result;
   const profilesByProvider = new Set(
     profilesRes.result.map((p: AuthProfileSummary) => p.provider.toLowerCase())
   );
 
-  const cloudProviders: CloudProviderView[] = config.cloud_providers.map((p) => ({
+  const cloudProviders: CloudProviderView[] = config.cloud_providers.map(p => ({
     ...p,
     has_api_key: profilesByProvider.has(p.type.toLowerCase()),
   }));
@@ -171,11 +168,7 @@ export async function loadAISettings(): Promise<AISettings> {
     subconscious: parseProviderString(config.subconscious_provider),
   };
 
-  return {
-    cloudProviders,
-    primaryCloudId: config.primary_cloud,
-    routing,
-  };
+  return { cloudProviders, primaryCloudId: config.primary_cloud, routing };
 }
 
 // ─── Write path: diff + save ───────────────────────────────────────────────
@@ -255,10 +248,7 @@ export async function clearCloudProviderKey(providerType: CloudProviderType): Pr
   if (providerType === 'openhuman') {
     return;
   }
-  await authRemoveProviderCredentials({
-    provider: providerType,
-    profile: 'default',
-  });
+  await authRemoveProviderCredentials({ provider: providerType, profile: 'default' });
 }
 
 // ─── Local provider façade (Ollama install / detect / model manage) ───────
@@ -273,11 +263,7 @@ export interface LocalProviderSnapshot {
 
 export async function loadLocalProviderSnapshot(): Promise<LocalProviderSnapshot> {
   const [statusRes, diag, presets] = await Promise.all([
-    openhumanLocalAiStatus().catch(
-      (): { result: LocalAiStatus | null } => ({
-        result: null,
-      })
-    ),
+    openhumanLocalAiStatus().catch((): { result: LocalAiStatus | null } => ({ result: null })),
     openhumanLocalAiDiagnostics().catch((): LocalAiDiagnostics | null => null),
     openhumanLocalAiPresets().catch((): PresetsResponse | null => null),
   ]);
@@ -305,10 +291,7 @@ export async function loadLocalProviderSnapshot(): Promise<LocalProviderSnapshot
  * the user a single-click enable.
  */
 export async function setLocalRuntimeEnabled(enabled: boolean): Promise<void> {
-  await openhumanUpdateLocalAiSettings({
-    runtime_enabled: enabled,
-    opt_in_confirmed: enabled,
-  });
+  await openhumanUpdateLocalAiSettings({ runtime_enabled: enabled, opt_in_confirmed: enabled });
 }
 
 /**

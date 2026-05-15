@@ -64,7 +64,11 @@ pub fn provider_for_role(role: &str, config: &Config) -> String {
         _ => None,
     };
     let s = opt.unwrap_or("").trim();
-    if s.is_empty() { PROVIDER_CLOUD.to_string() } else { s.to_string() }
+    if s.is_empty() {
+        PROVIDER_CLOUD.to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 /// Build a `(Provider, model)` for the given workload role.
@@ -166,10 +170,7 @@ fn resolve_cloud_primary(
 ) -> anyhow::Result<(Box<dyn Provider>, String)> {
     // Find the primary entry (or fall back to an OpenHuman entry / first entry).
     let entry = if let Some(ref primary_id) = config.primary_cloud {
-        config
-            .cloud_providers
-            .iter()
-            .find(|e| &e.id == primary_id)
+        config.cloud_providers.iter().find(|e| &e.id == primary_id)
     } else {
         None
     };
@@ -394,7 +395,10 @@ mod tests {
     };
     use crate::openhuman::config::Config;
 
-    fn config_with_providers(providers: Vec<CloudProviderCreds>, primary: Option<String>) -> Config {
+    fn config_with_providers(
+        providers: Vec<CloudProviderCreds>,
+        primary: Option<String>,
+    ) -> Config {
         let mut c = Config::default();
         c.cloud_providers = providers;
         c.primary_cloud = primary;
@@ -442,15 +446,16 @@ mod tests {
     fn cloud_no_providers_falls_back_to_openhuman() {
         let config = Config::default();
         let result = create_chat_provider_from_string("reasoning", "cloud", &config);
-        assert!(result.is_ok(), "cloud fallback must succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "cloud fallback must succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
     fn cloud_with_openhuman_primary() {
-        let config = config_with_providers(
-            vec![oh_entry("p_oh")],
-            Some("p_oh".to_string()),
-        );
+        let config = config_with_providers(vec![oh_entry("p_oh")], Some("p_oh".to_string()));
         let (_, model) = create_chat_provider_from_string("reasoning", "cloud", &config)
             .expect("cloud→openhuman primary must build");
         assert!(!model.is_empty());
@@ -459,14 +464,11 @@ mod tests {
     #[test]
     fn cloud_with_openai_primary() {
         let config = config_with_providers(
-            vec![
-                oh_entry("p_oh"),
-                openai_entry("p_oai", "gpt-4o"),
-            ],
+            vec![oh_entry("p_oh"), openai_entry("p_oai", "gpt-4o")],
             Some("p_oai".to_string()),
         );
-        let (_, model) =
-            create_chat_provider_from_string("reasoning", "cloud", &config).expect("cloud→openai primary must build");
+        let (_, model) = create_chat_provider_from_string("reasoning", "cloud", &config)
+            .expect("cloud→openai primary must build");
         assert_eq!(model, "gpt-4o");
     }
 
@@ -480,7 +482,8 @@ mod tests {
 
     #[test]
     fn anthropic_prefix() {
-        let config = config_with_providers(vec![anthropic_entry("p_ant", "claude-sonnet-4-6")], None);
+        let config =
+            config_with_providers(vec![anthropic_entry("p_ant", "claude-sonnet-4-6")], None);
         let (_, model) =
             create_chat_provider_from_string("coding", "anthropic:claude-sonnet-4-6", &config)
                 .expect("anthropic:<model> must build");
@@ -496,9 +499,12 @@ mod tests {
             endpoint: "https://openrouter.ai/api/v1".to_string(),
             default_model: "openai/gpt-4o".to_string(),
         });
-        let (_, model) =
-            create_chat_provider_from_string("agentic", "openrouter:meta-llama/llama-3.1-8b", &config)
-                .expect("openrouter:<model> must build");
+        let (_, model) = create_chat_provider_from_string(
+            "agentic",
+            "openrouter:meta-llama/llama-3.1-8b",
+            &config,
+        )
+        .expect("openrouter:<model> must build");
         assert_eq!(model, "meta-llama/llama-3.1-8b");
     }
 
@@ -517,10 +523,20 @@ mod tests {
     fn all_workloads_default_to_cloud() {
         let config = Config::default();
         for role in &[
-            "reasoning", "agentic", "coding", "memory",
-            "embeddings", "heartbeat", "learning", "subconscious",
+            "reasoning",
+            "agentic",
+            "coding",
+            "memory",
+            "embeddings",
+            "heartbeat",
+            "learning",
+            "subconscious",
         ] {
-            assert_eq!(provider_for_role(role, &config), "cloud", "role={role} must default to cloud");
+            assert_eq!(
+                provider_for_role(role, &config),
+                "cloud",
+                "role={role} must default to cloud"
+            );
         }
     }
 
@@ -528,7 +544,10 @@ mod tests {
     fn workload_override_respected() {
         let mut config = Config::default();
         config.heartbeat_provider = Some("ollama:llama3.2:3b".to_string());
-        assert_eq!(provider_for_role("heartbeat", &config), "ollama:llama3.2:3b");
+        assert_eq!(
+            provider_for_role("heartbeat", &config),
+            "ollama:llama3.2:3b"
+        );
         assert_eq!(provider_for_role("reasoning", &config), "cloud");
     }
 
@@ -538,7 +557,8 @@ mod tests {
         config.cloud_providers.push(openai_entry("p_oai", "gpt-4o"));
         config.primary_cloud = Some("p_oai".to_string());
         config.reasoning_provider = Some("openai:gpt-4o-mini".to_string());
-        let (_, model) = create_chat_provider("reasoning", &config).expect("create_chat_provider must succeed");
+        let (_, model) =
+            create_chat_provider("reasoning", &config).expect("create_chat_provider must succeed");
         assert_eq!(model, "gpt-4o-mini");
     }
 
@@ -553,7 +573,10 @@ mod tests {
         let err = create_chat_provider_from_string("reasoning", "groq:llama3", &config)
             .err()
             .expect("unknown provider string must fail");
-        assert!(err.to_string().contains("unrecognised provider string"), "{err}");
+        assert!(
+            err.to_string().contains("unrecognised provider string"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -573,7 +596,10 @@ mod tests {
             .err()
             .expect("missing creds must fail");
         let msg = err.to_string();
-        assert!(msg.contains("no cloud provider configured for type 'openai'"), "{msg}");
+        assert!(
+            msg.contains("no cloud provider configured for type 'openai'"),
+            "{msg}"
+        );
     }
 
     #[test]
@@ -644,5 +670,4 @@ mod tests {
         // wired without panic.
         assert!(!model.is_empty(), "model must be set");
     }
-
 }

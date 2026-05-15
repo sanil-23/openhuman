@@ -156,10 +156,7 @@ export const useSettingsNavigation = (): SettingsNavigationHook => {
     onClick: () => navigate('/settings/features'),
   };
 
-  const aiCrumb: BreadcrumbItem = {
-    label: 'AI',
-    onClick: () => navigate('/settings/ai'),
-  };
+  const aiCrumb: BreadcrumbItem = { label: 'AI', onClick: () => navigate('/settings/ai') };
 
   const teamCrumb: BreadcrumbItem = { label: 'Team', onClick: () => navigate('/settings/team') };
 

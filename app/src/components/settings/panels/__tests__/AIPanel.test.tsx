@@ -1,6 +1,7 @@
 import { screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { loadAISettings, loadLocalProviderSnapshot } from '../../../../services/api/aiSettingsApi';
 import { renderWithProviders } from '../../../../test/test-utils';
 import AIPanel from '../AIPanel';
 
@@ -23,16 +24,8 @@ vi.mock('../../../../services/api/aiSettingsApi', () => ({
   serializeProviderRef: vi.fn((r: { kind: string; model?: string }) =>
     r.kind === 'primary' ? 'cloud' : r.kind === 'local' ? `ollama:${r.model}` : `cloud:${r.model}`
   ),
-  localProvider: {
-    download: vi.fn(),
-    applyPreset: vi.fn(),
-  },
+  localProvider: { download: vi.fn(), applyPreset: vi.fn() },
 }));
-
-import {
-  loadAISettings,
-  loadLocalProviderSnapshot,
-} from '../../../../services/api/aiSettingsApi';
 
 vi.mock('../../hooks/useSettingsNavigation', () => ({
   useSettingsNavigation: () => ({
@@ -84,9 +77,7 @@ describe('AIPanel', () => {
     // ("only use cloud providers" appears in the local-provider
     // explanation, "Primary" appears on the provider card badge AND in
     // workload routing rows).
-    await waitFor(() =>
-      expect(screen.getAllByText(/Cloud providers/i).length).toBeGreaterThan(0)
-    );
+    await waitFor(() => expect(screen.getAllByText(/Cloud providers/i).length).toBeGreaterThan(0));
     expect(screen.getAllByText(/Local provider/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Workload routing/i).length).toBeGreaterThan(0);
   });

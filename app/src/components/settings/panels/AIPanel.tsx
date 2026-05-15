@@ -8,7 +8,6 @@
  * whichever cloud provider is currently marked primary. Overrides are explicit
  * per row, so the resolved provider+model is always rendered inline.
  */
-
 import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   LuCheck,
@@ -31,18 +30,18 @@ import {
 
 import {
   type AISettings as ApiAISettings,
-  type CloudProviderView,
-  type LocalProviderSnapshot,
   type ProviderRef as ApiProviderRef,
   clearCloudProviderKey,
+  type CloudProviderView,
   loadAISettings,
   loadLocalProviderSnapshot,
   localProvider,
+  type LocalProviderSnapshot,
   saveAISettings,
   setCloudProviderKey,
 } from '../../../services/api/aiSettingsApi';
-import type { CloudProviderType as ApiCloudProviderType } from '../../../utils/tauriCommands/config';
 import { openUrl } from '../../../utils/openUrl';
+import type { CloudProviderType as ApiCloudProviderType } from '../../../utils/tauriCommands/config';
 import SettingsHeader from '../components/SettingsHeader';
 import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
 
@@ -63,11 +62,7 @@ type CloudProvider = {
 
 type OllamaState = 'disabled' | 'missing' | 'stopped' | 'starting' | 'running' | 'error';
 
-type OllamaModel = {
-  id: string;
-  sizeBytes: number;
-  family: string;
-};
+type OllamaModel = { id: string; sizeBytes: number; family: string };
 
 type WorkloadId =
   | 'reasoning'
@@ -86,12 +81,7 @@ type ProviderRef =
   | { kind: 'cloud'; providerId: string; model: string }
   | { kind: 'local'; model: string };
 
-type Workload = {
-  id: WorkloadId;
-  group: WorkloadGroup;
-  label: string;
-  description: string;
-};
+type Workload = { id: WorkloadId; group: WorkloadGroup; label: string; description: string };
 
 type RoutingMap = Record<WorkloadId, ProviderRef>;
 
@@ -100,14 +90,54 @@ type RoutingMap = Record<WorkloadId, ProviderRef>;
 // ─────────────────────────────────────────────────────────────────────────────
 
 const WORKLOADS: Workload[] = [
-  { id: 'reasoning', group: 'chat', label: 'Reasoning', description: 'Main chat agent, meeting summarizer' },
-  { id: 'agentic', group: 'chat', label: 'Agentic', description: 'Sub-agent runners, tool loops, GIF decisions' },
-  { id: 'coding', group: 'chat', label: 'Coding', description: 'Code generation and refactor passes' },
-  { id: 'memory', group: 'background', label: 'Memory summarization', description: 'Tree-extracts and consolidations' },
-  { id: 'embeddings', group: 'background', label: 'Embeddings', description: 'Vector encoding for memory retrieval' },
-  { id: 'heartbeat', group: 'background', label: 'Heartbeat', description: 'Background reasoning between user turns' },
-  { id: 'learning', group: 'background', label: 'Learning · Reflections', description: 'Periodic reflection over recent history' },
-  { id: 'subconscious', group: 'background', label: 'Subconscious', description: 'Eventfulness scoring + drift checks' },
+  {
+    id: 'reasoning',
+    group: 'chat',
+    label: 'Reasoning',
+    description: 'Main chat agent, meeting summarizer',
+  },
+  {
+    id: 'agentic',
+    group: 'chat',
+    label: 'Agentic',
+    description: 'Sub-agent runners, tool loops, GIF decisions',
+  },
+  {
+    id: 'coding',
+    group: 'chat',
+    label: 'Coding',
+    description: 'Code generation and refactor passes',
+  },
+  {
+    id: 'memory',
+    group: 'background',
+    label: 'Memory summarization',
+    description: 'Tree-extracts and consolidations',
+  },
+  {
+    id: 'embeddings',
+    group: 'background',
+    label: 'Embeddings',
+    description: 'Vector encoding for memory retrieval',
+  },
+  {
+    id: 'heartbeat',
+    group: 'background',
+    label: 'Heartbeat',
+    description: 'Background reasoning between user turns',
+  },
+  {
+    id: 'learning',
+    group: 'background',
+    label: 'Learning · Reflections',
+    description: 'Periodic reflection over recent history',
+  },
+  {
+    id: 'subconscious',
+    group: 'background',
+    label: 'Subconscious',
+    description: 'Eventfulness scoring + drift checks',
+  },
 ];
 
 const PROVIDER_META: Record<
@@ -160,11 +190,7 @@ const TIER_PRESETS = [
 // provider TYPE, not id. These hooks bridge the two.
 // ─────────────────────────────────────────────────────────────────────────────
 
-type AISettings = {
-  cloudProviders: CloudProvider[];
-  primaryCloudId: string;
-  routing: RoutingMap;
-};
+type AISettings = { cloudProviders: CloudProvider[]; primaryCloudId: string; routing: RoutingMap };
 
 const EMPTY_SETTINGS: AISettings = {
   cloudProviders: [],
@@ -235,18 +261,14 @@ function toPanelRoutingFromApi(api: ApiAISettings): { panel: AISettings } {
 function toApiRefFromPanel(r: ProviderRef, providers: CloudProvider[]): ApiProviderRef {
   if (r.kind === 'primary') return { kind: 'primary' };
   if (r.kind === 'local') return { kind: 'local', model: r.model };
-  const entry = providers.find((p) => p.id === r.providerId);
+  const entry = providers.find(p => p.id === r.providerId);
   if (!entry) return { kind: 'primary' };
-  return {
-    kind: 'cloud',
-    providerType: entry.type as ApiCloudProviderType,
-    model: r.model,
-  };
+  return { kind: 'cloud', providerType: entry.type as ApiCloudProviderType, model: r.model };
 }
 
 function toApiSettings(panel: AISettings): ApiAISettings {
   return {
-    cloudProviders: panel.cloudProviders.map((p) => ({
+    cloudProviders: panel.cloudProviders.map(p => ({
       id: p.id,
       type: p.type as ApiCloudProviderType,
       endpoint: p.endpoint,
@@ -350,11 +372,10 @@ function useOllamaStatus() {
     return 'stopped';
   }, [snapshot]);
 
-  const version =
-    snapshot?.diagnostics?.ollama_binary_path
-      ? // Diagnostics doesn't surface a version string today; show the binary path tail.
-        snapshot.diagnostics.ollama_binary_path.split(/[\\/]/).pop() ?? ''
-      : '';
+  const version = snapshot?.diagnostics?.ollama_binary_path
+    ? // Diagnostics doesn't surface a version string today; show the binary path tail.
+      (snapshot.diagnostics.ollama_binary_path.split(/[\\/]/).pop() ?? '')
+    : '';
 
   return { state, version, snapshot, refresh };
 }
@@ -362,7 +383,7 @@ function useOllamaStatus() {
 function useInstalledModels(snapshot: LocalProviderSnapshot | null): OllamaModel[] {
   return useMemo(() => {
     const list = snapshot?.installedModels ?? [];
-    return list.map((m) => ({
+    return list.map(m => ({
       id: m.name,
       sizeBytes: m.size ?? 0,
       family: m.name.split(/[:/]/, 1)[0] ?? 'model',
@@ -386,13 +407,18 @@ const formatBytes = (n: number): string => {
 
 const StatusDot = ({ state }: { state: OllamaState }) => {
   const tone =
-    state === 'running' ? 'bg-sage-500'
-      : state === 'starting' ? 'bg-amber-500'
-      : state === 'error' ? 'bg-coral-500'
-      : 'bg-stone-300';
+    state === 'running'
+      ? 'bg-sage-500'
+      : state === 'starting'
+        ? 'bg-amber-500'
+        : state === 'error'
+          ? 'bg-coral-500'
+          : 'bg-stone-300';
   return (
     <span className="relative inline-flex h-2 w-2 items-center justify-center">
-      <span className={`absolute inset-0 rounded-full ${tone} ${state === 'running' ? 'animate-glow-pulse' : ''}`} />
+      <span
+        className={`absolute inset-0 rounded-full ${tone} ${state === 'running' ? 'animate-glow-pulse' : ''}`}
+      />
     </span>
   );
 };
@@ -400,7 +426,8 @@ const StatusDot = ({ state }: { state: OllamaState }) => {
 const ProviderChip = ({ type }: { type: CloudProviderType }) => {
   const meta = PROVIDER_META[type];
   return (
-    <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset ${meta.pill}`}>
+    <span
+      className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset ${meta.pill}`}>
       {meta.icon}
       {meta.label}
     </span>
@@ -521,7 +548,7 @@ const WorkloadRow = ({
 }: WorkloadRowProps) => {
   const localAvailable = ollamaState === 'running' && localModels.length > 0;
   const selectedCloud =
-    ref_.kind === 'cloud' ? cloudProviders.find((c) => c.id === ref_.providerId) : undefined;
+    ref_.kind === 'cloud' ? cloudProviders.find(c => c.id === ref_.providerId) : undefined;
 
   const tabBase = 'flex-1 px-2 py-1 text-[11px] font-medium transition-colors';
   const tab = (active: boolean, disabled = false) =>
@@ -561,7 +588,7 @@ const WorkloadRow = ({
           </button>
           <button
             onClick={() => {
-              const p = cloudProviders.find((c) => c.id !== primary?.id) ?? cloudProviders[0];
+              const p = cloudProviders.find(c => c.id !== primary?.id) ?? cloudProviders[0];
               if (!p) return;
               onChange({
                 kind: 'cloud',
@@ -591,8 +618,8 @@ const WorkloadRow = ({
         <div className="flex items-center justify-end gap-1.5">
           <select
             value={ref_.providerId}
-            onChange={(e) => {
-              const p = cloudProviders.find((c) => c.id === e.target.value)!;
+            onChange={e => {
+              const p = cloudProviders.find(c => c.id === e.target.value)!;
               onChange({
                 kind: 'cloud',
                 providerId: p.id,
@@ -600,7 +627,7 @@ const WorkloadRow = ({
               });
             }}
             className="rounded-md border border-stone-300 bg-white px-2 py-1 font-mono text-[11px] text-stone-800 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200">
-            {cloudProviders.map((p) => (
+            {cloudProviders.map(p => (
               <option key={p.id} value={p.id}>
                 {PROVIDER_META[p.type].label}
               </option>
@@ -609,7 +636,7 @@ const WorkloadRow = ({
           {selectedCloud?.type !== 'openhuman' && (
             <input
               value={ref_.model}
-              onChange={(e) =>
+              onChange={e =>
                 onChange({ kind: 'cloud', providerId: ref_.providerId, model: e.target.value })
               }
               className="w-28 rounded-md border border-stone-300 bg-white px-2 py-1 font-mono text-[11px] text-stone-800 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
@@ -621,9 +648,9 @@ const WorkloadRow = ({
         <div className="flex justify-end">
           <select
             value={ref_.model}
-            onChange={(e) => onChange({ kind: 'local', model: e.target.value })}
+            onChange={e => onChange({ kind: 'local', model: e.target.value })}
             className="rounded-md border border-stone-300 bg-white px-2 py-1 font-mono text-[11px] text-stone-800 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200">
-            {localModels.map((m) => (
+            {localModels.map(m => (
               <option key={m.id} value={m.id}>
                 {m.id}
               </option>
@@ -711,7 +738,7 @@ const AIPanel = () => {
     daemonWarning.toLowerCase().includes('broken runner');
 
   const primary = useMemo(
-    () => draft.cloudProviders.find((p) => p.id === draft.primaryCloudId),
+    () => draft.cloudProviders.find(p => p.id === draft.primaryCloudId),
     [draft]
   );
 
@@ -751,14 +778,14 @@ const AIPanel = () => {
       }
     }
     if (saved.primaryCloudId !== draft.primaryCloudId) {
-      const p = draft.cloudProviders.find((cp) => cp.id === draft.primaryCloudId);
+      const p = draft.cloudProviders.find(cp => cp.id === draft.primaryCloudId);
       out.push(`primary → ${p ? PROVIDER_META[p.type].label : '—'}`);
     }
     return out;
   }, [saved, draft]);
 
-  const chatRows = WORKLOADS.filter((w) => w.group === 'chat');
-  const bgRows = WORKLOADS.filter((w) => w.group === 'background');
+  const chatRows = WORKLOADS.filter(w => w.group === 'chat');
+  const bgRows = WORKLOADS.filter(w => w.group === 'background');
 
   return (
     <div className="relative">
@@ -777,9 +804,7 @@ const AIPanel = () => {
             </button>
           </div>
 
-          {loading && (
-            <div className="text-xs text-stone-500">Loading…</div>
-          )}
+          {loading && <div className="text-xs text-stone-500">Loading…</div>}
           {error && (
             <div className="rounded-md border border-coral-200 bg-coral-50 px-3 py-2 text-xs text-coral-700">
               {error}
@@ -787,7 +812,7 @@ const AIPanel = () => {
           )}
 
           <div className="space-y-2">
-            {draft.cloudProviders.map((p) => (
+            {draft.cloudProviders.map(p => (
               <CloudProviderCard
                 key={p.id}
                 provider={p}
@@ -797,7 +822,7 @@ const AIPanel = () => {
                 onRemove={() =>
                   setDraft({
                     ...draft,
-                    cloudProviders: draft.cloudProviders.filter((cp) => cp.id !== p.id),
+                    cloudProviders: draft.cloudProviders.filter(cp => cp.id !== p.id),
                   })
                 }
               />
@@ -818,9 +843,7 @@ const AIPanel = () => {
               transition. */}
           <label
             className={`flex items-start gap-3 rounded-lg border border-stone-200 bg-white px-3 py-2.5 transition-opacity ${
-              busyAction === 'toggle-local'
-                ? 'cursor-wait opacity-80'
-                : 'cursor-pointer'
+              busyAction === 'toggle-local' ? 'cursor-wait opacity-80' : 'cursor-pointer'
             }`}>
             {busyAction === 'toggle-local' ? (
               <span className="mt-0.5 flex h-3.5 w-3.5 items-center justify-center">
@@ -830,7 +853,7 @@ const AIPanel = () => {
               <input
                 type="checkbox"
                 checked={ollama.state !== 'disabled'}
-                onChange={async (e) => {
+                onChange={async e => {
                   const next = e.target.checked;
                   setBusyAction('toggle-local');
                   try {
@@ -860,7 +883,7 @@ const AIPanel = () => {
                     const targetReached = (s: string) =>
                       next ? Boolean(s) && s !== 'disabled' : s === 'disabled';
                     while (Date.now() - startedAt < 10_000) {
-                      await new Promise((r) => setTimeout(r, 500));
+                      await new Promise(r => setTimeout(r, 500));
                       const fresh = await ollama.refresh();
                       const freshState = fresh?.status?.state ?? '';
                       if (targetReached(freshState)) break;
@@ -880,9 +903,7 @@ const AIPanel = () => {
             )}
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-stone-900">
-                  Enable local AI (Ollama)
-                </span>
+                <span className="text-sm font-medium text-stone-900">Enable local AI (Ollama)</span>
                 {busyAction === 'toggle-local' && (
                   <span className="text-[10px] font-medium uppercase tracking-widest text-primary-500">
                     {ollama.state === 'disabled' ? 'Starting…' : 'Stopping…'}
@@ -891,8 +912,8 @@ const AIPanel = () => {
               </div>
               <div className="text-xs text-stone-500">
                 Manages the on-device Ollama daemon used by any workload routed to
-                <span className="font-mono"> ollama:&lt;model&gt;</span>. Turn off if you
-                only use cloud providers — saves CPU + RAM.
+                <span className="font-mono"> ollama:&lt;model&gt;</span>. Turn off if you only use
+                cloud providers — saves CPU + RAM.
               </div>
             </div>
           </label>
@@ -931,11 +952,7 @@ const AIPanel = () => {
                 }}
                 disabled={busyAction === 'download' || ollama.state === 'disabled'}
                 className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-2 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
-                title={
-                  ollama.state === 'disabled'
-                    ? 'Enable local AI above first'
-                    : undefined
-                }>
+                title={ollama.state === 'disabled' ? 'Enable local AI above first' : undefined}>
                 {busyAction === 'download' ? (
                   <LuLoader className="h-3 w-3 animate-spin" />
                 ) : (
@@ -963,7 +980,7 @@ const AIPanel = () => {
                     : 'Pick a tier preset to install a default model.'}
                 </p>
                 <div className="mt-2 space-y-1.5">
-                  {(ollama.snapshot?.presets?.presets ?? []).map((t) => (
+                  {(ollama.snapshot?.presets?.presets ?? []).map(t => (
                     <button
                       key={t.tier}
                       onClick={async () => {
@@ -988,7 +1005,7 @@ const AIPanel = () => {
                     </button>
                   ))}
                   {(ollama.snapshot?.presets?.presets ?? []).length === 0 &&
-                    TIER_PRESETS.map((t) => (
+                    TIER_PRESETS.map(t => (
                       <div
                         key={t.id}
                         className="flex w-full items-center justify-between rounded-md border border-dashed border-stone-200 bg-white/60 px-2.5 py-2 text-left opacity-70">
@@ -1006,10 +1023,12 @@ const AIPanel = () => {
             ) : (
               <>
                 <ul className="divide-y divide-stone-200">
-                  {installed.map((m) => (
+                  {installed.map(m => (
                     <li key={m.id} className="flex items-center gap-2 px-3 py-2">
                       <LuCpu className="h-3 w-3 text-stone-400" />
-                      <span className="flex-1 truncate font-mono text-xs text-stone-800">{m.id}</span>
+                      <span className="flex-1 truncate font-mono text-xs text-stone-800">
+                        {m.id}
+                      </span>
                       <span className="font-mono text-[10px] text-stone-400">
                         {formatBytes(m.sizeBytes)}
                       </span>
@@ -1057,18 +1076,23 @@ const AIPanel = () => {
               <div className="font-medium">Conflicting Ollama daemon detected</div>
               <div>
                 Another Ollama process is bound to <span className="font-mono">:11434</span> but
-                OpenHuman didn&apos;t start it, so it can&apos;t safely restart it on your
-                behalf. To recover:
+                OpenHuman didn&apos;t start it, so it can&apos;t safely restart it on your behalf.
+                To recover:
               </div>
               <ol className="list-decimal pl-5 space-y-0.5">
                 <li>
                   Stop the running Ollama (Windows Task Manager → end{' '}
-                  <span className="font-mono">ollama.exe</span> / <span className="font-mono">ollama app.exe</span>,
-                  or <span className="font-mono">taskkill /F /IM ollama.exe</span>).
+                  <span className="font-mono">ollama.exe</span> /{' '}
+                  <span className="font-mono">ollama app.exe</span>, or{' '}
+                  <span className="font-mono">taskkill /F /IM ollama.exe</span>).
                 </li>
-                <li>Click <span className="font-medium">Retry</span> above — OpenHuman will spawn its own managed daemon.</li>
                 <li>
-                  Or, if you want to keep your install, set its binary path below — OpenHuman will use yours.
+                  Click <span className="font-medium">Retry</span> above — OpenHuman will spawn its
+                  own managed daemon.
+                </li>
+                <li>
+                  Or, if you want to keep your install, set its binary path below — OpenHuman will
+                  use yours.
                 </li>
               </ol>
               {daemonWarning && (
@@ -1086,7 +1110,7 @@ const AIPanel = () => {
               override. */}
           <details
             open={advancedOpen}
-            onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
+            onToggle={e => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
             className="rounded-lg border border-stone-200 bg-white">
             <summary className="cursor-pointer select-none px-3 py-2 text-xs font-semibold uppercase tracking-wide text-stone-500 hover:text-stone-700">
               Advanced
@@ -1097,7 +1121,8 @@ const AIPanel = () => {
                   Resolved Ollama binary
                 </div>
                 <div className="mt-0.5 truncate font-mono text-[11px] text-stone-700">
-                  {resolvedBinaryPath || '— not detected; OpenHuman will auto-install on next start'}
+                  {resolvedBinaryPath ||
+                    '— not detected; OpenHuman will auto-install on next start'}
                 </div>
               </div>
               <div>
@@ -1108,7 +1133,7 @@ const AIPanel = () => {
                   <input
                     type="text"
                     value={customPathInput}
-                    onChange={(e) => setCustomPathInput(e.target.value)}
+                    onChange={e => setCustomPathInput(e.target.value)}
                     placeholder="e.g. C:\Program Files\Ollama\ollama.exe"
                     className="min-w-0 flex-1 rounded-md border border-stone-300 bg-white px-2 py-1 font-mono text-[11px] text-stone-800 placeholder:text-stone-400 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
                   />
@@ -1149,8 +1174,9 @@ const AIPanel = () => {
                   )}
                 </div>
                 <div className="mt-1 text-[10px] text-stone-500">
-                  Empty = auto-detect (workspace install → <span className="font-mono">OLLAMA_BIN</span>
-                  {' '}env → system <span className="font-mono">PATH</span> → managed install).
+                  Empty = auto-detect (workspace install →{' '}
+                  <span className="font-mono">OLLAMA_BIN</span> env → system{' '}
+                  <span className="font-mono">PATH</span> → managed install).
                 </div>
               </div>
             </div>
@@ -1186,7 +1212,7 @@ const AIPanel = () => {
                 Chat
               </div>
               <div className="divide-y divide-stone-200">
-                {chatRows.map((w) => (
+                {chatRows.map(w => (
                   <WorkloadRow
                     key={w.id}
                     workload={w}
@@ -1195,7 +1221,7 @@ const AIPanel = () => {
                     cloudProviders={draft.cloudProviders}
                     localModels={installed}
                     ollamaState={ollama.state}
-                    onChange={(next) => updateRouting(w.id, next)}
+                    onChange={next => updateRouting(w.id, next)}
                   />
                 ))}
               </div>
@@ -1205,7 +1231,7 @@ const AIPanel = () => {
                 Background
               </div>
               <div className="divide-y divide-stone-200">
-                {bgRows.map((w) => (
+                {bgRows.map(w => (
                   <WorkloadRow
                     key={w.id}
                     workload={w}
@@ -1214,7 +1240,7 @@ const AIPanel = () => {
                     cloudProviders={draft.cloudProviders}
                     localModels={installed}
                     ollamaState={ollama.state}
-                    onChange={(next) => updateRouting(w.id, next)}
+                    onChange={next => updateRouting(w.id, next)}
                   />
                 ))}
               </div>
@@ -1247,8 +1273,8 @@ const AIPanel = () => {
         <CloudProviderEditor
           initial={editing === 'new' ? null : editing}
           existingTypes={draft.cloudProviders
-            .filter((p) => p.id !== (editing === 'new' ? '' : editing.id))
-            .map((p) => p.type)}
+            .filter(p => p.id !== (editing === 'new' ? '' : editing.id))
+            .map(p => p.type)}
           onClose={() => setEditing(null)}
           onSubmit={async (next, apiKey) => {
             setBusyAction('save-provider');
@@ -1265,7 +1291,7 @@ const AIPanel = () => {
               const list =
                 editing === 'new'
                   ? [...draft.cloudProviders, upserted]
-                  : draft.cloudProviders.map((p) => (p.id === editing.id ? upserted : p));
+                  : draft.cloudProviders.map(p => (p.id === editing.id ? upserted : p));
               setDraft({
                 ...draft,
                 cloudProviders: list,
@@ -1285,7 +1311,7 @@ const AIPanel = () => {
               setBusyAction(null);
             }
           }}
-          onClearKey={async (type) => {
+          onClearKey={async type => {
             try {
               await clearCloudProviderKey(type as ApiCloudProviderType);
               await reload();
@@ -1321,13 +1347,11 @@ const CloudProviderEditor = ({
   const defaultType: CloudProviderType =
     initial?.type ??
     (['openai', 'anthropic', 'openrouter', 'custom'] as CloudProviderType[]).find(
-      (t) => !existingTypes.includes(t)
+      t => !existingTypes.includes(t)
     ) ??
     'custom';
   const [type, setType] = useState<CloudProviderType>(defaultType);
-  const [endpoint, setEndpoint] = useState(
-    initial?.endpoint ?? defaultEndpointFor(defaultType)
-  );
+  const [endpoint, setEndpoint] = useState(initial?.endpoint ?? defaultEndpointFor(defaultType));
   const [defaultModel, setDefaultModel] = useState(initial?.defaultModel ?? '');
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
@@ -1352,7 +1376,7 @@ const CloudProviderEditor = ({
             </label>
             <select
               value={type}
-              onChange={(e) => {
+              onChange={e => {
                 const next = e.target.value as CloudProviderType;
                 setType(next);
                 if (!initial) {
@@ -1362,8 +1386,8 @@ const CloudProviderEditor = ({
               disabled={!!initial}
               className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 disabled:opacity-60 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200">
               {(['openai', 'anthropic', 'openrouter', 'custom'] as CloudProviderType[])
-                .filter((t) => t === type || !existingTypes.includes(t))
-                .map((t) => (
+                .filter(t => t === type || !existingTypes.includes(t))
+                .map(t => (
                   <option key={t} value={t}>
                     {PROVIDER_META[t].label}
                   </option>
@@ -1376,7 +1400,7 @@ const CloudProviderEditor = ({
             </label>
             <input
               value={endpoint}
-              onChange={(e) => setEndpoint(e.target.value)}
+              onChange={e => setEndpoint(e.target.value)}
               disabled={isOpenHuman}
               className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 placeholder:text-stone-400 disabled:opacity-60 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
               placeholder="https://api.example.com/v1"
@@ -1388,7 +1412,7 @@ const CloudProviderEditor = ({
             </label>
             <input
               value={defaultModel}
-              onChange={(e) => setDefaultModel(e.target.value)}
+              onChange={e => setDefaultModel(e.target.value)}
               className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 placeholder:text-stone-400 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
               placeholder="gpt-4o"
             />
@@ -1408,7 +1432,7 @@ const CloudProviderEditor = ({
               <input
                 type="password"
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
+                onChange={e => setApiKey(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 placeholder:text-stone-400 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
                 placeholder={hasExistingKey ? 'Leave blank to keep existing key' : 'sk-...'}
               />
