@@ -451,19 +451,27 @@ const CloudProviderCard = ({
                 Set primary
               </button>
             )}
-            <button
-              onClick={onEdit}
-              className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700"
-              aria-label="Edit">
-              <LuPencilLine className="h-3 w-3" />
-            </button>
+            {/* OpenHuman is the signed-in default: its endpoint comes from
+                the user's account, its key is the session JWT (managed
+                separately), and its type can't be changed. So edit + delete
+                are both meaningless here — hide them to avoid confusion.
+                "Set primary" stays, so the user can still re-mark OpenHuman
+                as primary if they've switched to another provider. */}
             {provider.type !== 'openhuman' && (
-              <button
-                onClick={onRemove}
-                className="rounded p-1 text-stone-400 hover:bg-coral-50 hover:text-coral-600"
-                aria-label="Remove">
-                <LuTrash2 className="h-3 w-3" />
-              </button>
+              <>
+                <button
+                  onClick={onEdit}
+                  className="rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700"
+                  aria-label="Edit">
+                  <LuPencilLine className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={onRemove}
+                  className="rounded p-1 text-stone-400 hover:bg-coral-50 hover:text-coral-600"
+                  aria-label="Remove">
+                  <LuTrash2 className="h-3 w-3" />
+                </button>
+              </>
             )}
           </div>
         </div>
