@@ -21,6 +21,9 @@ fn composio_direct_mode_capabilities_are_registered() {
     // The trigger-webhook gap is explicitly ComingSoon to flag the
     // limitation to users browsing the capability catalog.
     assert_eq!(gap.status, CapabilityStatus::ComingSoon);
+    // Both capabilities live in the same category so the settings search
+    // surface groups them together consistently.
+    assert_eq!(gap.category, direct.category);
 }
 
 #[test]
