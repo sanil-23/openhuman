@@ -546,9 +546,13 @@ mod tests {
 
     #[test]
     fn unknown_provider_string_rejected() {
+        // `Result<(Box<dyn Provider>, String), _>` can't use `.expect_err`
+        // because `dyn Provider` doesn't implement `Debug` — drop the
+        // Ok via `.err()` and pattern on the Option instead.
         let config = Config::default();
         let err = create_chat_provider_from_string("reasoning", "groq:llama3", &config)
-            .expect_err("unknown provider string must fail");
+            .err()
+            .expect("unknown provider string must fail");
         assert!(err.to_string().contains("unrecognised provider string"), "{err}");
     }
 
@@ -556,7 +560,8 @@ mod tests {
     fn empty_model_in_ollama_rejected() {
         let config = Config::default();
         let err = create_chat_provider_from_string("reasoning", "ollama:", &config)
-            .expect_err("empty model must fail");
+            .err()
+            .expect("empty model must fail");
         assert!(err.to_string().contains("empty model"), "{err}");
     }
 
@@ -565,7 +570,8 @@ mod tests {
         // No openai entry in cloud_providers.
         let config = Config::default();
         let err = create_chat_provider_from_string("reasoning", "openai:gpt-4o", &config)
-            .expect_err("missing creds must fail");
+            .err()
+            .expect("missing creds must fail");
         let msg = err.to_string();
         assert!(msg.contains("no cloud provider configured for type 'openai'"), "{msg}");
     }
