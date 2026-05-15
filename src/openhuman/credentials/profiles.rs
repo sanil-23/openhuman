@@ -353,10 +353,10 @@ impl AuthProfilesStore {
                 .retain(|_, profile_id| !dropped_ids.contains(profile_id));
             persisted.updated_at = Utc::now().to_rfc3339();
             log::warn!(
-                "[auth] purged {} unrecoverable profile(s) from store at {}: {:?}",
+                "[auth] purged {} unrecoverable profile(s) from store at {} \
+                 (provider list redacted to avoid leaking PII)",
                 dropped_ids.len(),
                 self.path.display(),
-                dropped_ids
             );
             self.write_persisted_locked(&persisted)?;
         } else if migrated {

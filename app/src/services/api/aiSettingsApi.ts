@@ -110,6 +110,12 @@ export function parseProviderString(s: string | null | undefined): ProviderRef {
   if (trimmed.startsWith('ollama:')) {
     return { kind: 'local', model: trimmed.slice('ollama:'.length).trim() };
   }
+  // Bare "openhuman" (no model suffix) means "use the OpenHuman backend with
+  // its default model" — map to a cloud ref so the round-trip preserves the
+  // explicit override rather than collapsing to the primary-cloud sentinel.
+  if (trimmed === 'openhuman') {
+    return { kind: 'cloud', providerType: 'openhuman', model: '' };
+  }
   for (const prefix of Object.keys(PROVIDER_PREFIXES)) {
     if (trimmed.startsWith(`${prefix}:`)) {
       return {
@@ -128,6 +134,12 @@ export function serializeProviderRef(ref: ProviderRef): string {
     case 'primary':
       return 'cloud';
     case 'cloud':
+      // Bare "openhuman" (no model) uses the sentinel form the Rust factory
+      // expects — avoid emitting "openhuman:" (with trailing colon) which the
+      // factory does not parse.
+      if (ref.providerType === 'openhuman' && !ref.model) {
+        return 'openhuman';
+      }
       return `${ref.providerType}:${ref.model}`;
     case 'local':
       return `ollama:${ref.model}`;
