@@ -503,8 +503,7 @@ impl FakeComposioBackend {
         config.workspace_dir = tmp.path().join("workspace");
         config.config_path = tmp.path().join("config.toml");
         config.api_url = Some(self.base_url.clone());
-        config.composio.mode =
-            crate::openhuman::config::schema::COMPOSIO_MODE_BACKEND.to_string();
+        config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_BACKEND.to_string();
         // Disable secret encryption for the auth-profile write — the
         // test workspace doesn't have an OS-keyring-backed `.secret_key`
         // and the encrypted path would error out before storing the

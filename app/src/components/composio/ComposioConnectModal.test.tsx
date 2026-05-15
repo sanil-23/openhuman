@@ -2,9 +2,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as composioApi from '../../lib/composio/composioApi';
+import * as openUrlModule from '../../utils/openUrl';
 import { authorize } from '../../lib/composio/composioApi';
 import { type ComposioConnection } from '../../lib/composio/types';
-import * as openUrlModule from '../../utils/openUrl';
 import ComposioConnectModal, {
   isMissingRequiredFieldsError,
   isValidAtlassianSubdomain,

@@ -166,12 +166,8 @@ impl Tool for ComposioActionTool {
                 // Wrap with auth_retry so a stale tinyhumans-tenant
                 // JWT gets refreshed-and-replayed once before surfacing
                 // (upstream behaviour).
-                super::auth_retry::execute_with_auth_retry(
-                    &client,
-                    &self.action_name,
-                    Some(args),
-                )
-                .await
+                super::auth_retry::execute_with_auth_retry(&client, &self.action_name, Some(args))
+                    .await
             }
             ComposioClientKind::Direct(direct) => {
                 tracing::debug!(
