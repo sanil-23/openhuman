@@ -34,6 +34,7 @@ use super::providers::ToolScope;
 use super::tools::resolve_action_scope;
 use crate::openhuman::agent::harness::current_sandbox_mode;
 use crate::openhuman::agent::harness::definition::SandboxMode;
+use crate::openhuman::config::rpc as config_rpc;
 use crate::openhuman::config::Config;
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolCategory, ToolResult};
 
@@ -144,7 +145,26 @@ impl Tool for ComposioActionTool {
         // (#1710). The pre-baked-client variant of this code routed all
         // executions through the backend tinyhumans tenant regardless
         // of mode — silently breaking direct mode for tool execution.
-        let kind = match create_composio_client(&self.config) {
+        // [#1710 Wave 4] Reload config fresh per execute so a mid-session
+        // `composio.mode` toggle takes effect at the very next tool call.
+        // The Arc<Config> snapshot held by `self` was taken at agent-init
+        // time and is otherwise stale relative to subsequent set_api_key /
+        // clear_api_key RPCs.
+        let live_config = match config_rpc::load_config_with_timeout().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    tool = %self.action_name,
+                    error = %e,
+                    "[composio] per-action execute: load_config failed"
+                );
+                return Ok(ToolResult::error(format!(
+                    "{}: failed to load live config: {e}",
+                    self.action_name
+                )));
+            }
+        };
+        let kind = match create_composio_client(&live_config) {
             Ok(kind) => kind,
             Err(e) => {
                 tracing::warn!(
@@ -180,7 +200,7 @@ impl Tool for ComposioActionTool {
                     &direct,
                     &self.action_name,
                     Some(args),
-                    &self.config.composio.entity_id,
+                    &live_config.composio.entity_id,
                 )
                 .await
             }
@@ -256,17 +276,12 @@ mod tests {
         Arc::new(config)
     }
 
-    /// Direct-mode `Config` with an inline api_key so the factory
-    /// resolves to the `Direct` variant without needing the keychain.
-    fn fake_direct_config() -> Arc<Config> {
-        let tmp = tempfile::tempdir().expect("tempdir for fake_direct_config");
-        let mut config = Config::default();
-        config.config_path = tmp.path().join("config.toml");
-        config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.to_string();
-        config.composio.api_key = Some("test-direct-key".to_string());
-        std::mem::forget(tmp);
-        Arc::new(config)
-    }
+    // Direct-mode coverage no longer constructs an `Arc<Config>` helper:
+    // `ComposioActionTool::execute` reloads config via
+    // `load_config_with_timeout()` per call (#1710 Wave 4), so direct-
+    // mode tests persist an isolated `config.toml` under `TEST_ENV_LOCK`
+    // (see `factory_routes_through_direct_when_mode_is_direct`) rather
+    // than injecting one through the constructor.
 
     fn error_text(result: &ToolResult) -> String {
         result
@@ -324,8 +339,28 @@ mod tests {
         // is `None` and the gate is a no-op. The downstream factory
         // resolve still fails (no backend session token / no api key),
         // but never with the sandbox text.
+        //
+        // The sandbox gate is a no-op here, so dispatch falls through to
+        // `load_config_with_timeout()` (#1710 Wave 4). Hold
+        // `TEST_ENV_LOCK` and point `OPENHUMAN_WORKSPACE` at an
+        // isolated, persisted config so this test neither reads the
+        // dev's real config nor races the shared env var against the
+        // other config-loading composio tests.
+        use crate::openhuman::config::TEST_ENV_LOCK;
+        let _env_guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        unsafe {
+            std::env::set_var("OPENHUMAN_WORKSPACE", tmp.path());
+        }
+
+        let mut config = Config::default();
+        config.config_path = tmp.path().join("config.toml");
+        config.workspace_dir = tmp.path().join("workspace");
+        config.save().await.expect("save fake config to disk");
+
         let t = ComposioActionTool::new(
-            fake_config(),
+            Arc::new(config),
             "GMAIL_SEND_EMAIL".to_string(),
             "send".to_string(),
             None,
@@ -336,6 +371,10 @@ mod tests {
             !msg.contains("strict read-only"),
             "unset sandbox must never trigger the gate, got: {msg}"
         );
+
+        unsafe {
+            std::env::remove_var("OPENHUMAN_WORKSPACE");
+        }
     }
 
     // ── Factory routing (#1710) ──────────────────────────────────────
@@ -352,8 +391,29 @@ mod tests {
         // `Err("no backend session ...")`. Assert that the error text
         // points at the backend code path (not direct-mode or staging-
         // api), confirming the routing branch.
+        //
+        // Production `.execute(..)` calls `load_config_with_timeout()`
+        // per call which reads from `~/.openhuman/config.toml` (or the
+        // workspace pointed at by `OPENHUMAN_WORKSPACE`). To isolate
+        // the test from the dev's real config we hold `TEST_ENV_LOCK`,
+        // point `OPENHUMAN_WORKSPACE` at a tempdir, and persist the
+        // test's `Config` to that tempdir's `config.toml` before
+        // invoking the tool.
+        use crate::openhuman::config::TEST_ENV_LOCK;
+        let _env_guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        unsafe {
+            std::env::set_var("OPENHUMAN_WORKSPACE", tmp.path());
+        }
+
+        let mut config = Config::default();
+        config.config_path = tmp.path().join("config.toml");
+        config.workspace_dir = tmp.path().join("workspace");
+        config.save().await.expect("save fake config to disk");
+
         let tool = ComposioActionTool::new(
-            fake_config(),
+            Arc::new(config),
             "GMAIL_FETCH_EMAILS".to_string(),
             "read-shaped slug so sandbox/scope gates don't short-circuit \
              the dispatch site"
@@ -371,6 +431,10 @@ mod tests {
             !msg.contains("direct mode"),
             "backend-mode failure must not surface direct-mode artifacts: {msg}"
         );
+
+        unsafe {
+            std::env::remove_var("OPENHUMAN_WORKSPACE");
+        }
     }
 
     #[tokio::test]
@@ -380,8 +444,27 @@ mod tests {
         // it attempts to hit `backend.composio.dev` from the unit test
         // sandbox, but the error must come from the direct path, not
         // a backend session lookup.
+        //
+        // Production `.execute(..)` calls `load_config_with_timeout()`
+        // per call which reads from disk — see the matching note on
+        // `factory_routes_through_backend_when_mode_is_backend`.
+        use crate::openhuman::config::TEST_ENV_LOCK;
+        let _env_guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        unsafe {
+            std::env::set_var("OPENHUMAN_WORKSPACE", tmp.path());
+        }
+
+        let mut config = Config::default();
+        config.config_path = tmp.path().join("config.toml");
+        config.workspace_dir = tmp.path().join("workspace");
+        config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.to_string();
+        config.composio.api_key = Some("test-direct-key".to_string());
+        config.save().await.expect("save fake config to disk");
+
         let tool = ComposioActionTool::new(
-            fake_direct_config(),
+            Arc::new(config),
             "GMAIL_FETCH_EMAILS".to_string(),
             "read-shaped slug".to_string(),
             None,
@@ -397,6 +480,10 @@ mod tests {
             "direct-mode dispatch must not leak backend session / staging-api \
              artifacts: {msg}"
         );
+
+        unsafe {
+            std::env::remove_var("OPENHUMAN_WORKSPACE");
+        }
     }
 
     #[tokio::test]
@@ -404,43 +491,75 @@ mod tests {
         // Regression test for #1710: building the tool once with one
         // mode and toggling the config mid-session must take effect on
         // the next execute. We can't trivially mutate an `Arc<Config>`
-        // without `Arc::get_mut` (single ref), so we build two tools
-        // pointed at two different configs and assert each routes
-        // through its respective branch. This captures the core
-        // structural property — that no client is baked at
-        // construction time — even though it doesn't exercise an
-        // in-place mutation.
+        // without `Arc::get_mut` (single ref), so we run the two halves
+        // sequentially against two different on-disk configs and assert
+        // each routes through its respective branch. This captures the
+        // core structural property — that no client is baked at
+        // construction time — and is faithful to production because
+        // `.execute(..)` calls `load_config_with_timeout()` per call.
         //
         // The actual in-place mutation flow on the live system is:
         // RPC `composio.set_mode` writes config.toml, the
         // `ComposioConfigChanged` event invalidates the parent
         // session's `Arc<Config>`, and the next sub-agent spawn picks
         // up the fresh `Arc<Config>` from
-        // `Config::load_or_init().await`.
+        // `Config::load_or_init().await`. Here we simulate that by
+        // rewriting `OPENHUMAN_WORKSPACE/config.toml` between the two
+        // halves while holding `TEST_ENV_LOCK`.
+        use crate::openhuman::config::TEST_ENV_LOCK;
+        let _env_guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // ── Backend half ────────────────────────────────────────────
+        let tmp_backend = tempfile::tempdir().expect("tempdir backend");
+        unsafe {
+            std::env::set_var("OPENHUMAN_WORKSPACE", tmp_backend.path());
+        }
+        let mut backend_config = Config::default();
+        backend_config.config_path = tmp_backend.path().join("config.toml");
+        backend_config.workspace_dir = tmp_backend.path().join("workspace");
+        backend_config
+            .save()
+            .await
+            .expect("save backend config to disk");
+
         let backend_tool = ComposioActionTool::new(
-            fake_config(),
+            Arc::new(backend_config),
             "GMAIL_FETCH_EMAILS".to_string(),
             "read-shaped slug".to_string(),
             None,
         );
-        let direct_tool = ComposioActionTool::new(
-            fake_direct_config(),
-            "GMAIL_FETCH_EMAILS".to_string(),
-            "read-shaped slug".to_string(),
-            None,
-        );
-
         let backend_result = backend_tool.execute(serde_json::json!({})).await.unwrap();
-        let direct_result = direct_tool.execute(serde_json::json!({})).await.unwrap();
-
         let backend_msg = error_text(&backend_result);
-        let direct_msg = error_text(&direct_result);
-
         // Backend tool's error must point at a backend session lookup.
         assert!(
             backend_msg.contains("backend") || backend_msg.contains("session"),
             "backend-mode tool should surface a backend session error, got: {backend_msg}"
         );
+
+        // ── Direct half ─────────────────────────────────────────────
+        let tmp_direct = tempfile::tempdir().expect("tempdir direct");
+        unsafe {
+            std::env::set_var("OPENHUMAN_WORKSPACE", tmp_direct.path());
+        }
+        let mut direct_config = Config::default();
+        direct_config.config_path = tmp_direct.path().join("config.toml");
+        direct_config.workspace_dir = tmp_direct.path().join("workspace");
+        direct_config.composio.mode =
+            crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.to_string();
+        direct_config.composio.api_key = Some("test-direct-key".to_string());
+        direct_config
+            .save()
+            .await
+            .expect("save direct config to disk");
+
+        let direct_tool = ComposioActionTool::new(
+            Arc::new(direct_config),
+            "GMAIL_FETCH_EMAILS".to_string(),
+            "read-shaped slug".to_string(),
+            None,
+        );
+        let direct_result = direct_tool.execute(serde_json::json!({})).await.unwrap();
+        let direct_msg = error_text(&direct_result);
 
         // Direct tool's error must NOT mention a backend session — the
         // smoking gun for the pre-fix bug would have been the
@@ -451,5 +570,9 @@ mod tests {
             !direct_msg.contains("no backend session"),
             "direct-mode tool must not surface backend-session artifacts: {direct_msg}"
         );
+
+        unsafe {
+            std::env::remove_var("OPENHUMAN_WORKSPACE");
+        }
     }
 }

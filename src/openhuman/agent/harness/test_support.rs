@@ -481,35 +481,41 @@ impl FakeComposioBackend {
 
     /// Build an `Arc<Config>` that — when passed through the mode-aware
     /// factory (`create_composio_client`) — resolves to a backend
-    /// `ComposioClient` pointing at this fake backend.
+    /// `ComposioClient` pointing at this fake backend, **and persist it**
+    /// to `config_path` on disk, returning the workspace dir to point
+    /// `OPENHUMAN_WORKSPACE` at.
     ///
-    /// Provisions a temp workspace dir, sets `config.api_url` to
-    /// `self.base_url`, stores a placeholder session token under
-    /// [`APP_SESSION_PROVIDER`] so `build_composio_client` / the factory
-    /// can read it, and leaks the tempdir so the path stays valid for
-    /// the test's lifetime. Mirrors what `auth_store_session` does on a
-    /// real machine, minus the backend GET /auth/me round-trip.
+    /// Post-#1710-Wave-4, factory-routed tools
+    /// ([`crate::openhuman::composio::ComposioActionTool`],
+    /// `ComposioExecuteTool`, `ProviderContext`) reload config via
+    /// `config_rpc::load_config_with_timeout()` per call rather than
+    /// using the injected `Arc<Config>` — so the injected config only
+    /// influences routing if it is the live on-disk config the loader
+    /// resolves. Callers must hold `crate::openhuman::config::TEST_ENV_LOCK`
+    /// and `std::env::set_var("OPENHUMAN_WORKSPACE", &workspace_root)`
+    /// (the returned path's parent) so the loader reads this config.
     ///
-    /// Used by tests that exercise the post-#1710 factory-routed
-    /// `ComposioActionTool` (which holds `Arc<Config>`, not a pre-baked
-    /// client) against an in-process fake backend.
-    pub fn config(&self) -> std::sync::Arc<crate::openhuman::config::Config> {
+    /// Returns `(Arc<Config>, workspace_root)` where `workspace_root` is
+    /// the tempdir the config + auth-profile live in (the value to set
+    /// `OPENHUMAN_WORKSPACE` to). The tempdir is leaked so it stays
+    /// valid for the test's lifetime.
+    pub async fn config_persisted(
+        &self,
+    ) -> (
+        std::sync::Arc<crate::openhuman::config::Config>,
+        std::path::PathBuf,
+    ) {
         use crate::openhuman::credentials::{
             AuthService, APP_SESSION_PROVIDER, DEFAULT_AUTH_PROFILE_NAME,
         };
 
-        let tmp = tempfile::tempdir().expect("tempdir for FakeComposioBackend::config");
+        let tmp = tempfile::tempdir().expect("tempdir for FakeComposioBackend::config_persisted");
+        let workspace_root = tmp.path().to_path_buf();
         let mut config = crate::openhuman::config::Config::default();
-        config.workspace_dir = tmp.path().join("workspace");
-        config.config_path = tmp.path().join("config.toml");
+        config.workspace_dir = workspace_root.join("workspace");
+        config.config_path = workspace_root.join("config.toml");
         config.api_url = Some(self.base_url.clone());
         config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_BACKEND.to_string();
-        // Disable secret encryption for the auth-profile write — the
-        // test workspace doesn't have an OS-keyring-backed `.secret_key`
-        // and the encrypted path would error out before storing the
-        // token. The session is fake either way; storing plaintext into
-        // a tempdir auth-profiles file is exactly the test affordance
-        // we need.
         config.secrets.encrypt = false;
         let auth = AuthService::from_config(&config);
         auth.store_provider_token(
@@ -519,11 +525,15 @@ impl FakeComposioBackend {
             std::collections::HashMap::new(),
             true,
         )
-        .expect("store fake app-session token for FakeComposioBackend::config");
-        // Leak the tempdir so the workspace path remains valid for the
-        // test's lifetime — same pattern as `action_tool::tests::fake_config`.
+        .expect("store fake app-session token for FakeComposioBackend::config_persisted");
+        // Persist so `load_config_with_timeout()` (resolving the workspace
+        // from `OPENHUMAN_WORKSPACE`) reads exactly this config.
+        config
+            .save()
+            .await
+            .expect("persist FakeComposioBackend config to disk");
         std::mem::forget(tmp);
-        std::sync::Arc::new(config)
+        (std::sync::Arc::new(config), workspace_root)
     }
 }
 

@@ -7,6 +7,7 @@ use crate::openhuman::composio::client::{
     create_composio_client, direct_execute, ComposioClient, ComposioClientKind,
 };
 use crate::openhuman::composio::types::ComposioExecuteResponse;
+use crate::openhuman::config::rpc as config_rpc;
 use crate::openhuman::config::Config;
 
 /// Reason a sync was triggered. Providers can use this to decide
@@ -150,7 +151,21 @@ impl ProviderContext {
         action: &str,
         arguments: Option<serde_json::Value>,
     ) -> anyhow::Result<ComposioExecuteResponse> {
-        let kind = create_composio_client(&self.config)?;
+        // [#1710 Wave 4] Reload config fresh per execute so a mid-session
+        // `composio.mode` toggle takes effect at the very next call. The
+        // Arc<Config> snapshot held by `self` was taken at agent-init time
+        // and is otherwise stale relative to subsequent set_api_key /
+        // clear_api_key RPCs.
+        let live_config = config_rpc::load_config_with_timeout().await.map_err(|e| {
+            tracing::warn!(
+                action = %action,
+                toolkit = %self.toolkit,
+                error = %e,
+                "[composio:provider_context] execute: load_config failed"
+            );
+            anyhow::anyhow!("composio provider_context: failed to load live config: {e}")
+        })?;
+        let kind = create_composio_client(&live_config)?;
         match kind {
             ComposioClientKind::Backend(client) => {
                 tracing::debug!(
@@ -166,7 +181,7 @@ impl ProviderContext {
                     toolkit = %self.toolkit,
                     "[composio:provider_context] execute: direct variant"
                 );
-                direct_execute(&direct, action, arguments, &self.config.composio.entity_id).await
+                direct_execute(&direct, action, arguments, &live_config.composio.entity_id).await
             }
         }
     }
@@ -181,8 +196,23 @@ impl ProviderContext {
     /// `ComposioClient` and have not yet been ported to the factory.
     /// Direct-mode users hit this path as a hard error rather than
     /// silently routing through the wrong tenant.
-    pub fn backend_client(&self) -> anyhow::Result<ComposioClient> {
-        match create_composio_client(&self.config)? {
+    pub async fn backend_client(&self) -> anyhow::Result<ComposioClient> {
+        // [#1710 Wave 4] Reload config fresh per call so a mid-session
+        // `composio.mode` toggle takes effect immediately. The Arc<Config>
+        // snapshot held by `self` was taken at agent-init time and is
+        // otherwise stale relative to subsequent set_api_key /
+        // clear_api_key RPCs.
+        let live_config = config_rpc::load_config_with_timeout().await.map_err(|e| {
+            tracing::warn!(
+                toolkit = %self.toolkit,
+                error = %e,
+                "[composio:provider_context] backend_client: load_config failed"
+            );
+            anyhow::anyhow!(
+                "composio provider_context.backend_client: failed to load live config: {e}"
+            )
+        })?;
+        match create_composio_client(&live_config)? {
             ComposioClientKind::Backend(client) => Ok(client),
             ComposioClientKind::Direct(_) => Err(anyhow::anyhow!(
                 "composio direct mode is not yet supported on this provider's helper path; \
@@ -203,32 +233,13 @@ impl ProviderContext {
 mod tests {
     use super::*;
 
-    fn fake_config_backend() -> Arc<Config> {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let mut config = Config::default();
-        // Isolate both config_path and workspace_dir so create_composio_client
-        // cannot read ambient credentials from the test runner's real config or
-        // workspace. Both paths land inside the same tempdir which is leaked so
-        // the path stays valid for the test's lifetime.
-        config.config_path = tmp.path().join("config.toml");
-        config.workspace_dir = tmp.path().join("workspace");
-        // Disable secret encryption — the tempdir has no OS-keyring .secret_key.
-        config.secrets.encrypt = false;
-        std::mem::forget(tmp);
-        Arc::new(config)
-    }
-
-    fn fake_config_direct() -> Arc<Config> {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let mut config = Config::default();
-        config.config_path = tmp.path().join("config.toml");
-        config.workspace_dir = tmp.path().join("workspace");
-        config.secrets.encrypt = false;
-        config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.to_string();
-        config.composio.api_key = Some("test-direct-key".to_string());
-        std::mem::forget(tmp);
-        Arc::new(config)
-    }
+    // Both `ProviderContext::execute` and `ProviderContext::backend_client`
+    // now reload config via `config_rpc::load_config_with_timeout()` per
+    // call (#1710 Wave 4), so the injected `Arc<Config>` no longer drives
+    // the factory — the live on-disk config under `OPENHUMAN_WORKSPACE`
+    // does. Both tests below therefore set up an isolated, persisted
+    // config under `TEST_ENV_LOCK` rather than relying on a constructed
+    // `Arc<Config>` helper.
 
     #[tokio::test]
     async fn provider_context_execute_resolves_via_factory_at_call_time() {
@@ -238,8 +249,34 @@ mod tests {
         // `client: ComposioClient` field was always backend, so this
         // path would have surfaced a backend session lookup error
         // even with `mode = "direct"`.
+        //
+        // Production `ctx.execute(..)` calls `load_config_with_timeout()`
+        // per call which reads from `~/.openhuman/config.toml` (or the
+        // workspace pointed at by `OPENHUMAN_WORKSPACE`). To isolate
+        // the test from the dev's real config we hold `TEST_ENV_LOCK`,
+        // point `OPENHUMAN_WORKSPACE` at a tempdir, and persist the
+        // test's `Config` to that tempdir's `config.toml` before
+        // invoking `execute`. Without the lock this test also races the
+        // shared `OPENHUMAN_WORKSPACE` env var against the other
+        // `load_config_with_timeout`-driven composio tests.
+        use crate::openhuman::config::TEST_ENV_LOCK;
+        let _env_guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        unsafe {
+            std::env::set_var("OPENHUMAN_WORKSPACE", tmp.path());
+        }
+
+        let mut config = Config::default();
+        config.config_path = tmp.path().join("config.toml");
+        config.workspace_dir = tmp.path().join("workspace");
+        config.secrets.encrypt = false;
+        config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.to_string();
+        config.composio.api_key = Some("test-direct-key".to_string());
+        config.save().await.expect("save fake config to disk");
+
         let ctx = ProviderContext {
-            config: fake_config_direct(),
+            config: Arc::new(config),
             toolkit: "gmail".to_string(),
             connection_id: None,
         };
@@ -254,6 +291,10 @@ mod tests {
                 "direct-mode execute must not surface backend session artifacts: {msg}"
             );
         }
+
+        unsafe {
+            std::env::remove_var("OPENHUMAN_WORKSPACE");
+        }
     }
 
     #[tokio::test]
@@ -262,8 +303,30 @@ mod tests {
         // token: the factory should return a backend-session error from
         // `ctx.execute`. Verifies the backend branch is reachable and
         // the error surface is sensible.
+        //
+        // Production `ctx.execute(..)` calls `load_config_with_timeout()`
+        // per call which reads from `~/.openhuman/config.toml` (or the
+        // workspace pointed at by `OPENHUMAN_WORKSPACE`). To isolate
+        // the test from the dev's real config we hold `TEST_ENV_LOCK`,
+        // point `OPENHUMAN_WORKSPACE` at a tempdir, and persist the
+        // test's `Config` to that tempdir's `config.toml` before
+        // invoking `execute`.
+        use crate::openhuman::config::TEST_ENV_LOCK;
+        let _env_guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        unsafe {
+            std::env::set_var("OPENHUMAN_WORKSPACE", tmp.path());
+        }
+
+        let mut config = Config::default();
+        config.config_path = tmp.path().join("config.toml");
+        config.workspace_dir = tmp.path().join("workspace");
+        config.secrets.encrypt = false;
+        config.save().await.expect("save fake config to disk");
+
         let ctx = ProviderContext {
-            config: fake_config_backend(),
+            config: Arc::new(config),
             toolkit: "gmail".to_string(),
             connection_id: None,
         };
@@ -274,5 +337,9 @@ mod tests {
             msg.contains("backend") || msg.contains("session"),
             "expected backend-session error, got: {msg}"
         );
+
+        unsafe {
+            std::env::remove_var("OPENHUMAN_WORKSPACE");
+        }
     }
 }

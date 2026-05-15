@@ -469,7 +469,7 @@ impl EventHandler for ComposioConnectionCreatedSubscriber {
             // `ComposioClient` from the live config for it; direct-mode
             // users surface a clear error here rather than silently
             // routing through the wrong tenant (#1710).
-            let backend_client = match ctx.backend_client() {
+            let backend_client = match ctx.backend_client().await {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::debug!(

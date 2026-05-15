@@ -28,6 +28,7 @@ use serde_json::{json, Value};
 
 use crate::openhuman::agent::harness::current_sandbox_mode;
 use crate::openhuman::agent::harness::definition::SandboxMode;
+use crate::openhuman::config::rpc as config_rpc;
 use crate::openhuman::config::Config;
 use crate::openhuman::tools::traits::{
     PermissionLevel, Tool, ToolCallOptions, ToolCategory, ToolResult,
@@ -323,7 +324,21 @@ impl Tool for ComposioListToolkitsTool {
         // governs availability, so we return an empty toolkits list
         // with an explanatory log instead of silently routing through
         // the backend tinyhumans tenant (#1710).
-        let client = match create_composio_client(&self.config) {
+        // [#1710 Wave 4] Reload config fresh per execute so a mid-session
+        // `composio.mode` toggle takes effect at the very next tool call.
+        // The Arc<Config> snapshot held by `self` was taken at agent-init
+        // time and is otherwise stale relative to subsequent set_api_key /
+        // clear_api_key RPCs.
+        let live_config = match config_rpc::load_config_with_timeout().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "[composio] tool: load_config failed");
+                return Ok(ToolResult::error(format!(
+                    "composio: failed to load live config: {e}"
+                )));
+            }
+        };
+        let client = match create_composio_client(&live_config) {
             Ok(ComposioClientKind::Backend(client)) => {
                 tracing::debug!("[composio] list_toolkits.execute: backend variant");
                 client
@@ -400,7 +415,21 @@ impl Tool for ComposioListConnectionsTool {
         // empty list regardless of the user's actual Composio connections,
         // which caused the agent to incorrectly conclude that no integrations
         // were linked and prompt unnecessary re-authorization (#1710).
-        let mut resp = match create_composio_client(&self.config) {
+        // [#1710 Wave 4] Reload config fresh per execute so a mid-session
+        // `composio.mode` toggle takes effect at the very next tool call.
+        // The Arc<Config> snapshot held by `self` was taken at agent-init
+        // time and is otherwise stale relative to subsequent set_api_key /
+        // clear_api_key RPCs.
+        let live_config = match config_rpc::load_config_with_timeout().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "[composio] list_connections.execute: load_config failed");
+                return Ok(ToolResult::error(format!(
+                    "composio_list_connections: failed to load live config: {e}"
+                )));
+            }
+        };
+        let mut resp = match create_composio_client(&live_config) {
             Ok(ComposioClientKind::Backend(client)) => {
                 tracing::debug!("[composio] list_connections.execute: backend variant");
                 client.list_connections().await.map_err(|e| {
@@ -498,7 +527,21 @@ impl Tool for ComposioAuthorizeTool {
         // the backend's `/agent-integrations/composio/authorize`
         // route, so we refuse this verb explicitly instead of
         // silently routing through the wrong tenant.
-        let client = match create_composio_client(&self.config) {
+        // [#1710 Wave 4] Reload config fresh per execute so a mid-session
+        // `composio.mode` toggle takes effect at the very next tool call.
+        // The Arc<Config> snapshot held by `self` was taken at agent-init
+        // time and is otherwise stale relative to subsequent set_api_key /
+        // clear_api_key RPCs.
+        let live_config = match config_rpc::load_config_with_timeout().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "[composio] tool: load_config failed");
+                return Ok(ToolResult::error(format!(
+                    "composio: failed to load live config: {e}"
+                )));
+            }
+        };
+        let client = match create_composio_client(&live_config) {
             Ok(ComposioClientKind::Backend(client)) => {
                 tracing::debug!("[composio] authorize.execute: backend variant");
                 client
@@ -631,7 +674,21 @@ impl Tool for ComposioListToolsTool {
         // pattern. Surfacing the empty list explicitly is correct
         // fail-mode: the alternative — falling through to the backend
         // path — is exactly the bug we're closing (#1710).
-        let client = match create_composio_client(&self.config) {
+        // [#1710 Wave 4] Reload config fresh per execute so a mid-session
+        // `composio.mode` toggle takes effect at the very next tool call.
+        // The Arc<Config> snapshot held by `self` was taken at agent-init
+        // time and is otherwise stale relative to subsequent set_api_key /
+        // clear_api_key RPCs.
+        let live_config = match config_rpc::load_config_with_timeout().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "[composio] tool: load_config failed");
+                return Ok(ToolResult::error(format!(
+                    "composio: failed to load live config: {e}"
+                )));
+            }
+        };
+        let client = match create_composio_client(&live_config) {
             Ok(ComposioClientKind::Backend(client)) => {
                 tracing::debug!("[composio] list_tools.execute: backend variant");
                 client
@@ -858,7 +915,21 @@ impl Tool for ComposioExecuteTool {
         // (#1710). The pre-baked-client variant of this code routed all
         // executions through the backend tinyhumans tenant regardless
         // of mode — silently breaking direct mode for tool execution.
-        let kind = match create_composio_client(&self.config) {
+        // [#1710 Wave 4] Reload config fresh per execute so a mid-session
+        // `composio.mode` toggle takes effect at the very next tool call.
+        // The Arc<Config> snapshot held by `self` was taken at agent-init
+        // time and is otherwise stale relative to subsequent set_api_key /
+        // clear_api_key RPCs.
+        let live_config = match config_rpc::load_config_with_timeout().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "[composio] tool execute.execute: load_config failed");
+                return Ok(ToolResult::error(format!(
+                    "composio_execute: failed to load live config: {e}"
+                )));
+            }
+        };
+        let kind = match create_composio_client(&live_config) {
             Ok(kind) => kind,
             Err(e) => {
                 tracing::warn!(error = %e, "[composio] tool execute.execute: factory failed");
@@ -882,7 +953,7 @@ impl Tool for ComposioExecuteTool {
                 // surface and a 401 here is a config issue (rotated key,
                 // wrong key, deleted) that should surface to the user
                 // rather than retry-loop.
-                direct_execute(&direct, &tool, arguments, &self.config.composio.entity_id).await
+                direct_execute(&direct, &tool, arguments, &live_config.composio.entity_id).await
             }
         };
         let elapsed_ms = started.elapsed().as_millis() as u64;
