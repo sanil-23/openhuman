@@ -25,6 +25,40 @@ use crate::openhuman::tools::{self, Tool, ToolSpec};
 use anyhow::Result;
 use std::sync::Arc;
 
+/// Drop entries with duplicate `name` fields, first occurrence wins.
+///
+/// Anthropic (and other strict providers) rejects a chat/completions
+/// request that lists two tools with the same name — OpenHuman's own
+/// backend and OpenAI silently accept duplicates, which hid the
+/// underlying collision (researcher sub-agent's `delegate_name =
+/// "research"` shadowing a same-named skill tool) until #1710's
+/// per-role routing started sending the same tool list to Anthropic.
+///
+/// Called from every place that materialises the visible tool spec
+/// list — initial build, post-composio refresh, scope-filter change —
+/// so the request the provider sees is always name-unique regardless
+/// of which path produced it.
+pub(super) fn dedup_visible_tool_specs(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut deduped: Vec<ToolSpec> = Vec::with_capacity(specs.len());
+    let mut dropped: Vec<String> = Vec::new();
+    for spec in specs {
+        if seen.insert(spec.name.clone()) {
+            deduped.push(spec);
+        } else {
+            dropped.push(spec.name);
+        }
+    }
+    if !dropped.is_empty() {
+        log::warn!(
+            "[agent] dropped {} duplicate tool spec(s) before sending to provider: {:?}",
+            dropped.len(),
+            dropped
+        );
+    }
+    deduped
+}
+
 impl AgentBuilder {
     /// Creates a new `AgentBuilder` with default values.
     pub fn new() -> Self {
@@ -312,32 +346,7 @@ impl AgentBuilder {
         // the same name — OpenHuman's own backend and OpenAI silently
         // accept duplicates, which hid this bug until #1710's per-role
         // routing started sending the same tool list to Anthropic.
-        //
-        // The collision in practice is the researcher sub-agent's
-        // delegate (whose `delegate_name = "research"`) colliding with a
-        // skill of the same name. First wins — the order of `tool_specs`
-        // is the order tools were registered, so the underlying tool
-        // route resolution is unchanged.
-        let visible_tool_specs: Vec<ToolSpec> = {
-            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-            let mut deduped: Vec<ToolSpec> = Vec::with_capacity(visible_tool_specs_unfiltered.len());
-            let mut dropped: Vec<String> = Vec::new();
-            for spec in visible_tool_specs_unfiltered {
-                if seen.insert(spec.name.clone()) {
-                    deduped.push(spec);
-                } else {
-                    dropped.push(spec.name);
-                }
-            }
-            if !dropped.is_empty() {
-                log::warn!(
-                    "[agent] dropped {} duplicate tool spec(s) before sending to provider: {:?}",
-                    dropped.len(),
-                    dropped
-                );
-            }
-            deduped
-        };
+        let visible_tool_specs: Vec<ToolSpec> = dedup_visible_tool_specs(visible_tool_specs_unfiltered);
 
         log::info!(
             "[agent] tool spec filter: total={} visible={} (filter_active={})",
