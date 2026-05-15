@@ -33,12 +33,12 @@ use crate::openhuman::tools::traits::{
     PermissionLevel, Tool, ToolCallOptions, ToolCategory, ToolResult,
 };
 
-use super::client::{create_composio_client, ComposioClientKind};
+use super::client::{create_composio_client, direct_execute, ComposioClientKind};
 use super::providers::{
     catalog_for_toolkit, classify_unknown, find_curated, get_provider, load_user_scope_or_default,
     toolkit_from_slug, ToolScope, UserScopePref,
 };
-use super::types::{ComposioExecuteResponse, ComposioToolsResponse};
+use super::types::ComposioToolsResponse;
 
 /// Decision returned by [`evaluate_tool_visibility`].
 enum ToolDecision {
@@ -256,57 +256,11 @@ fn render_tools_markdown(resp: &super::types::ComposioToolsResponse) -> String {
     out
 }
 
-/// Dispatch a single Composio action through the **direct** client
-/// (BYO key against `backend.composio.dev`) and reshape the v3 response
-/// into the [`ComposioExecuteResponse`] envelope produced by the
-/// backend-proxied path.
-///
-/// Keeping the envelope identical means the caller (`ComposioExecuteTool`)
-/// doesn't have to branch on mode for downstream concerns —
-/// `DomainEvent::ComposioActionExecuted`, the markdown-vs-JSON body
-/// preference, and the cost-USD log line all stay shared. We don't have a
-/// margin/cost number in direct mode (the user pays Composio directly), so
-/// `cost_usd` is reported as `0.0`. Backend-rendered `markdownFormatted`
-/// likewise doesn't apply, so direct callers always fall back to the
-/// raw JSON envelope.
-async fn execute_direct(
-    direct: &Arc<crate::openhuman::tools::ComposioTool>,
-    tool: &str,
-    arguments: Option<Value>,
-    entity_id: &str,
-) -> anyhow::Result<ComposioExecuteResponse> {
-    let params = arguments.unwrap_or_else(|| Value::Object(Default::default()));
-    let entity_id = entity_id.trim();
-    let entity_id_opt = (!entity_id.is_empty()).then_some(entity_id);
-    match direct
-        .execute_action(tool, params, entity_id_opt, None)
-        .await
-    {
-        Ok(raw) => {
-            // Mirror the v3 response shape: `successful` + `data` +
-            // `error`. The Composio v3 `/tools/{slug}/execute` envelope
-            // already uses these field names at the top level, so
-            // surface them through unchanged. Fall back to "treat
-            // anything not explicitly failing as success" so callers
-            // see the result instead of an empty error.
-            let successful = raw
-                .get("successful")
-                .and_then(Value::as_bool)
-                .or_else(|| raw.get("success").and_then(Value::as_bool))
-                .unwrap_or(true);
-            let error = raw.get("error").and_then(Value::as_str).map(str::to_string);
-            let data = raw.get("data").cloned().unwrap_or(raw);
-            Ok(ComposioExecuteResponse {
-                data,
-                successful,
-                error,
-                cost_usd: 0.0,
-                markdown_formatted: None,
-            })
-        }
-        Err(e) => Err(e),
-    }
-}
+// `execute_direct` was previously defined locally here; it now lives
+// in `super::client::direct_execute` so the ops.rs RPC handler and the
+// agent-tool path share a single direct-mode envelope reshaper.
+// See `direct_execute`'s rustdoc for the v3 → ComposioExecuteResponse
+// translation contract.
 
 /// Format a user-facing error message for a scope-blocked execution.
 fn scope_error_message(slug: &str, scope: ToolScope, pref: UserScopePref) -> String {
@@ -934,7 +888,7 @@ impl Tool for ComposioExecuteTool {
                 // surface and a 401 here is a config issue (rotated key,
                 // wrong key, deleted) that should surface to the user
                 // rather than retry-loop.
-                execute_direct(&direct, &tool, arguments, &self.config.composio.entity_id).await
+                direct_execute(&direct, &tool, arguments, &self.config.composio.entity_id).await
             }
         };
         let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -991,14 +945,19 @@ impl Tool for ComposioExecuteTool {
 /// client is available and composio is enabled. Returns an empty vec
 /// otherwise so callers can always `.extend(...)` unconditionally.
 pub fn all_composio_agent_tools(config: &crate::openhuman::config::Config) -> Vec<Box<dyn Tool>> {
-    // Registration gate: check that the backend session is available
-    // (matches the pre-refactor behaviour — composio agent tools were
-    // only registered when a backend client could be built). Direct
-    // mode still benefits from this gate because the user-mode toggle
-    // is meaningful only after sign-in; routing decisions made at
-    // execute time then pick the right variant per the live config.
-    if super::client::build_composio_client(config).is_none() {
-        tracing::debug!("[composio] agent tools not registered — disabled or missing credentials");
+    // Registration gate: ask the mode-aware probe "can this user call
+    // composio at all?" — true when EITHER a backend session token OR a
+    // stored/inline direct-mode API key is present. The pre-fix path
+    // called `build_composio_client(...).is_none()`, which is
+    // backend-only and silently dropped the 5 generic agent tools for
+    // direct-mode users (#1710). Per-action dispatch inside each tool
+    // re-resolves through the factory so the live `composio.mode`
+    // toggle keeps winning.
+    if !crate::openhuman::agent::harness::subagent_runner::user_is_signed_in_to_composio(config) {
+        tracing::debug!(
+            "[composio] agent tools not registered — user is not signed in to composio \
+             (no backend session and no direct API key)"
+        );
         return Vec::new();
     }
     // All five tools resolve their client per call through the

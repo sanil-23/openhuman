@@ -57,6 +57,28 @@ fn triage_disabled_flag_parser() {
 }
 
 #[test]
+fn direct_mode_constant_matches_trigger_drop_check() {
+    // The ComposioTriggerSubscriber drops events when
+    // `config.composio.mode == COMPOSIO_MODE_DIRECT`. If the schema
+    // constant ever drifts from the string "direct" the drop becomes
+    // a silent no-op and backend-tenant ghosts would leak through
+    // into a direct-mode user's triage pipeline. Pin both sides.
+    use crate::openhuman::config::ComposioConfig;
+    assert_eq!(
+        crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT,
+        "direct"
+    );
+    let cfg = ComposioConfig {
+        mode: "direct".into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        cfg.mode,
+        crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT
+    );
+}
+
+#[test]
 fn composio_config_triage_disabled_default() {
     use crate::openhuman::config::ComposioConfig;
     let cfg = ComposioConfig::default();

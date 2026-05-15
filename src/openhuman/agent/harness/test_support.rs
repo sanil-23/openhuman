@@ -478,6 +478,54 @@ impl FakeComposioBackend {
         ));
         ComposioClient::new(inner)
     }
+
+    /// Build an `Arc<Config>` that — when passed through the mode-aware
+    /// factory (`create_composio_client`) — resolves to a backend
+    /// `ComposioClient` pointing at this fake backend.
+    ///
+    /// Provisions a temp workspace dir, sets `config.api_url` to
+    /// `self.base_url`, stores a placeholder session token under
+    /// [`APP_SESSION_PROVIDER`] so `build_composio_client` / the factory
+    /// can read it, and leaks the tempdir so the path stays valid for
+    /// the test's lifetime. Mirrors what `auth_store_session` does on a
+    /// real machine, minus the backend GET /auth/me round-trip.
+    ///
+    /// Used by tests that exercise the post-#1710 factory-routed
+    /// `ComposioActionTool` (which holds `Arc<Config>`, not a pre-baked
+    /// client) against an in-process fake backend.
+    pub fn config(&self) -> std::sync::Arc<crate::openhuman::config::Config> {
+        use crate::openhuman::credentials::{
+            AuthService, APP_SESSION_PROVIDER, DEFAULT_AUTH_PROFILE_NAME,
+        };
+
+        let tmp = tempfile::tempdir().expect("tempdir for FakeComposioBackend::config");
+        let mut config = crate::openhuman::config::Config::default();
+        config.workspace_dir = tmp.path().join("workspace");
+        config.config_path = tmp.path().join("config.toml");
+        config.api_url = Some(self.base_url.clone());
+        config.composio.mode =
+            crate::openhuman::config::schema::COMPOSIO_MODE_BACKEND.to_string();
+        // Disable secret encryption for the auth-profile write — the
+        // test workspace doesn't have an OS-keyring-backed `.secret_key`
+        // and the encrypted path would error out before storing the
+        // token. The session is fake either way; storing plaintext into
+        // a tempdir auth-profiles file is exactly the test affordance
+        // we need.
+        config.secrets.encrypt = false;
+        let auth = AuthService::from_config(&config);
+        auth.store_provider_token(
+            APP_SESSION_PROVIDER,
+            DEFAULT_AUTH_PROFILE_NAME,
+            "test-token",
+            std::collections::HashMap::new(),
+            true,
+        )
+        .expect("store fake app-session token for FakeComposioBackend::config");
+        // Leak the tempdir so the workspace path remains valid for the
+        // test's lifetime — same pattern as `action_tool::tests::fake_config`.
+        std::mem::forget(tmp);
+        std::sync::Arc::new(config)
+    }
 }
 
 async fn record<B: serde::Serialize + Clone>(

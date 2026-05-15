@@ -493,3 +493,81 @@ fn composio_tool_category_is_skill() {
     let tool = ComposioTool::new("key", None, test_security());
     assert_eq!(tool.category(), ToolCategory::Skill);
 }
+
+// ── v3 /connected_accounts shape parsing ───────────────────────────
+//
+// Two upstream shapes covered:
+//   1. `toolkit` as a plain string slug (older payloads)
+//   2. `toolkit` as a nested `{ slug, ... }` object (newer payloads,
+//      mirroring the `de_string_or_object` drift handled by `types.rs`)
+// Plus an `appName` fallback for payloads that omit `toolkit` entirely.
+
+#[test]
+fn connected_account_toolkit_slug_from_string() {
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({
+        "id": "ca_1",
+        "status": "ACTIVE",
+        "toolkit": "gmail",
+        "created_at": "2026-05-15T00:00:00Z"
+    }))
+    .unwrap();
+    assert_eq!(raw.id, "ca_1");
+    assert_eq!(raw.status.as_deref(), Some("ACTIVE"));
+    assert_eq!(raw.toolkit_slug().as_deref(), Some("gmail"));
+    assert_eq!(raw.created_at.as_deref(), Some("2026-05-15T00:00:00Z"));
+}
+
+#[test]
+fn connected_account_toolkit_slug_from_nested_object() {
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({
+        "id": "ca_2",
+        "status": "INITIATED",
+        "toolkit": {"slug": "slack", "logo": "https://example.test/slack.png"}
+    }))
+    .unwrap();
+    assert_eq!(raw.toolkit_slug().as_deref(), Some("slack"));
+}
+
+#[test]
+fn connected_account_toolkit_slug_fallback_to_app_name() {
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({
+        "id": "ca_3",
+        "status": "ACTIVE",
+        "appName": "notion"
+    }))
+    .unwrap();
+    assert_eq!(raw.toolkit_slug().as_deref(), Some("notion"));
+}
+
+#[test]
+fn connected_account_toolkit_slug_returns_none_when_unrecognized() {
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({
+        "id": "ca_4",
+        "status": "PENDING",
+        "toolkit": {"unrelated": 42}
+    }))
+    .unwrap();
+    assert!(raw.toolkit_slug().is_none());
+}
+
+#[test]
+fn connected_account_tolerates_missing_fields() {
+    // All optional fields absent — the row must still parse so a
+    // malformed Composio response doesn't blow up `list_connections`.
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({"id": "ca_5"})).unwrap();
+    assert_eq!(raw.id, "ca_5");
+    assert!(raw.status.is_none());
+    assert!(raw.toolkit_slug().is_none());
+    assert!(raw.created_at.is_none());
+}
+
+#[test]
+fn connected_account_accepts_camelcase_created_at() {
+    // Tolerate both `created_at` (canonical) and `createdAt` (drift).
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({
+        "id": "ca_6",
+        "createdAt": "2026-05-15T00:00:00Z"
+    }))
+    .unwrap();
+    assert_eq!(raw.created_at.as_deref(), Some("2026-05-15T00:00:00Z"));
+}

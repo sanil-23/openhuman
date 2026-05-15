@@ -630,10 +630,10 @@ async fn harness_invokes_composio_action_tool_against_fake_backend() {
     use crate::openhuman::composio::ComposioActionTool;
 
     let backend = spawn_fake_composio_backend(ComposioFixture::realistic()).await;
-    let client = backend.client();
+    let config = backend.config();
 
     let tool = ComposioActionTool::new(
-        client,
+        config,
         "GMAIL_SEND_EMAIL".to_string(),
         "Send a Gmail email".to_string(),
         Some(json!({"type": "object"})),
@@ -864,9 +864,9 @@ async fn orchestrator_prompt_drives_composio_call_via_delegation_chain() {
 
     // ── 2. Spawn the fake Composio backend + wire a ComposioActionTool.
     let backend = spawn_fake_composio_backend(ComposioFixture::realistic()).await;
-    let composio_client = backend.client();
+    let composio_config = backend.config();
     let gmail_action_tool: Box<dyn Tool> = Box::new(ComposioActionTool::new(
-        composio_client,
+        composio_config,
         "GMAIL_SEND_EMAIL".to_string(),
         "Send a Gmail email".to_string(),
         Some(json!({"type": "object"})),

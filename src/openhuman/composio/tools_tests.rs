@@ -173,18 +173,30 @@ async fn execute_tool_execute_rejects_missing_tool() {
 }
 
 // ── all_composio_agent_tools ──────────────────────────────────
+//
+// Registration is now gated on the mode-aware
+// `user_is_signed_in_to_composio` probe rather than the backend-only
+// `build_composio_client(...).is_none()` (#1710 Option C). The three
+// tests below cover the matrix:
+//   - backend mode + stored session token → 5 tools registered
+//   - direct mode  + stored API key       → 5 tools registered (NEW)
+//   - no credentials at all                → 0 tools registered (NEW)
+// Pre-fix, the direct-mode-with-key path silently registered 0 tools.
 
 #[test]
-fn all_composio_agent_tools_returns_empty_without_session() {
+fn agent_tools_skip_registration_when_no_credentials_at_all() {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = crate::openhuman::config::Config::default();
     config.config_path = tmp.path().join("config.toml");
     let tools = all_composio_agent_tools(&config);
-    assert!(tools.is_empty());
+    assert!(
+        tools.is_empty(),
+        "with no backend session and no direct api key the registration gate must skip all 5 tools"
+    );
 }
 
 #[test]
-fn all_composio_agent_tools_registers_five_when_session_available() {
+fn agent_tools_register_when_backend_signed_in() {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = crate::openhuman::config::Config::default();
     config.config_path = tmp.path().join("config.toml");
@@ -198,7 +210,34 @@ fn all_composio_agent_tools_registers_five_when_session_available() {
         )
         .expect("store test session token");
     let tools = all_composio_agent_tools(&config);
-    assert_eq!(tools.len(), 5);
+    assert_eq!(
+        tools.len(),
+        5,
+        "backend session present → all 5 generic composio agent tools should register"
+    );
+}
+
+#[test]
+fn agent_tools_register_when_direct_mode_with_stored_key_and_no_backend_session() {
+    // Regression for the bug we're closing in Option C: a direct-mode
+    // user with a working personal Composio API key was getting `0`
+    // tools registered because the gate hard-bound to
+    // `build_composio_client` (backend-only). With the mode-aware probe
+    // in place this now correctly returns the full 5 generic tools.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = crate::openhuman::config::Config::default();
+    config.config_path = tmp.path().join("config.toml");
+    config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.to_string();
+    config.composio.api_key = Some("test-direct-key".to_string());
+    // No app-session token stored. Pre-fix the gate would fall through
+    // here.
+    let tools = all_composio_agent_tools(&config);
+    assert_eq!(
+        tools.len(),
+        5,
+        "direct mode with stored API key (no backend session) must still register \
+         all 5 generic composio agent tools — the pre-Option-C bug returned 0 here"
+    );
 }
 
 // ── Sandbox-mode gate (issue #685) ───────────────────────────────

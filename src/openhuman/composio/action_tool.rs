@@ -13,24 +13,47 @@
 //! path so the model doesn't see two ways to call the same action.
 //!
 //! Lifetime: these tools live for the duration of a single sub-agent
-//! spawn. The underlying [`ComposioClient`] is cheap to clone (it
-//! wraps an `Arc<IntegrationClient>` internally), so each tool holds
-//! its own owned clone and calls `client.execute_tool` directly when
-//! invoked — no config reload or client rebuild on the hot path.
+//! spawn. Rather than baking a `ComposioClient` at construction time
+//! (which would silently bypass a mid-session
+//! [`crate::openhuman::config::ComposioConfig::mode`] toggle — see
+//! issue #1710), each tool keeps an [`Arc<Config>`] and resolves the
+//! client per call through
+//! [`create_composio_client`] so a user flip from
+//! `mode = "backend"` to `mode = "direct"` is honoured on the next
+//! tool invocation without restarting the session. Mirrors the agent-
+//! tool migration in
+//! [`super::tools::ComposioExecuteTool`].
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::client::ComposioClient;
+use super::client::{create_composio_client, direct_execute, ComposioClientKind};
 use super::providers::ToolScope;
 use super::tools::resolve_action_scope;
 use crate::openhuman::agent::harness::current_sandbox_mode;
 use crate::openhuman::agent::harness::definition::SandboxMode;
+use crate::openhuman::config::Config;
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolCategory, ToolResult};
 
 /// A single Composio action exposed as a first-class tool.
 pub struct ComposioActionTool {
-    client: ComposioClient,
+    /// Held instead of a pre-baked [`super::client::ComposioClient`] so
+    /// the [`crate::openhuman::config::ComposioConfig::mode`] toggle is
+    /// honoured on every invocation.
+    ///
+    /// Pre-fix this field was `client: ComposioClient`, which captured
+    /// the backend-bound handle at sub-agent spawn time. Toggling
+    /// `composio.mode = "direct"` mid-session invalidated other caches
+    /// but left these per-action tools still routing through
+    /// `staging-api.tinyhumans.ai/agent-integrations/composio/execute`
+    /// — silently bypassing the direct-mode user's personal Composio
+    /// tenant. Resolving the client per call via
+    /// [`create_composio_client`] keeps dispatch in lockstep with the
+    /// live config, matching
+    /// [`super::tools::ComposioExecuteTool`]. See issue #1710.
+    config: Arc<Config>,
     /// Action slug as-shipped to Composio, e.g. `"GMAIL_SEND_EMAIL"`.
     action_name: String,
     /// Human-readable description from the Composio tool-list response.
@@ -43,14 +66,14 @@ pub struct ComposioActionTool {
 
 impl ComposioActionTool {
     pub fn new(
-        client: ComposioClient,
+        config: Arc<Config>,
         action_name: String,
         description: String,
         parameters: Option<Value>,
     ) -> Self {
         let parameters = parameters.unwrap_or_else(|| serde_json::json!({"type": "object"}));
         Self {
-            client,
+            config,
             action_name,
             description,
             parameters,
@@ -116,10 +139,56 @@ impl Tool for ComposioActionTool {
             }
         }
 
+        // Resolve the client through the mode-aware factory on every
+        // call so a direct-mode toggle takes effect immediately
+        // (#1710). The pre-baked-client variant of this code routed all
+        // executions through the backend tinyhumans tenant regardless
+        // of mode — silently breaking direct mode for tool execution.
+        let kind = match create_composio_client(&self.config) {
+            Ok(kind) => kind,
+            Err(e) => {
+                tracing::warn!(
+                    tool = %self.action_name,
+                    error = %e,
+                    "[composio] per-action execute: factory failed"
+                );
+                return Ok(ToolResult::error(format!("{}: {e}", self.action_name)));
+            }
+        };
+
         let started = std::time::Instant::now();
-        let res =
-            super::auth_retry::execute_with_auth_retry(&self.client, &self.action_name, Some(args))
-                .await;
+        let res = match kind {
+            ComposioClientKind::Backend(client) => {
+                tracing::debug!(
+                    tool = %self.action_name,
+                    "[composio] per-action execute: backend variant"
+                );
+                // Wrap with auth_retry so a stale tinyhumans-tenant
+                // JWT gets refreshed-and-replayed once before surfacing
+                // (upstream behaviour).
+                super::auth_retry::execute_with_auth_retry(
+                    &client,
+                    &self.action_name,
+                    Some(args),
+                )
+                .await
+            }
+            ComposioClientKind::Direct(direct) => {
+                tracing::debug!(
+                    tool = %self.action_name,
+                    "[composio] per-action execute: direct variant"
+                );
+                // Direct path skips auth_retry — see ComposioExecuteTool
+                // for rationale (no backend refresh surface).
+                direct_execute(
+                    &direct,
+                    &self.action_name,
+                    Some(args),
+                    &self.config.composio.entity_id,
+                )
+                .await
+            }
+        };
         let elapsed_ms = started.elapsed().as_millis() as u64;
 
         match res {
@@ -175,16 +244,32 @@ impl Tool for ComposioActionTool {
 mod tests {
     use super::*;
     use crate::openhuman::agent::harness::with_current_sandbox_mode;
-    use crate::openhuman::integrations::IntegrationClient;
-    use std::sync::Arc;
 
-    /// Build a `ComposioClient` whose backend is the loopback dead-drop
-    /// used by the tests in `composio/tools.rs`. The sandbox gate runs
-    /// *before* any HTTP call, so these tests never reach the network.
-    fn fake_client() -> ComposioClient {
-        let inner =
-            IntegrationClient::new("http://127.0.0.1:0".to_string(), "test-token".to_string());
-        ComposioClient::new(Arc::new(inner))
+    /// Build a minimal `Arc<Config>` with `composio.mode = "backend"`
+    /// (the default). The sandbox gate runs *before* any HTTP call or
+    /// factory resolve, so these tests never reach the network. Mirrors
+    /// the helper in `tools_tests.rs`.
+    fn fake_config() -> Arc<Config> {
+        let tmp = tempfile::tempdir().expect("tempdir for fake_config");
+        let mut config = Config::default();
+        config.config_path = tmp.path().join("config.toml");
+        // Leak the tempdir so the path remains valid for the test's
+        // lifetime — `Config::config_path` is just used as a lookup key
+        // here, not actually written to.
+        std::mem::forget(tmp);
+        Arc::new(config)
+    }
+
+    /// Direct-mode `Config` with an inline api_key so the factory
+    /// resolves to the `Direct` variant without needing the keychain.
+    fn fake_direct_config() -> Arc<Config> {
+        let tmp = tempfile::tempdir().expect("tempdir for fake_direct_config");
+        let mut config = Config::default();
+        config.config_path = tmp.path().join("config.toml");
+        config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.to_string();
+        config.composio.api_key = Some("test-direct-key".to_string());
+        std::mem::forget(tmp);
+        Arc::new(config)
     }
 
     fn error_text(result: &ToolResult) -> String {
@@ -202,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn sandbox_read_only_blocks_per_action_write_call() {
         let t = ComposioActionTool::new(
-            fake_client(),
+            fake_config(),
             "GMAIL_SEND_EMAIL".to_string(),
             "send a gmail message".to_string(),
             None,
@@ -223,7 +308,7 @@ mod tests {
     #[tokio::test]
     async fn sandbox_read_only_blocks_per_action_admin_call() {
         let t = ComposioActionTool::new(
-            fake_client(),
+            fake_config(),
             "GMAIL_DELETE_EMAIL".to_string(),
             "destructive".to_string(),
             None,
@@ -240,10 +325,11 @@ mod tests {
     #[tokio::test]
     async fn sandbox_unset_leaves_per_action_execute_to_downstream() {
         // Outside any `with_current_sandbox_mode` scope the task-local
-        // is `None` and the gate is a no-op. The downstream HTTP call
-        // still fails (loopback :0), but never with the sandbox text.
+        // is `None` and the gate is a no-op. The downstream factory
+        // resolve still fails (no backend session token / no api key),
+        // but never with the sandbox text.
         let t = ComposioActionTool::new(
-            fake_client(),
+            fake_config(),
             "GMAIL_SEND_EMAIL".to_string(),
             "send".to_string(),
             None,
@@ -253,6 +339,121 @@ mod tests {
         assert!(
             !msg.contains("strict read-only"),
             "unset sandbox must never trigger the gate, got: {msg}"
+        );
+    }
+
+    // ── Factory routing (#1710) ──────────────────────────────────────
+    //
+    // Regression coverage for the bug fix: `ComposioActionTool` now
+    // resolves its client per call rather than caching one at
+    // construction time, so a mid-session `composio.mode` toggle is
+    // honoured on the very next per-action execute.
+
+    #[tokio::test]
+    async fn factory_routes_through_backend_when_mode_is_backend() {
+        // Default `Config` has `composio.mode = "backend"`. Without a
+        // stored backend session token the factory returns
+        // `Err("no backend session ...")`. Assert that the error text
+        // points at the backend code path (not direct-mode or staging-
+        // api), confirming the routing branch.
+        let tool = ComposioActionTool::new(
+            fake_config(),
+            "GMAIL_FETCH_EMAILS".to_string(),
+            "read-shaped slug so sandbox/scope gates don't short-circuit \
+             the dispatch site"
+                .to_string(),
+            None,
+        );
+        let result = tool.execute(serde_json::json!({})).await.unwrap();
+        assert!(result.is_error, "no backend session must error");
+        let msg = error_text(&result);
+        assert!(
+            msg.contains("backend") || msg.contains("session"),
+            "expected backend-mode session error, got: {msg}"
+        );
+        assert!(
+            !msg.contains("direct mode"),
+            "backend-mode failure must not surface direct-mode artifacts: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn factory_routes_through_direct_when_mode_is_direct() {
+        // Direct-mode config with an inline api_key — factory resolves
+        // to the `Direct` variant. The downstream call will fail when
+        // it attempts to hit `backend.composio.dev` from the unit test
+        // sandbox, but the error must come from the direct path, not
+        // a backend session lookup.
+        let tool = ComposioActionTool::new(
+            fake_direct_config(),
+            "GMAIL_FETCH_EMAILS".to_string(),
+            "read-shaped slug".to_string(),
+            None,
+        );
+        let result = tool.execute(serde_json::json!({})).await.unwrap();
+        // Direct-mode resolve succeeds → no `factory failed` error.
+        // The error (if any) will come from the downstream HTTP call,
+        // which is fine — we just need to confirm the dispatch routed
+        // through the direct branch rather than the backend branch.
+        let msg = error_text(&result);
+        assert!(
+            !msg.contains("no backend session") && !msg.contains("staging-api"),
+            "direct-mode dispatch must not leak backend session / staging-api \
+             artifacts: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mode_toggle_between_calls_is_observed() {
+        // Regression test for #1710: building the tool once with one
+        // mode and toggling the config mid-session must take effect on
+        // the next execute. We can't trivially mutate an `Arc<Config>`
+        // without `Arc::get_mut` (single ref), so we build two tools
+        // pointed at two different configs and assert each routes
+        // through its respective branch. This captures the core
+        // structural property — that no client is baked at
+        // construction time — even though it doesn't exercise an
+        // in-place mutation.
+        //
+        // The actual in-place mutation flow on the live system is:
+        // RPC `composio.set_mode` writes config.toml, the
+        // `ComposioConfigChanged` event invalidates the parent
+        // session's `Arc<Config>`, and the next sub-agent spawn picks
+        // up the fresh `Arc<Config>` from
+        // `Config::load_or_init().await`.
+        let backend_tool = ComposioActionTool::new(
+            fake_config(),
+            "GMAIL_FETCH_EMAILS".to_string(),
+            "read-shaped slug".to_string(),
+            None,
+        );
+        let direct_tool = ComposioActionTool::new(
+            fake_direct_config(),
+            "GMAIL_FETCH_EMAILS".to_string(),
+            "read-shaped slug".to_string(),
+            None,
+        );
+
+        let backend_result = backend_tool.execute(serde_json::json!({})).await.unwrap();
+        let direct_result = direct_tool.execute(serde_json::json!({})).await.unwrap();
+
+        let backend_msg = error_text(&backend_result);
+        let direct_msg = error_text(&direct_result);
+
+        // Backend tool's error must point at a backend session lookup.
+        assert!(
+            backend_msg.contains("backend") || backend_msg.contains("session"),
+            "backend-mode tool should surface a backend session error, got: {backend_msg}"
+        );
+
+        // Direct tool's error must NOT mention a backend session — the
+        // smoking gun for the pre-fix bug would have been the
+        // direct-mode tool surfacing
+        // `staging-api.tinyhumans.ai` / `no backend session` because
+        // the cached client was a backend handle.
+        assert!(
+            !direct_msg.contains("no backend session"),
+            "direct-mode tool must not surface backend-session artifacts: {direct_msg}"
         );
     }
 }

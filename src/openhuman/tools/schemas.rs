@@ -239,15 +239,29 @@ fn handle_composio_execute(params: Map<String, Value>) -> ControllerFuture {
         let action_args = params.get("params").cloned();
 
         let config = config_rpc::load_config_with_timeout().await?;
-        let client = crate::openhuman::composio::client::build_composio_client(&config)
-            .ok_or_else(|| {
-                "composio client unavailable — user not signed in to backend".to_string()
-            })?;
-
-        let resp = client
-            .execute_tool(&action, action_args)
-            .await
-            .map_err(|e| format!("composio execute_tool failed: {e:#}"))?;
+        // Route through the mode-aware factory so direct-mode users
+        // hit their personal Composio tenant when the Tauri shell
+        // calls `tools.composio_execute` (e.g. onboarding-driven
+        // flows). Pre-fix, the controller hard-bound to the
+        // backend-only `build_composio_client` and silently 4xx'd for
+        // direct-mode users (#1710). Mirrors
+        // `composio::ops::composio_execute`.
+        use crate::openhuman::composio::client::{
+            create_composio_client, direct_execute, ComposioClientKind,
+        };
+        let kind =
+            create_composio_client(&config).map_err(|e| format!("tools.composio_execute: {e}"))?;
+        let resp = match kind {
+            ComposioClientKind::Backend(client) => client
+                .execute_tool(&action, action_args)
+                .await
+                .map_err(|e| format!("composio execute_tool (backend) failed: {e:#}"))?,
+            ComposioClientKind::Direct(direct) => {
+                direct_execute(&direct, &action, action_args, &config.composio.entity_id)
+                    .await
+                    .map_err(|e| format!("composio execute_tool (direct) failed: {e:#}"))?
+            }
+        };
 
         let payload = json!({
             "successful": resp.successful,
