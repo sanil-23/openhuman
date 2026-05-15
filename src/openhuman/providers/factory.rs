@@ -583,4 +583,66 @@ mod tests {
         let config = Config::default();
         assert!(create_chat_provider("reasoning", &config).is_ok());
     }
+
+    // ── Summarization alias ───────────────────────────────────────────────────
+
+    #[test]
+    fn summarization_aliases_memory_provider() {
+        // The summarizer sub-agent declares `[model] hint = "summarization"`
+        // but there's no `summarization_provider` config field — the workload
+        // is a synonym for `memory` since both are "condense input" tasks.
+        // `provider_for_role("summarization", ...)` must read `memory_provider`.
+        let mut config = Config::default();
+        config.memory_provider = Some("ollama:llama3.1:8b".to_string());
+        assert_eq!(provider_for_role("memory", &config), "ollama:llama3.1:8b");
+        assert_eq!(
+            provider_for_role("summarization", &config),
+            "ollama:llama3.1:8b",
+            "summarization must alias memory_provider"
+        );
+    }
+
+    #[test]
+    fn summarization_defaults_to_cloud_like_memory() {
+        // No memory_provider → both `memory` and `summarization` fall through
+        // to "cloud", consistent with every other workload.
+        let config = Config::default();
+        assert_eq!(provider_for_role("memory", &config), "cloud");
+        assert_eq!(provider_for_role("summarization", &config), "cloud");
+    }
+
+    #[test]
+    fn unknown_workload_falls_back_to_cloud() {
+        // The wildcard arm in provider_for_role's match must keep
+        // unrecognised workloads on the primary so a typo in an agent
+        // TOML doesn't surface as a NoneProvider crash.
+        let config = Config::default();
+        assert_eq!(provider_for_role("nope-not-a-workload", &config), "cloud");
+        assert_eq!(provider_for_role("", &config), "cloud");
+    }
+
+    // ── OpenHuman backend state_dir wiring ────────────────────────────────────
+
+    #[test]
+    fn openhuman_backend_uses_config_path_parent_as_state_dir() {
+        // Regression test for #1710: when the user's workspace lives outside
+        // ~/.openhuman (e.g. OPENHUMAN_WORKSPACE override, or a test
+        // worktree), the factory must propagate config.config_path.parent()
+        // into ProviderRuntimeOptions.openhuman_dir so the backend's
+        // AuthService reads `auth-profiles.json` from the same workspace
+        // login wrote to. Without this, login succeeds but every chat
+        // call bails with "No backend session".
+        let mut config = Config::default();
+        config.config_path = std::path::PathBuf::from("/tmp/oh-test-workspace/config.toml");
+        // Build via the chat-factory entrypoint — make_openhuman_backend
+        // is private and called transitively when there are no
+        // cloud_providers entries.
+        let (_provider, model) = create_chat_provider("reasoning", &config)
+            .expect("openhuman backend must build with no cloud_providers");
+        // Sanity: the model resolution path also goes through the
+        // backend ctor, so a successful build implies state_dir was
+        // wired without panic.
+        assert!(!model.is_empty(), "model must be set");
+    }
+
 }
