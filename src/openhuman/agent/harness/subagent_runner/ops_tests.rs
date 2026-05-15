@@ -237,7 +237,6 @@ fn make_parent(provider: Arc<dyn Provider>, tools: Vec<Box<dyn Tool>>) -> Parent
         session_id: "test-session".into(),
         channel: "test".into(),
         connected_integrations: vec![],
-        composio_client: None,
         tool_call_format: crate::openhuman::context::prompt::ToolCallFormat::PFormat,
         session_key: "0_test".into(),
         session_parent_prefix: None,
@@ -814,4 +813,46 @@ fn resolve_subagent_provider_hint_falls_back_on_factory_error() {
         "factory error must fall back to parent provider"
     );
     assert_eq!(resolved_model, "fallback-model");
+}
+
+// ── Probe regression tests (#1710 Wave 2) ──────────────────────────
+//
+// `user_is_signed_in_to_composio` replaces the legacy
+// `parent.composio_client.is_none()` gate. The legacy probe was
+// backend-only by construction: a direct-mode user with a stored API
+// key but no backend session token was falsely reported as "not signed
+// in" and the spawn-time integration refresh path was silently
+// skipped. These tests pin the new behaviour so that regression
+// can't sneak back in.
+
+#[test]
+fn direct_mode_user_with_stored_key_passes_signed_in_check() {
+    use super::user_is_signed_in_to_composio;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = crate::openhuman::config::Config::default();
+    config.config_path = tmp.path().join("config.toml");
+    // Direct mode + inline API key (the `config.composio.api_key`
+    // fallback path inside `create_composio_client` — equivalent to a
+    // stored direct key as far as the probe is concerned).
+    config.composio.mode = crate::openhuman::config::schema::COMPOSIO_MODE_DIRECT.to_string();
+    config.composio.api_key = Some("test-direct-key".into());
+    assert!(
+        user_is_signed_in_to_composio(&config),
+        "direct-mode user with stored api key must be reported as signed in"
+    );
+}
+
+#[test]
+fn unsigned_in_user_fails_probe() {
+    use super::user_is_signed_in_to_composio;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = crate::openhuman::config::Config::default();
+    config.config_path = tmp.path().join("config.toml");
+    // Default mode = backend, no session token → factory errors with
+    // "no backend session". Direct fallback is unreachable because
+    // mode is not "direct".
+    assert!(
+        !user_is_signed_in_to_composio(&config),
+        "user with neither backend session nor direct key must NOT be reported as signed in"
+    );
 }
