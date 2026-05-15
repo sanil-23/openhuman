@@ -200,8 +200,66 @@ async fn run_typed_mode(
 ) -> Result<SubagentRunOutcome, SubagentRunError> {
     let started = Instant::now();
 
-    // ── Resolve model + temperature ────────────────────────────────────
-    let model = definition.model.resolve(&parent.model_name);
+    // ── Resolve provider + model + temperature ─────────────────────────
+    //
+    // For a `Hint(workload)` model spec (e.g. integrations_agent's
+    // `[model] hint = "agentic"`) build a fresh provider via the
+    // per-workload factory so the user's AI-settings routing for that
+    // workload actually takes effect end-to-end. Without this, the
+    // sub-agent inherits the parent's reasoning-workload provider but
+    // calls it with the OpenHuman-tier model name `agentic-v1` —
+    // Anthropic and other strict providers 404 on that. With this,
+    // `agentic` resolves to whatever cloud entry the user picked for
+    // the agentic workload (or the primary, when no explicit pick)
+    // and uses that provider's real model id.
+    //
+    // `Inherit` and `Exact` keep the legacy "share parent provider"
+    // path — `Inherit` because that's literally the contract, and
+    // `Exact` because the user named a specific model on purpose, so
+    // we shouldn't second-guess which provider it belongs to.
+    let (subagent_provider, model): (Arc<dyn Provider>, String) = match &definition.model {
+        crate::openhuman::agent::harness::definition::ModelSpec::Hint(workload) => {
+            match crate::openhuman::config::Config::load_or_init().await {
+                Ok(config) => match crate::openhuman::providers::create_chat_provider(workload, &config) {
+                    Ok((p, m)) => {
+                        log::info!(
+                            "[subagent_runner] role={} agent_id={} resolved via workload factory model={}",
+                            workload,
+                            definition.id,
+                            m
+                        );
+                        (Arc::from(p), m)
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[subagent_runner] workload '{}' provider build failed ({}) for agent_id={} — \
+                             falling back to parent provider + '{}-v1'",
+                            workload,
+                            e,
+                            definition.id,
+                            workload
+                        );
+                        (parent.provider.clone(), format!("{workload}-v1"))
+                    }
+                },
+                Err(e) => {
+                    log::warn!(
+                        "[subagent_runner] config load failed for workload '{}' (agent_id={}): {} — \
+                         falling back to parent provider + '{}-v1'",
+                        workload,
+                        definition.id,
+                        e,
+                        workload
+                    );
+                    (parent.provider.clone(), format!("{workload}-v1"))
+                }
+            }
+        }
+        _ => (
+            parent.provider.clone(),
+            definition.model.resolve(&parent.model_name),
+        ),
+    };
     let temperature = definition.temperature;
 
     // Archetype prompt loading is deferred until AFTER tool filtering so
@@ -784,7 +842,7 @@ async fn run_typed_mode(
     // provider response), mirroring the main-agent turn loop in
     // `session/turn.rs`. No post-loop write needed here.
     let (output, iterations, _agg_usage) = run_inner_loop(
-        parent.provider.as_ref(),
+        subagent_provider.as_ref(),
         &mut history,
         &parent.all_tools,
         dynamic_tools,
