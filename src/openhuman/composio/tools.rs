@@ -403,16 +403,15 @@ impl Tool for ComposioListConnectionsTool {
         let mut resp = match create_composio_client(&self.config) {
             Ok(ComposioClientKind::Backend(client)) => {
                 tracing::debug!("[composio] list_connections.execute: backend variant");
-                client
-                    .list_connections()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("composio_list_connections (backend) failed: {e}"))?
+                client.list_connections().await.map_err(|e| {
+                    anyhow::anyhow!("composio_list_connections (backend) failed: {e}")
+                })?
             }
             Ok(ComposioClientKind::Direct(direct)) => {
                 tracing::debug!("[composio-direct] list_connections.execute: direct variant");
-                direct_list_connections(&direct)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("composio_list_connections (direct) failed: {e}"))?
+                direct_list_connections(&direct).await.map_err(|e| {
+                    anyhow::anyhow!("composio_list_connections (direct) failed: {e}")
+                })?
             }
             Err(e) => {
                 return Ok(ToolResult::error(format!(
