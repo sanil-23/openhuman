@@ -825,22 +825,28 @@ const AIPanel = () => {
                   const next = e.target.checked;
                   setBusyAction('toggle-local');
                   try {
-                    await localProvider.setEnabled(next);
-                    // Force a state reset in BOTH directions:
-                    //   - When enabling: reset_to_idle → bootstrap → state
-                    //     transitions to "ready" (daemon comes up).
-                    //   - When disabling: reset_to_idle → bootstrap → seeing
-                    //     `runtime_enabled = false`, status is set to
-                    //     "disabled" immediately (see bootstrap.rs:122).
-                    // Without `force=true`, `runtime_enabled = false` would
-                    // be written but status would keep reading the still-
-                    // running daemon as "ready" — the checkbox would snap
-                    // back to checked and the user would think the click
-                    // did nothing.
-                    await localProvider.download(true);
-                    // Poll every 500ms (up to 10s) until the state actually
-                    // settles to the expected value. The spinner stays up
-                    // for the full transition, then clears.
+                    if (next) {
+                      // Enable: write config, then kick reset_to_idle +
+                      // bootstrap. Bootstrap brings the daemon up (or sees
+                      // an external one and leaves it alone).
+                      await localProvider.setEnabled(true);
+                      await localProvider.download(true);
+                    } else {
+                      // Disable as a GATE, not a process murder. The
+                      // backend writes runtime_enabled=false, kills the
+                      // daemon ONLY if OpenHuman spawned it (external
+                      // installations stay running, per the same
+                      // friendly-fire-avoidance principle used at startup),
+                      // and forces status to "disabled" so the UI reflects
+                      // the gated state immediately. From the factory's
+                      // perspective the result is identical: any workload
+                      // routed to `ollama:<model>` fails at build time.
+                      await localProvider.shutdown();
+                    }
+                    // Poll every 500ms (up to 10s) until status settles.
+                    // Disable usually finishes in <1s (the RPC marks
+                    // status directly); enable can take 2-8s for daemon
+                    // boot + initial model probe.
                     const startedAt = Date.now();
                     const targetReached = (s: string) =>
                       next ? Boolean(s) && s !== 'disabled' : s === 'disabled';

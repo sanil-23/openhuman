@@ -153,6 +153,29 @@ pub async fn local_ai_status(
     ))
 }
 
+/// Stop the local-AI runtime, killing the Ollama daemon ONLY if OpenHuman
+/// spawned it.
+///
+/// External daemons (system service, user-launched `ollama serve`, daemons
+/// from another OpenHuman workspace) are left untouched — kill_ollama_server
+/// is a no-op when no spawn marker matches. Status is unconditionally set to
+/// `"disabled"` so the UI reflects the gate immediately, even when the
+/// underlying process keeps running externally. From the factory's
+/// perspective the result is identical: every workload routed to
+/// `ollama:<model>` will fail at build time, so nothing in OpenHuman talks
+/// to the daemon regardless of who owns it.
+pub async fn local_ai_shutdown_owned(
+    config: &Config,
+) -> Result<RpcOutcome<local_ai::LocalAiStatus>, String> {
+    let service = local_ai::global(config);
+    service.shutdown_owned_ollama(config).await;
+    service.mark_disabled(config);
+    Ok(RpcOutcome::single_log(
+        service.status(),
+        "local ai runtime gated off (owned daemon killed if any)",
+    ))
+}
+
 /// Triggers a full download of all required local AI models.
 pub async fn local_ai_download(
     config: &Config,

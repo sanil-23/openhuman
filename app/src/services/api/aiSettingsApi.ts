@@ -41,6 +41,7 @@ import {
   openhumanLocalAiDownload,
   openhumanLocalAiPresets,
   openhumanLocalAiSetOllamaPath,
+  openhumanLocalAiShutdownOwned,
   openhumanLocalAiStatus,
 } from '../../utils/tauriCommands/localAi';
 
@@ -311,12 +312,25 @@ export async function setLocalOllamaPath(path: string): Promise<void> {
   await openhumanLocalAiSetOllamaPath(path);
 }
 
+/**
+ * Gate off the local-AI runtime: writes `runtime_enabled = false`, kills the
+ * Ollama daemon ONLY if OpenHuman spawned it (external daemons are left
+ * untouched), and forces status to `"disabled"`. Workloads routed to
+ * `ollama:<model>` will fail at factory build time after this — the gate is
+ * at the routing layer, not by killing arbitrary processes.
+ */
+export async function shutdownLocalProvider(): Promise<void> {
+  await setLocalRuntimeEnabled(false);
+  await openhumanLocalAiShutdownOwned();
+}
+
 /** Convenience helpers re-exported so the panel imports from one place. */
 export const localProvider = {
   applyPreset: (tier: string) => openhumanLocalAiApplyPreset(tier),
   download: (retry: boolean) => openhumanLocalAiDownload(retry),
   setEnabled: (enabled: boolean) => setLocalRuntimeEnabled(enabled),
   setBinaryPath: (path: string) => setLocalOllamaPath(path),
+  shutdown: () => shutdownLocalProvider(),
 };
 
 export type { ModelPresetResult };
