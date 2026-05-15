@@ -725,7 +725,7 @@ const AIPanel = () => {
 
   return (
     <div className="relative">
-      <SettingsHeader title="AI" showBackButton onBack={navigateBack} breadcrumbs={breadcrumbs} />
+      <SettingsHeader title="LLM" showBackButton onBack={navigateBack} breadcrumbs={breadcrumbs} />
 
       <div className="space-y-4 p-4">
         {/* ─── Cloud providers ─────────────────────────────────────────── */}

@@ -219,12 +219,12 @@ describe('SettingsHome', () => {
       expect(mockNavigateToSettings).toHaveBeenCalledWith('features');
     });
 
-    it('navigates to ai-models settings when AI & Models is clicked', async () => {
+    it('navigates to ai settings when AI is clicked', async () => {
       const user = userEvent.setup();
       renderSettingsHome();
 
-      await user.click(screen.getByText('AI & Models').closest('button')!);
-      expect(mockNavigateToSettings).toHaveBeenCalledWith('ai-models');
+      await user.click(screen.getByText('AI').closest('button')!);
+      expect(mockNavigateToSettings).toHaveBeenCalledWith('ai');
     });
 
     it('opens billing URL when Billing & Usage is clicked', async () => {
