@@ -678,6 +678,24 @@ const AIPanel = () => {
   const installed = useInstalledModels(ollama.snapshot);
   const [editing, setEditing] = useState<CloudProvider | 'new' | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState<boolean>(false);
+  const [customPathInput, setCustomPathInput] = useState<string>('');
+  // Seed the custom-path input from the resolved binary path the FIRST time
+  // diagnostics arrives, so the field shows what's currently in use.
+  const resolvedBinaryPath = ollama.snapshot?.diagnostics?.ollama_binary_path ?? '';
+  useEffect(() => {
+    if (customPathInput === '' && resolvedBinaryPath) {
+      setCustomPathInput(resolvedBinaryPath);
+    }
+    // We deliberately do NOT re-sync on every diagnostics tick — that would
+    // clobber in-flight edits while the user is typing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedBinaryPath]);
+
+  const daemonWarning = ollama.snapshot?.status?.warning ?? '';
+  const isDaemonConflict =
+    daemonWarning.toLowerCase().includes('external ollama daemon') ||
+    daemonWarning.toLowerCase().includes('broken runner');
 
   const primary = useMemo(
     () => draft.cloudProviders.find((p) => p.id === draft.primaryCloudId),
@@ -948,6 +966,113 @@ const AIPanel = () => {
               </>
             )}
           </div>
+
+          {/* Daemon-conflict callout — surfaces the "external Ollama with
+              broken runner" state in plain English so the user knows the
+              recovery (kill external, retry) without having to read logs. */}
+          {isDaemonConflict && ollama.state !== 'disabled' && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 space-y-2">
+              <div className="font-medium">Conflicting Ollama daemon detected</div>
+              <div>
+                Another Ollama process is bound to <span className="font-mono">:11434</span> but
+                OpenHuman didn&apos;t start it, so it can&apos;t safely restart it on your
+                behalf. To recover:
+              </div>
+              <ol className="list-decimal pl-5 space-y-0.5">
+                <li>
+                  Stop the running Ollama (Windows Task Manager → end{' '}
+                  <span className="font-mono">ollama.exe</span> / <span className="font-mono">ollama app.exe</span>,
+                  or <span className="font-mono">taskkill /F /IM ollama.exe</span>).
+                </li>
+                <li>Click <span className="font-medium">Retry</span> above — OpenHuman will spawn its own managed daemon.</li>
+                <li>
+                  Or, if you want to keep your install, set its binary path below — OpenHuman will use yours.
+                </li>
+              </ol>
+              {daemonWarning && (
+                <div className="rounded border border-amber-200 bg-white/60 px-2 py-1 font-mono text-[10px] text-amber-800">
+                  {daemonWarning}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Advanced: show the resolved binary path + let the user
+              override it. The Rust resolver already supports a chain
+              (user path → OLLAMA_BIN env → workspace bin → system PATH →
+              auto-install); this surfaces it and provides one-field
+              override. */}
+          <details
+            open={advancedOpen}
+            onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
+            className="rounded-lg border border-stone-200 bg-white">
+            <summary className="cursor-pointer select-none px-3 py-2 text-xs font-semibold uppercase tracking-wide text-stone-500 hover:text-stone-700">
+              Advanced
+            </summary>
+            <div className="space-y-3 border-t border-stone-200 px-3 py-3">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">
+                  Resolved Ollama binary
+                </div>
+                <div className="mt-0.5 truncate font-mono text-[11px] text-stone-700">
+                  {resolvedBinaryPath || '— not detected; OpenHuman will auto-install on next start'}
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">
+                  Custom Ollama path
+                </label>
+                <div className="mt-1 flex gap-2">
+                  <input
+                    type="text"
+                    value={customPathInput}
+                    onChange={(e) => setCustomPathInput(e.target.value)}
+                    placeholder="e.g. C:\Program Files\Ollama\ollama.exe"
+                    className="min-w-0 flex-1 rounded-md border border-stone-300 bg-white px-2 py-1 font-mono text-[11px] text-stone-800 placeholder:text-stone-400 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
+                  />
+                  <button
+                    onClick={async () => {
+                      setBusyAction('set-ollama-path');
+                      try {
+                        await localProvider.setBinaryPath(customPathInput.trim());
+                      } catch (err) {
+                        const msg = err instanceof Error ? err.message : String(err);
+                        // eslint-disable-next-line no-console
+                        console.warn('[ai-settings] set Ollama path failed', msg);
+                      } finally {
+                        setBusyAction(null);
+                        await ollama.refresh();
+                      }
+                    }}
+                    disabled={busyAction === 'set-ollama-path'}
+                    className="rounded-md border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50">
+                    Save
+                  </button>
+                  {customPathInput && (
+                    <button
+                      onClick={async () => {
+                        setCustomPathInput('');
+                        setBusyAction('set-ollama-path');
+                        try {
+                          await localProvider.setBinaryPath('');
+                        } finally {
+                          setBusyAction(null);
+                          await ollama.refresh();
+                        }
+                      }}
+                      disabled={busyAction === 'set-ollama-path'}
+                      className="rounded-md border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50">
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="mt-1 text-[10px] text-stone-500">
+                  Empty = auto-detect (workspace install → <span className="font-mono">OLLAMA_BIN</span>
+                  {' '}env → system <span className="font-mono">PATH</span> → managed install).
+                </div>
+              </div>
+            </div>
+          </details>
         </section>
 
         {/* ─── Workload routing ────────────────────────────────────────── */}

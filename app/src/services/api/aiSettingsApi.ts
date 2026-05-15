@@ -40,6 +40,7 @@ import {
   openhumanLocalAiDiagnostics,
   openhumanLocalAiDownload,
   openhumanLocalAiPresets,
+  openhumanLocalAiSetOllamaPath,
   openhumanLocalAiStatus,
 } from '../../utils/tauriCommands/localAi';
 
@@ -297,11 +298,25 @@ export async function setLocalRuntimeEnabled(enabled: boolean): Promise<void> {
   await openhumanUpdateLocalAiSettings({ runtime_enabled: enabled });
 }
 
+/**
+ * Set / clear the user-configured Ollama binary path. The Rust resolver
+ * tries (in order): this field → `OLLAMA_BIN` env → workspace bin →
+ * system PATH → auto-install. Pass an empty string to clear and fall
+ * back to auto-detection.
+ *
+ * Triggers a re-bootstrap on the Rust side so the new path takes effect
+ * without needing a manual restart.
+ */
+export async function setLocalOllamaPath(path: string): Promise<void> {
+  await openhumanLocalAiSetOllamaPath(path);
+}
+
 /** Convenience helpers re-exported so the panel imports from one place. */
 export const localProvider = {
   applyPreset: (tier: string) => openhumanLocalAiApplyPreset(tier),
   download: (retry: boolean) => openhumanLocalAiDownload(retry),
   setEnabled: (enabled: boolean) => setLocalRuntimeEnabled(enabled),
+  setBinaryPath: (path: string) => setLocalOllamaPath(path),
 };
 
 export type { ModelPresetResult };
