@@ -17,6 +17,7 @@ import {
   LuCpu,
   LuDownload,
   LuKey,
+  LuLoader,
   LuPencilLine,
   LuPlus,
   LuPower,
@@ -312,13 +313,16 @@ function useOllamaStatus() {
   const [snapshot, setSnapshot] = useState<LocalProviderSnapshot | null>(null);
   const lastPollRef = useRef<number>(0);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<LocalProviderSnapshot | null> => {
     try {
       const s = await loadLocalProviderSnapshot();
       setSnapshot(s);
       lastPollRef.current = Date.now();
+      return s;
     } catch {
-      // Swallow — keep last good snapshot.
+      // Swallow — keep last good snapshot, return null so callers can
+      // detect failure without a try/catch.
+      return null;
     }
   }, []);
 
@@ -803,36 +807,67 @@ const AIPanel = () => {
               `local_ai_download` because bootstrap only auto-fires from
               "idle"/"degraded" — "disabled" → "ready" is NOT an automatic
               transition. */}
-          <label className="flex items-start gap-3 rounded-lg border border-stone-200 bg-white px-3 py-2.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={ollama.state !== 'disabled'}
-              onChange={async (e) => {
-                const next = e.target.checked;
-                setBusyAction('toggle-local');
-                try {
-                  await localProvider.setEnabled(next);
-                  if (next) {
-                    // Kick the bootstrap so the daemon moves out of
-                    // "disabled" without the user having to also click
-                    // Install/Retry below.
-                    await localProvider.download(false);
+          <label
+            className={`flex items-start gap-3 rounded-lg border border-stone-200 bg-white px-3 py-2.5 transition-opacity ${
+              busyAction === 'toggle-local'
+                ? 'cursor-wait opacity-80'
+                : 'cursor-pointer'
+            }`}>
+            {busyAction === 'toggle-local' ? (
+              <span className="mt-0.5 flex h-3.5 w-3.5 items-center justify-center">
+                <LuLoader className="h-3.5 w-3.5 animate-spin text-primary-500" />
+              </span>
+            ) : (
+              <input
+                type="checkbox"
+                checked={ollama.state !== 'disabled'}
+                onChange={async (e) => {
+                  const next = e.target.checked;
+                  setBusyAction('toggle-local');
+                  try {
+                    await localProvider.setEnabled(next);
+                    if (next) {
+                      // Kick the bootstrap so the daemon moves out of
+                      // "disabled" without the user having to also click
+                      // Install/Retry below.
+                      await localProvider.download(false);
+                      // Poll every 500ms (up to 10s) until the state
+                      // actually transitions out of "disabled". Otherwise
+                      // the spinner clears the instant the RPC returns
+                      // and the user sees the checkbox flicker
+                      // off-then-on while the daemon is still booting.
+                      const startedAt = Date.now();
+                      while (Date.now() - startedAt < 10_000) {
+                        await new Promise((r) => setTimeout(r, 500));
+                        const fresh = await ollama.refresh();
+                        const freshState = fresh?.status?.state ?? '';
+                        if (freshState && freshState !== 'disabled') break;
+                      }
+                    }
+                  } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    // eslint-disable-next-line no-console
+                    console.warn('[ai-settings] toggle local AI failed', msg);
+                  } finally {
+                    setBusyAction(null);
+                    await ollama.refresh();
+                    await reload();
                   }
-                } catch (err) {
-                  const msg = err instanceof Error ? err.message : String(err);
-                  // eslint-disable-next-line no-console
-                  console.warn('[ai-settings] toggle local AI failed', msg);
-                } finally {
-                  setBusyAction(null);
-                  await ollama.refresh();
-                  await reload();
-                }
-              }}
-              disabled={busyAction === 'toggle-local'}
-              className="mt-0.5"
-            />
+                }}
+                className="mt-0.5"
+              />
+            )}
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-stone-900">Enable local AI (Ollama)</div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-stone-900">
+                  Enable local AI (Ollama)
+                </span>
+                {busyAction === 'toggle-local' && (
+                  <span className="text-[10px] font-medium uppercase tracking-widest text-primary-500">
+                    {ollama.state === 'disabled' ? 'Starting…' : 'Stopping…'}
+                  </span>
+                )}
+              </div>
               <div className="text-xs text-stone-500">
                 Manages the on-device Ollama daemon used by any workload routed to
                 <span className="font-mono"> ollama:&lt;model&gt;</span>. Turn off if you
@@ -880,8 +915,16 @@ const AIPanel = () => {
                     ? 'Enable local AI above first'
                     : undefined
                 }>
-                <LuPower className="h-3 w-3" />
-                {ollama.state === 'missing' ? 'Install' : 'Retry'}
+                {busyAction === 'download' ? (
+                  <LuLoader className="h-3 w-3 animate-spin" />
+                ) : (
+                  <LuPower className="h-3 w-3" />
+                )}
+                {busyAction === 'download'
+                  ? 'Working…'
+                  : ollama.state === 'missing'
+                    ? 'Install'
+                    : 'Retry'}
               </button>
               <button
                 onClick={() => void ollama.refresh()}
