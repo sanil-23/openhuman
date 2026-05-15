@@ -112,6 +112,10 @@ struct MeetSettingsUpdate {
 #[derive(Debug, Deserialize)]
 struct LocalAiSettingsUpdate {
     runtime_enabled: Option<bool>,
+    /// MVP opt-in marker. Tied to `runtime_enabled` from the unified AI
+    /// panel toggle (both flip on enable, both flip off on disable) so
+    /// the user gets local AI working with a single click instead of
+    /// having to also apply a tier preset.
     opt_in_confirmed: Option<bool>,
     provider: Option<String>,
     base_url: Option<String>,
@@ -509,7 +513,9 @@ pub fn schemas(function: &str) -> ControllerSchema {
                 ),
                 optional_bool(
                     "opt_in_confirmed",
-                    "Explicit local AI opt-in marker required by bootstrap.",
+                    "MVP opt-in marker. Bootstrap hard-overrides to disabled when this is false, \
+                     regardless of `runtime_enabled`. Set in tandem with `runtime_enabled` from the \
+                     unified AI panel.",
                 ),
                 optional_string(
                     "provider",

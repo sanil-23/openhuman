@@ -120,6 +120,13 @@ export interface ScreenIntelligenceSettingsUpdate {
 
 export interface LocalAiSettingsUpdate {
   runtime_enabled?: boolean | null;
+  /**
+   * MVP opt-in marker. Bootstrap hard-overrides status to "disabled" when
+   * this is `false`, regardless of `runtime_enabled`. The unified AI panel
+   * toggle flips this in tandem with `runtime_enabled` so a single click
+   * actually turns local AI on — without it, the daemon spawns but
+   * bootstrap immediately forces status back to disabled (cloud fallback).
+   */
   opt_in_confirmed?: boolean | null;
   provider?: string | null;
   base_url?: string | null;

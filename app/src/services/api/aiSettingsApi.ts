@@ -294,9 +294,21 @@ export async function loadLocalProviderSnapshot(): Promise<LocalProviderSnapshot
  * `false`, every workload routed to `ollama:*` will fail to build at the
  * factory level — the user should leave routes set to "cloud" while local
  * AI is disabled. The new AI panel surfaces this as a single switch.
+ *
+ * Critically: this flips BOTH `runtime_enabled` AND `opt_in_confirmed`.
+ * Bootstrap has a separate hard-override that forces status to "disabled"
+ * whenever `opt_in_confirmed` is false, regardless of `runtime_enabled`.
+ * Setting only `runtime_enabled = true` would spawn the daemon and
+ * immediately get re-disabled on the next bootstrap call:
+ *   [local_ai] bootstrap: opt_in_confirmed=false, hard-overriding to disabled
+ * Tying the two flags together matches `apply_preset`'s behaviour and gives
+ * the user a single-click enable.
  */
 export async function setLocalRuntimeEnabled(enabled: boolean): Promise<void> {
-  await openhumanUpdateLocalAiSettings({ runtime_enabled: enabled });
+  await openhumanUpdateLocalAiSettings({
+    runtime_enabled: enabled,
+    opt_in_confirmed: enabled,
+  });
 }
 
 /**
