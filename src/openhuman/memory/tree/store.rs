@@ -976,13 +976,14 @@ pub fn set_chunk_embedding(config: &Config, chunk_id: &str, embedding: &[f32]) -
     set_chunk_embedding_for_signature(config, chunk_id, &signature, embedding)
 }
 
-/// Store a chunk embedding for a specific provider/model/dimension signature.
-///
-/// This is the Stage-1 per-model table write path for #1574. The legacy
-/// `mem_tree_chunks.embedding` column is intentionally left untouched by this
-/// helper so callers can dual-write while query paths migrate.
-pub fn set_chunk_embedding_for_signature(
-    config: &Config,
+/// Core upsert into `mem_tree_chunk_embeddings` over an arbitrary
+/// `&Connection`. Shared by the standalone ([`set_chunk_embedding_for_signature`])
+/// and in-transaction ([`set_chunk_embedding_for_signature_tx`]) write paths so
+/// the SQL exists exactly once. `rusqlite::Transaction` derefs to `Connection`,
+/// so an in-tx caller passes `&tx` and the sidecar row commits atomically with
+/// the surrounding work (#1574 write-side cutover).
+fn upsert_chunk_embedding_conn(
+    conn: &rusqlite::Connection,
     chunk_id: &str,
     model_signature: &str,
     embedding: &[f32],
@@ -990,19 +991,48 @@ pub fn set_chunk_embedding_for_signature(
     let bytes = embedding_to_blob(embedding);
     let dim = i64::try_from(embedding.len()).context("embedding dimension does not fit i64")?;
     let created_at = Utc::now().timestamp_millis() as f64 / 1000.0;
-    with_connection(config, |conn| {
-        conn.execute(
-            "INSERT INTO mem_tree_chunk_embeddings
+    conn.execute(
+        "INSERT INTO mem_tree_chunk_embeddings
              (chunk_id, model_signature, vector, dim, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(chunk_id, model_signature) DO UPDATE SET
                 vector = excluded.vector,
                 dim = excluded.dim,
                 created_at = excluded.created_at",
-            rusqlite::params![chunk_id, model_signature, bytes, dim, created_at],
-        )?;
-        Ok(())
+        rusqlite::params![chunk_id, model_signature, bytes, dim, created_at],
+    )?;
+    Ok(())
+}
+
+/// Store a chunk embedding for a specific provider/model/dimension signature.
+///
+/// Per-model table write path for #1574. The legacy
+/// `mem_tree_chunks.embedding` column is intentionally left untouched by this
+/// helper (read by the §7 migration; dropped only in a later release).
+pub fn set_chunk_embedding_for_signature(
+    config: &Config,
+    chunk_id: &str,
+    model_signature: &str,
+    embedding: &[f32],
+) -> Result<()> {
+    with_connection(config, |conn| {
+        upsert_chunk_embedding_conn(conn, chunk_id, model_signature, embedding)
     })
+}
+
+/// Transaction-scoped variant of [`set_chunk_embedding_for_signature`].
+///
+/// For callers that already hold a `Transaction` (e.g. the chunk-admission
+/// handler, which commits the sidecar row in the SAME tx as the lifecycle
+/// + score + job-enqueue writes — #1574 write-side cutover). Opening a fresh
+/// connection there would break atomicity / deadlock on the busy DB.
+pub(crate) fn set_chunk_embedding_for_signature_tx(
+    tx: &rusqlite::Transaction<'_>,
+    chunk_id: &str,
+    model_signature: &str,
+    embedding: &[f32],
+) -> Result<()> {
+    upsert_chunk_embedding_conn(tx, chunk_id, model_signature, embedding)
 }
 
 /// Fetch a chunk embedding for exactly one provider/model/dimension signature.

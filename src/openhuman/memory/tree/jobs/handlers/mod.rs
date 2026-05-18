@@ -74,7 +74,7 @@ async fn handle_extract(config: &Config, job: &Job) -> Result<JobOutcome> {
 
     let scoring_cfg = score::ScoringConfig::from_config(config);
     let result = score::score_chunk(&chunk_with_body, &scoring_cfg).await?;
-    let packed_embedding = if result.kept {
+    let chunk_embedding: Option<Vec<f32>> = if result.kept {
         let embedder =
             build_embedder_from_config(config).context("build embedder in extract handler")?;
         // Reuse the body already read — avoid a second disk read.
@@ -82,10 +82,13 @@ async fn handle_extract(config: &Config, job: &Job) -> Result<JobOutcome> {
             .embed(&body)
             .await
             .with_context(|| format!("embed chunk_id={} in extract handler", chunk.id))?;
-        Some(
-            pack_checked(&vector)
-                .with_context(|| format!("pack embedding for chunk_id={}", chunk.id))?,
-        )
+        // Preserve the pre-cutover dimension guard (the job fails fast on a
+        // misconfigured embedder) even though #1574 no longer persists the
+        // packed blob to the legacy `mem_tree_chunks.embedding` column —
+        // the vector now goes to the per-model sidecar instead.
+        pack_checked(&vector)
+            .with_context(|| format!("validate embedding dims for chunk_id={}", chunk.id))?;
+        Some(vector)
     } else {
         None
     };
@@ -117,6 +120,9 @@ async fn handle_extract(config: &Config, job: &Job) -> Result<JobOutcome> {
         None
     };
 
+    // #1574: resolve the active embedding signature once (probe-stable,
+    // config-derived) so the sidecar write below is keyed correctly.
+    let active_sig = chunk_store::tree_active_signature(config);
     let (did_enqueue_source, did_enqueue_route) = chunk_store::with_connection(config, |conn| {
         let tx = conn.unchecked_transaction()?;
         score::persist_score_tx(
@@ -129,15 +135,24 @@ async fn handle_extract(config: &Config, job: &Job) -> Result<JobOutcome> {
         if result.kept {
             tx.execute(
                 "UPDATE mem_tree_chunks
-                        SET embedding = ?1,
-                            lifecycle_status = ?2
-                      WHERE id = ?3",
-                rusqlite::params![
-                    packed_embedding,
-                    chunk_store::CHUNK_STATUS_ADMITTED,
-                    chunk.id,
-                ],
+                        SET lifecycle_status = ?1
+                      WHERE id = ?2",
+                rusqlite::params![chunk_store::CHUNK_STATUS_ADMITTED, chunk.id],
             )?;
+            // #1574 write-side cutover: persist the embedding to the
+            // per-model `mem_tree_chunk_embeddings` sidecar at the active
+            // signature, inside THIS tx so it commits atomically with the
+            // lifecycle / score / job-enqueue writes. The legacy
+            // `mem_tree_chunks.embedding` column is no longer written
+            // (left intact for the §7 one-shot migration to read).
+            if let Some(emb) = chunk_embedding.as_deref() {
+                chunk_store::set_chunk_embedding_for_signature_tx(
+                    &tx,
+                    &chunk.id,
+                    &active_sig,
+                    emb,
+                )?;
+            }
         } else {
             tx.execute(
                 "UPDATE mem_tree_chunks
