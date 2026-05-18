@@ -267,6 +267,10 @@ impl Agent {
         // error. The timestamp is bumped on every successful `load` (even
         // when the digest is empty) so an empty workspace doesn't get
         // re-queried every turn.
+        //
+        // Capture the first-turn sentinel BEFORE the tree block updates it,
+        // so the STM recall block below can gate on "first turn only".
+        let is_first_turn_for_stm = self.last_tree_prefetch_at.is_none();
         let now = std::time::Instant::now();
         let context = if crate::openhuman::agent::tree_loader::should_prefetch(
             self.last_tree_prefetch_at,
@@ -306,6 +310,70 @@ impl Agent {
             }
         } else {
             log::trace!("[memory_tree] tree_loader skipped — within refresh interval");
+            context
+        };
+
+        // ── Phase 3 STM preemptive recall ────────────────────────────
+        // On the very first turn only, assemble a bounded cross-thread
+        // context block from the FTS5 episodic arm (keyword match) and the
+        // segment-embedding arm (cosine similarity). The block rides on the
+        // user message (NOT the system prompt) to keep the KV-cache prefix
+        // stable, exactly like the tree-context injection above.
+        //
+        // Gate: `learning.stm_recall_enabled` must be true AND this must
+        // be the first turn (STM is snapshot-frozen at session start).
+        // Failure is non-fatal — bare `context` passes through untouched.
+        let context = if is_first_turn_for_stm {
+            // Load config to check the gate. Use a cached load (cheap).
+            let stm_enabled = crate::openhuman::config::rpc::load_config_with_timeout()
+                .await
+                .map(|cfg| cfg.learning.stm_recall_enabled)
+                .unwrap_or(true); // default: enabled
+
+            if stm_enabled {
+                if let Some(conn) = self.memory.sqlite_conn() {
+                    use crate::openhuman::memory::stm_recall::recall::{stm_recall, StmRecallOpts};
+                    let opts = StmRecallOpts {
+                        exclude_session: &self.event_session_id,
+                        query: if user_message.trim().is_empty() {
+                            None
+                        } else {
+                            Some(user_message)
+                        },
+                        model_signature: None,
+                    };
+                    match stm_recall(&conn, &opts, None) {
+                        Ok(block) if !block.is_empty() => {
+                            let stm_md = block.render();
+                            log::info!(
+                                "[stm_recall] preemptive block injected: {} items, ~{} chars, fts5_candidates={}, dropped_dedup={}",
+                                block.items.len(),
+                                stm_md.chars().count(),
+                                block.fts5_candidates,
+                                block.dropped_dedup
+                            );
+                            format!("{stm_md}{context}")
+                        }
+                        Ok(_) => {
+                            log::debug!(
+                                "[stm_recall] preemptive recall: no cross-thread context found"
+                            );
+                            context
+                        }
+                        Err(e) => {
+                            log::warn!("[stm_recall] preemptive recall failed (non-fatal): {e}");
+                            context
+                        }
+                    }
+                } else {
+                    log::debug!("[stm_recall] preemptive recall skipped — no SQLite connection on memory backend");
+                    context
+                }
+            } else {
+                log::debug!("[stm_recall] preemptive recall skipped — stm_recall_enabled=false");
+                context
+            }
+        } else {
             context
         };
 

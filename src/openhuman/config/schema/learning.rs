@@ -91,6 +91,21 @@ pub struct LearningConfig {
     #[serde(default = "default_true")]
     pub episodic_capture_enabled: bool,
 
+    /// Enable preemptive STM recall injection at session start and on-demand
+    /// `stm_recall_search` tool exposure.
+    ///
+    /// When enabled, a bounded cross-thread context block is assembled from
+    /// recent episodic entries (FTS5 keyword arm) and segment recaps (cosine
+    /// similarity arm) from OTHER sessions and injected into the first turn's
+    /// user message. The `stm_recall_search` tool is also registered in the
+    /// agent's tool list.
+    ///
+    /// Default: `true`. Set to `false` to fully disable STM recall.
+    ///
+    /// Override via `OPENHUMAN_LEARNING_STM_RECALL_ENABLED=0|1`.
+    #[serde(default = "default_true")]
+    pub stm_recall_enabled: bool,
+
     /// How often the periodic rebuild loop runs in seconds. Default: 1800 (30 minutes).
     #[serde(default = "default_rebuild_interval_secs")]
     pub rebuild_interval_secs: u64,
@@ -127,6 +142,7 @@ impl Default for LearningConfig {
             stability_detector_enabled: default_true(),
             rebuild_interval_secs: default_rebuild_interval_secs(),
             episodic_capture_enabled: default_true(),
+            stm_recall_enabled: default_true(),
         }
     }
 }

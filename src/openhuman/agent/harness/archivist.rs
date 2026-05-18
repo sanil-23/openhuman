@@ -906,8 +906,9 @@ impl ArchivistHook {
     /// Test-only constructor that injects a stub `ChatProvider` and `Embedder`
     /// directly, bypassing `with_config`'s provider-build logic. Used by
     /// Phase 1 tests to verify LLM recap and embedding paths without hitting
-    /// a real LLM or Ollama daemon.
-    pub(super) fn new_with_stubs(
+    /// a real LLM or Ollama daemon. Exposed as `pub(crate)` so Phase 3
+    /// STM recall integration tests can drive the full archivist path.
+    pub(crate) fn new_with_stubs(
         conn: Arc<Mutex<Connection>>,
         chat_provider: Arc<dyn ChatProvider>,
         embedder: Arc<dyn Embedder>,
