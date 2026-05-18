@@ -101,7 +101,26 @@ fn chunk_embeddings_are_scoped_by_model_signature() {
             .unwrap()
             .is_none()
     );
+
+    // #1574 cutover: the public `get_chunk_embedding` now reads the sidecar at
+    // the *active* signature (not the legacy column). Nothing was written
+    // there yet, so it is absent — graceful, never a cross-space read of the
+    // openai/local rows above.
     assert!(get_chunk_embedding(&cfg, &c.id).unwrap().is_none());
+
+    // The public setter targets the active signature and round-trips through
+    // the public getter — proves the cutover wiring end to end.
+    set_chunk_embedding(&cfg, &c.id, &[0.7, 0.8]).unwrap();
+    assert_eq!(
+        get_chunk_embedding(&cfg, &c.id).unwrap(),
+        Some(vec![0.7, 0.8])
+    );
+
+    // ...and the earlier per-signature rows remain independently scoped.
+    assert_eq!(
+        get_chunk_embedding_for_signature(&cfg, &c.id, "local/bge-small@384").unwrap(),
+        Some(vec![0.3, 0.4, 0.5])
+    );
 }
 
 #[test]

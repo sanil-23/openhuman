@@ -945,22 +945,33 @@ fn add_column_if_missing(conn: &Connection, table: &str, name: &str, sql_type: &
 
 // ── Phase 2: embedding column accessors ─────────────────────────────────
 
-/// Store a chunk's embedding as a packed little-endian `f32` blob.
+/// Resolve the active embedding signature for the memory tree from the global
+/// [`Config`] — the canonical key every per-model sidecar read/write is scoped
+/// by (#1574). Reuses the established local-AI workload derivation
+/// ([`Config::workload_local_model`]) and the probe-stable
+/// `active_embedding_signature`; introduces no parallel resolution path.
+fn tree_active_signature(config: &Config) -> String {
+    let local_model = config.workload_local_model("embeddings");
+    crate::openhuman::memory::store::active_embedding_signature(
+        &config.memory,
+        local_model.as_deref(),
+    )
+}
+
+/// Store a chunk's embedding under the active model signature.
 ///
-/// Length is `embedding.len() * 4` bytes. The caller is responsible for
-/// ensuring all embeddings in a given deployment share the same dimension.
+/// #1574 cutover: this now writes the per-model `mem_tree_chunk_embeddings`
+/// sidecar (via [`set_chunk_embedding_for_signature`]) instead of the legacy
+/// `mem_tree_chunks.embedding` column. Call sites are unchanged — the signature
+/// is resolved internally from `config`. The legacy column is left intact for
+/// the §7 one-shot migration to read; it is dropped only in a later release.
 pub fn set_chunk_embedding(config: &Config, chunk_id: &str, embedding: &[f32]) -> Result<()> {
-    let bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-    with_connection(config, |conn| {
-        let changed = conn.execute(
-            "UPDATE mem_tree_chunks SET embedding = ?1 WHERE id = ?2",
-            rusqlite::params![bytes, chunk_id],
-        )?;
-        if changed == 0 {
-            log::warn!("[memory_tree::store] set_chunk_embedding: no row for chunk_id={chunk_id}");
-        }
-        Ok(())
-    })
+    let signature = tree_active_signature(config);
+    log::debug!(
+        "[memory_tree::store] set_chunk_embedding: chunk_id={chunk_id} sig={signature} dims={}",
+        embedding.len()
+    );
+    set_chunk_embedding_for_signature(config, chunk_id, &signature, embedding)
 }
 
 /// Store a chunk embedding for a specific provider/model/dimension signature.
@@ -1015,32 +1026,17 @@ pub fn get_chunk_embedding_for_signature(
     })
 }
 
-/// Fetch a chunk's embedding, decoding the stored little-endian `f32` blob.
+/// Fetch a chunk's embedding for the active model signature.
 ///
-/// Returns `Ok(None)` if the chunk doesn't exist or has no embedding stored.
+/// #1574 cutover: reads the per-model `mem_tree_chunk_embeddings` sidecar at
+/// the active signature (via [`get_chunk_embedding_for_signature`]) instead of
+/// the legacy `mem_tree_chunks.embedding` column. Returns `Ok(None)` if the
+/// chunk has no vector under the active signature — e.g. during the §7
+/// backfill window, where this degrades retrieval gracefully (the row is
+/// simply absent from vector results, never cross-space compared).
 pub fn get_chunk_embedding(config: &Config, chunk_id: &str) -> Result<Option<Vec<f32>>> {
-    with_connection(config, |conn| {
-        let blob: Option<Option<Vec<u8>>> = conn
-            .query_row(
-                "SELECT embedding FROM mem_tree_chunks WHERE id = ?1",
-                rusqlite::params![chunk_id],
-                |r| r.get::<_, Option<Vec<u8>>>(0),
-            )
-            .optional()?;
-        match blob.flatten() {
-            None => Ok(None),
-            Some(bytes) => {
-                if !bytes.len().is_multiple_of(4) {
-                    anyhow::bail!("embedding blob length {} not a multiple of 4", bytes.len());
-                }
-                let floats: Vec<f32> = bytes
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect();
-                Ok(Some(floats))
-            }
-        }
-    })
+    let signature = tree_active_signature(config);
+    get_chunk_embedding_for_signature(config, chunk_id, &signature)
 }
 
 fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
