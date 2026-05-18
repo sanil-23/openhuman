@@ -421,6 +421,7 @@ mod tests {
             JobKind::TopicRoute,
             JobKind::DigestDaily,
             JobKind::FlushStale,
+            JobKind::ReembedBackfill,
         ] {
             assert_eq!(JobKind::parse(k.as_str()).unwrap(), k);
         }
@@ -495,6 +496,7 @@ mod tests {
         assert!(JobKind::Seal.is_llm_bound());
         assert!(JobKind::DigestDaily.is_llm_bound());
         assert!(JobKind::TopicRoute.is_llm_bound());
+        assert!(JobKind::ReembedBackfill.is_llm_bound());
         assert!(!JobKind::AppendBuffer.is_llm_bound());
         assert!(!JobKind::FlushStale.is_llm_bound());
     }

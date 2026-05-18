@@ -282,15 +282,19 @@ function useAISettings() {
 
   const isDirty = JSON.stringify(saved) !== JSON.stringify(draft);
 
-  const save = useCallback(async () => {
+  // Returns true only when persistence actually succeeded, so callers
+  // (e.g. the #1574 re-embed-status check) don't act on a failed save.
+  const save = useCallback(async (): Promise<boolean> => {
     try {
       const prevApi = toApiSettings(saved);
       const nextApi = toApiSettings(draft);
       await saveAISettings(prevApi, nextApi);
       setSaved(draft);
+      return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save AI settings';
       setError(message);
+      return false;
     }
   }, [saved, draft]);
 
@@ -1729,7 +1733,10 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
     pending: 0,
   });
   const handleSave = useCallback(async () => {
-    await save();
+    // Only check re-embed status if the save actually persisted — a failed
+    // save didn't change the embedder, so there's nothing to surface.
+    const ok = await save();
+    if (!ok) return;
     try {
       const st = await memoryTreeBackfillStatus();
       if (st.in_progress) {
@@ -1742,7 +1749,12 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
   useEffect(() => {
     if (!reembed.open) return;
     let cancelled = false;
+    // Serialize polls — if a status call takes >2s, skip the next tick
+    // rather than overlapping requests.
+    let inFlight = false;
     const id = window.setInterval(() => {
+      if (inFlight) return;
+      inFlight = true;
       void (async () => {
         try {
           const st = await memoryTreeBackfillStatus();
@@ -1754,6 +1766,8 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
           }
         } catch (e) {
           console.warn('[ai-panel] backfill poll failed', e);
+        } finally {
+          inFlight = false;
         }
       })();
     }, 2000);
@@ -2018,8 +2032,8 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
           isOpen: reembed.open,
           title: 'Re-indexing memory',
           message:
-            `You changed the embedding model. ${reembed.pending} memory item(s) ` +
-            `are being re-embedded under the new model — semantic recall is ` +
+            `Embeddings are being reprocessed. ${reembed.pending} memory item(s) ` +
+            `are being re-embedded under the current model — semantic recall is ` +
             `reduced until this finishes. Keyword search keeps working, and ` +
             `re-embedding continues in the background if you close this.`,
           confirmText: 'OK',

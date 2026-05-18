@@ -276,6 +276,7 @@ pub struct BackfillStatusResponse {
 pub async fn backfill_status_rpc(
     config: &Config,
 ) -> Result<RpcOutcome<BackfillStatusResponse>, String> {
+    log::debug!("[memory_tree::rpc] backfill_status: entry");
     let pending_jobs: u64 = store::with_connection(config, |conn| {
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM mem_tree_jobs
@@ -285,7 +286,11 @@ pub async fn backfill_status_rpc(
         )?;
         Ok(n.max(0) as u64)
     })
-    .map_err(|e| format!("memory_backfill_status: {e}"))?;
+    .map_err(|e| {
+        let msg = format!("memory_backfill_status: {e}");
+        log::debug!("[memory_tree::rpc] backfill_status: error: {msg}");
+        msg
+    })?;
     let in_progress =
         crate::openhuman::memory::tree::jobs::backfill_in_progress() || pending_jobs > 0;
     Ok(RpcOutcome::single_log(
