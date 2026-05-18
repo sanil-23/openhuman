@@ -86,6 +86,7 @@ impl AgentBuilder {
             omit_profile: None,
             omit_memory_md: None,
             payload_summarizer: None,
+            archivist_hook: None,
         }
     }
 
@@ -313,6 +314,24 @@ impl AgentBuilder {
         self
     }
 
+    /// Attach the production [`ArchivistHook`] instance so the session
+    /// turn loop can call [`ArchivistHook::flush_open_segment`] at
+    /// session-wind-down time, guaranteeing the trailing open segment is
+    /// always finalized with an LLM recap + embedding.
+    ///
+    /// Set from `build_session_agent_inner` when
+    /// `config.learning.episodic_capture_enabled` is `true` and a
+    /// SQLite connection is available. Callers that construct an `Agent`
+    /// directly (tests, CLI) can leave this `None` — flush is a no-op
+    /// when the hook is absent.
+    pub fn archivist_hook(
+        mut self,
+        hook: Option<Arc<crate::openhuman::agent::harness::archivist::ArchivistHook>>,
+    ) -> Self {
+        self.archivist_hook = hook;
+        self
+    }
+
     /// Validates the configuration and constructs a new `Agent` instance.
     ///
     /// This method is responsible for wiring together the provided components,
@@ -462,6 +481,7 @@ impl AgentBuilder {
             omit_memory_md: self.omit_memory_md.unwrap_or(true),
             payload_summarizer: self.payload_summarizer,
             last_seen_integrations_hash: 0,
+            archivist_hook: self.archivist_hook,
             synthesized_tool_names: std::collections::HashSet::new(),
         })
     }
@@ -997,6 +1017,46 @@ impl Agent {
             }
         }
 
+        // ── ArchivistHook — register independently of learning.enabled ──────
+        //
+        // Episodic capture (FTS5 index, segment lifecycle, LLM recap, embedding)
+        // is the system-of-record for chat turns and must stay active even when
+        // the inference stack (`reflection`, `stability_detector`) is disabled.
+        // Gated only on `config.learning.episodic_capture_enabled` (default: true)
+        // and on the memory backend exposing a SQLite connection.
+        let archivist_hook_arc: Option<
+            Arc<crate::openhuman::agent::harness::archivist::ArchivistHook>,
+        > = if config.learning.episodic_capture_enabled {
+            match memory.sqlite_conn() {
+                Some(conn) => {
+                    let hook = Arc::new(
+                        crate::openhuman::agent::harness::archivist::ArchivistHook::new(conn, true)
+                            .with_config(config.clone()),
+                    );
+                    post_turn_hooks
+                        .push(Arc::clone(&hook)
+                            as Arc<dyn crate::openhuman::agent::hooks::PostTurnHook>);
+                    log::info!(
+                        "[archivist] episodic capture hook registered (learning.enabled={})",
+                        config.learning.enabled
+                    );
+                    Some(hook)
+                }
+                None => {
+                    log::warn!(
+                        "[archivist] no SQLite connection available from memory backend — \
+                         episodic capture disabled"
+                    );
+                    None
+                }
+            }
+        } else {
+            log::info!(
+                "[archivist] episodic_capture_enabled=false — archivist hook not registered"
+            );
+            None
+        };
+
         // Resolve the per-agent delegation tool set and visible-tool
         // whitelist from the target definition (when we have one) or
         // fall back to the orchestrator's synthesis path.
@@ -1329,6 +1389,7 @@ impl Agent {
         if let Some(ps) = payload_summarizer {
             builder = builder.payload_summarizer(ps);
         }
+        builder = builder.archivist_hook(archivist_hook_arc);
         builder.build()
     }
 }

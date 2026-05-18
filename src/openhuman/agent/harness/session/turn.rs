@@ -1688,6 +1688,27 @@ impl Agent {
     /// — see its docs for the threshold invariants. Safe to call from
     /// inside `turn()` after the turn body has settled.
     pub(super) fn spawn_session_memory_extraction(&mut self) {
+        // ── Flush the trailing open segment before the session winds down ──
+        //
+        // The ArchivistHook manages per-turn segment lifecycle but cannot
+        // force-close the *last* open segment because there is no explicit
+        // "session end" event in the turn loop. `spawn_session_memory_extraction`
+        // is the closest available signal: it fires when the context manager
+        // decides the session has accumulated enough material to archive.
+        //
+        // We spawn a dedicated background task so the flush (async LLM recap
+        // + embedding) does not block the main turn loop.
+        if let Some(ref archivist) = self.archivist_hook {
+            let hook = Arc::clone(archivist);
+            let session_id = self.event_session_id.clone();
+            log::debug!(
+                "[archivist] spawning flush_open_segment for session={session_id} at session wind-down"
+            );
+            tokio::spawn(async move {
+                hook.flush_open_segment(&session_id).await;
+            });
+        }
+
         let Some(registry) = harness::AgentDefinitionRegistry::global() else {
             log::debug!("[session_memory] registry not initialised — skipping extraction spawn");
             return;

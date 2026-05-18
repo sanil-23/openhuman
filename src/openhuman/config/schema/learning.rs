@@ -76,6 +76,21 @@ pub struct LearningConfig {
     #[serde(default = "default_true")]
     pub stability_detector_enabled: bool,
 
+    /// Enable episodic capture (ArchivistHook) regardless of the master
+    /// `learning.enabled` toggle.
+    ///
+    /// Episodic capture is the system-of-record for chat turns
+    /// (`episodic_log` FTS5 table, conversation segmentation, segment
+    /// summaries with LLM recap, and segment embeddings). It must remain
+    /// active even when the inference stack
+    /// (reflection / stability-detector) is off.
+    ///
+    /// Default: `true`. Set to `false` to fully disable the Archivist.
+    ///
+    /// Override via `OPENHUMAN_LEARNING_EPISODIC_CAPTURE_ENABLED=0|1`.
+    #[serde(default = "default_true")]
+    pub episodic_capture_enabled: bool,
+
     /// How often the periodic rebuild loop runs in seconds. Default: 1800 (30 minutes).
     #[serde(default = "default_rebuild_interval_secs")]
     pub rebuild_interval_secs: u64,
@@ -111,6 +126,7 @@ impl Default for LearningConfig {
             chat_to_tree_enabled: default_true(),
             stability_detector_enabled: default_true(),
             rebuild_interval_secs: default_rebuild_interval_secs(),
+            episodic_capture_enabled: default_true(),
         }
     }
 }
