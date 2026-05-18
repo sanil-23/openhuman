@@ -190,14 +190,18 @@ pub(crate) fn insert_summary_tx(
     tx: &Transaction<'_>,
     node: &SummaryNode,
     staged: Option<&StagedSummary>,
+    model_signature: &str,
 ) -> Result<()> {
-    let embedding_blob: Option<Vec<u8>> = match node.embedding.as_deref() {
-        Some(v) => Some(
-            pack_checked(v)
-                .with_context(|| format!("Failed to pack embedding for summary id={}", node.id))?,
-        ),
-        None => None,
-    };
+    // #1574 write-side cutover: keep the dimension guard (fail the seal fast
+    // on a misconfigured embedder) but DO NOT write the legacy
+    // `mem_tree_summaries.embedding` column — the vector is persisted to the
+    // per-model sidecar below, in THIS tx so it commits atomically with the
+    // summary row. The legacy column is left NULL for the §7 migration.
+    if let Some(v) = node.embedding.as_deref() {
+        pack_checked(v)
+            .with_context(|| format!("validate embedding dims for summary id={}", node.id))?;
+    }
+    let embedding_blob: Option<Vec<u8>> = None;
 
     // Phase MD-content: when a staged file exists, truncate `content` to a
     // ≤500-char plain-text preview (char boundary safe via chars().take(500)).
@@ -244,6 +248,12 @@ pub(crate) fn insert_summary_tx(
         ],
     )
     .with_context(|| format!("Failed to insert summary id={}", node.id))?;
+
+    // #1574: persist the embedding to the per-model sidecar at the active
+    // signature, in the SAME tx as the summary row insert above.
+    if let Some(v) = node.embedding.as_deref() {
+        upsert_summary_embedding_conn(tx, &node.id, model_signature, v)?;
+    }
     Ok(())
 }
 
@@ -283,13 +293,15 @@ pub fn get_summary_embedding(config: &Config, summary_id: &str) -> Result<Option
     get_summary_embedding_for_signature(config, summary_id, &signature)
 }
 
-/// Store a summary embedding for a specific provider/model/dimension signature.
-///
-/// This writes the #1574 per-model table only; the legacy
-/// `mem_tree_summaries.embedding` column remains available for dual-read
-/// fallback while query paths migrate.
-pub fn set_summary_embedding_for_signature(
-    config: &Config,
+/// Core upsert into `mem_tree_summary_embeddings` over an arbitrary
+/// `&Connection`. Shared by the standalone
+/// ([`set_summary_embedding_for_signature`]) and in-transaction
+/// ([`set_summary_embedding_for_signature_tx`]) write paths so the SQL exists
+/// exactly once. `rusqlite::Transaction` derefs to `Connection`, so the seal
+/// path passes `&tx` and the sidecar row commits atomically with the summary
+/// row insert (#1574 write-side cutover).
+fn upsert_summary_embedding_conn(
+    conn: &rusqlite::Connection,
     summary_id: &str,
     model_signature: &str,
     embedding: &[f32],
@@ -297,19 +309,46 @@ pub fn set_summary_embedding_for_signature(
     let blob = pack_embedding_blob(embedding);
     let dim = i64::try_from(embedding.len()).context("embedding dimension does not fit i64")?;
     let created_at = Utc::now().timestamp_millis() as f64 / 1000.0;
-    with_connection(config, |conn| {
-        conn.execute(
-            "INSERT INTO mem_tree_summary_embeddings
+    conn.execute(
+        "INSERT INTO mem_tree_summary_embeddings
              (summary_id, model_signature, vector, dim, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(summary_id, model_signature) DO UPDATE SET
                 vector = excluded.vector,
                 dim = excluded.dim,
                 created_at = excluded.created_at",
-            params![summary_id, model_signature, blob, dim, created_at],
-        )?;
-        Ok(())
+        params![summary_id, model_signature, blob, dim, created_at],
+    )?;
+    Ok(())
+}
+
+/// Store a summary embedding for a specific provider/model/dimension signature.
+///
+/// Per-model table write path for #1574. The legacy
+/// `mem_tree_summaries.embedding` column is intentionally left untouched by
+/// this helper (read by the §7 migration; dropped only in a later release).
+pub fn set_summary_embedding_for_signature(
+    config: &Config,
+    summary_id: &str,
+    model_signature: &str,
+    embedding: &[f32],
+) -> Result<()> {
+    with_connection(config, |conn| {
+        upsert_summary_embedding_conn(conn, summary_id, model_signature, embedding)
     })
+}
+
+/// Transaction-scoped variant of [`set_summary_embedding_for_signature`], for
+/// the seal path which inserts the summary row and its embedding in one tx
+/// (#1574 write-side cutover). Opening a fresh connection there would break
+/// atomicity / deadlock on the busy DB.
+pub(crate) fn set_summary_embedding_for_signature_tx(
+    tx: &rusqlite::Transaction<'_>,
+    summary_id: &str,
+    model_signature: &str,
+    embedding: &[f32],
+) -> Result<()> {
+    upsert_summary_embedding_conn(tx, summary_id, model_signature, embedding)
 }
 
 /// Fetch a summary embedding for exactly one provider/model/dimension signature.

@@ -74,7 +74,7 @@ fn summary_insert_and_fetch() {
     let node = sample_summary("sum-1", "tree-1", 1);
     with_connection(&cfg, |conn| {
         let tx = conn.unchecked_transaction()?;
-        insert_summary_tx(&tx, &node, None)?;
+        insert_summary_tx(&tx, &node, None, "test")?;
         tx.commit()?;
         Ok(())
     })
@@ -93,8 +93,8 @@ fn summary_insert_is_idempotent_on_id() {
     let node = sample_summary("sum-1", "tree-1", 1);
     with_connection(&cfg, |conn| {
         let tx = conn.unchecked_transaction()?;
-        insert_summary_tx(&tx, &node, None)?;
-        insert_summary_tx(&tx, &node, None)?;
+        insert_summary_tx(&tx, &node, None, "test")?;
+        insert_summary_tx(&tx, &node, None, "test")?;
         tx.commit()?;
         Ok(())
     })
@@ -109,7 +109,7 @@ fn summary_embeddings_are_scoped_by_model_signature() {
     let node = sample_summary("sum-embed", "tree-1", 1);
     with_connection(&cfg, |conn| {
         let tx = conn.unchecked_transaction()?;
-        insert_summary_tx(&tx, &node, None)?;
+        insert_summary_tx(&tx, &node, None, "test")?;
         tx.commit()?;
         Ok(())
     })
