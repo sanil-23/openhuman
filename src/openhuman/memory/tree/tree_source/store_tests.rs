@@ -143,7 +143,25 @@ fn summary_embeddings_are_scoped_by_model_signature() {
             .unwrap()
             .is_none()
     );
+
+    // #1574 cutover: the public `get_summary_embedding` now reads the sidecar
+    // at the *active* signature (not the legacy column). Nothing is written
+    // there yet → absent; never a cross-space read of the rows above.
     assert!(get_summary_embedding(&cfg, "sum-embed").unwrap().is_none());
+
+    // The public setter targets the active signature and round-trips through
+    // the public getter — proves the cutover wiring end to end.
+    set_summary_embedding(&cfg, "sum-embed", &[0.7, 0.8]).unwrap();
+    assert_eq!(
+        get_summary_embedding(&cfg, "sum-embed").unwrap(),
+        Some(vec![0.7, 0.8])
+    );
+
+    // ...and the earlier per-signature rows remain independently scoped.
+    assert_eq!(
+        get_summary_embedding_for_signature(&cfg, "sum-embed", "local/bge-small@384").unwrap(),
+        Some(vec![0.3, 0.4, 0.5])
+    );
 }
 
 #[test]

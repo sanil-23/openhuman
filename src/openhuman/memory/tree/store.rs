@@ -950,7 +950,9 @@ fn add_column_if_missing(conn: &Connection, table: &str, name: &str, sql_type: &
 /// by (#1574). Reuses the established local-AI workload derivation
 /// ([`Config::workload_local_model`]) and the probe-stable
 /// `active_embedding_signature`; introduces no parallel resolution path.
-fn tree_active_signature(config: &Config) -> String {
+/// `pub(crate)` so the sibling `tree_source` summary store shares the exact
+/// same resolution.
+pub(crate) fn tree_active_signature(config: &Config) -> String {
     let local_model = config.workload_local_model("embeddings");
     crate::openhuman::memory::store::active_embedding_signature(
         &config.memory,

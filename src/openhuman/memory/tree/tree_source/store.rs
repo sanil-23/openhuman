@@ -248,46 +248,39 @@ pub(crate) fn insert_summary_tx(
 }
 
 /// Set (or overwrite) the embedding for an existing summary row.
-/// Exposed for a future backfill helper — not called by ingest/seal
-/// today. Returns the number of rows updated (0 if the id is unknown).
+///
+/// #1574 cutover: writes the per-model `mem_tree_summary_embeddings` sidecar
+/// at the active signature (via [`set_summary_embedding_for_signature`])
+/// instead of the legacy `mem_tree_summaries.embedding` column. The signature
+/// is resolved internally from `config` via the shared
+/// [`crate::openhuman::memory::tree::store::tree_active_signature`] — same
+/// resolution as the chunk path. Returns `1` on success (one sidecar row
+/// written/updated); the legacy "0 if id unknown" count no longer applies
+/// since the sidecar upsert does not join the parent summary row.
 pub fn set_summary_embedding(
     config: &Config,
     summary_id: &str,
     embedding: &[f32],
 ) -> Result<usize> {
-    let blob = pack_checked(embedding)
-        .with_context(|| format!("Failed to pack embedding for summary id={summary_id}"))?;
-    with_connection(config, |conn| {
-        let changed = conn.execute(
-            "UPDATE mem_tree_summaries SET embedding = ?1 WHERE id = ?2",
-            params![blob, summary_id],
-        )?;
-        if changed == 0 {
-            log::warn!(
-                "[tree_source::store] set_summary_embedding: no row for summary_id={summary_id}"
-            );
-        }
-        Ok(changed)
-    })
+    let signature = crate::openhuman::memory::tree::store::tree_active_signature(config);
+    log::debug!(
+        "[tree_source::store] set_summary_embedding: summary_id={summary_id} sig={signature} dims={}",
+        embedding.len()
+    );
+    set_summary_embedding_for_signature(config, summary_id, &signature, embedding)?;
+    Ok(1)
 }
 
-/// Fetch a summary's embedding, decoding the stored little-endian `f32`
-/// blob. Returns `Ok(None)` if the summary doesn't exist OR if it exists
-/// but has a NULL embedding (legacy / pre-Phase-4 rows).
+/// Fetch a summary's embedding for the active model signature.
+///
+/// #1574 cutover: reads the per-model `mem_tree_summary_embeddings` sidecar at
+/// the active signature (via [`get_summary_embedding_for_signature`]) instead
+/// of the legacy `mem_tree_summaries.embedding` column. `Ok(None)` when no
+/// vector exists under the active signature — graceful absence during the §7
+/// backfill window, never a cross-space read.
 pub fn get_summary_embedding(config: &Config, summary_id: &str) -> Result<Option<Vec<f32>>> {
-    with_connection(config, |conn| {
-        let blob: Option<Option<Vec<u8>>> = conn
-            .query_row(
-                "SELECT embedding FROM mem_tree_summaries WHERE id = ?1",
-                params![summary_id],
-                |r| r.get::<_, Option<Vec<u8>>>(0),
-            )
-            .optional()?;
-        match blob {
-            None => Ok(None),
-            Some(inner) => decode_optional_blob(inner, &format!("summary_id={summary_id}")),
-        }
-    })
+    let signature = crate::openhuman::memory::tree::store::tree_active_signature(config);
+    get_summary_embedding_for_signature(config, summary_id, &signature)
 }
 
 /// Store a summary embedding for a specific provider/model/dimension signature.
