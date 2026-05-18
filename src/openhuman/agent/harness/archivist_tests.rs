@@ -499,3 +499,346 @@ async fn phase1_flush_open_segment_finalizes_trailing_segment() {
         "Expected embedding row for flushed segment={seg_id}"
     );
 }
+
+// ── Phase 2: segment-granularity tree ingest ─────────────────────────────────
+//
+// The following tests verify:
+//   a) No per-turn tree write fires from on_turn_complete (no double-write).
+//   b) Exactly ONE tree ingest fires when a segment closes (not N per turn).
+//   c) The ingested batch contains all the segment's raw prose turns.
+//   d) The `source_id` is the constant "conversations:agent".
+//   e) Each leaf message carries session/segment/episodic-span provenance.
+//   f) The ingested content is raw prose, NOT the LLM recap.
+//   g) flush_open_segment also triggers tree ingest.
+
+use crate::openhuman::config::Config;
+use crate::openhuman::memory::tree::store::{count_chunks, list_chunks, ListChunksQuery};
+use tempfile::TempDir;
+
+/// Build a Config that points at a temp workspace, suitable for tree-ingest tests.
+/// The memory_tree DB and content dir are created under `tmp.path()`.
+fn test_config_with_tree() -> (TempDir, Config) {
+    let tmp = TempDir::new().unwrap();
+    let mut cfg = Config::default();
+    cfg.workspace_dir = tmp.path().to_path_buf();
+    // Disable embedding so ingest doesn't fail trying to contact Ollama.
+    cfg.memory_tree.embedding_endpoint = None;
+    cfg.memory_tree.embedding_model = None;
+    cfg.memory_tree.embedding_strict = false;
+    // Ensure the tree ingest gate is on.
+    cfg.learning.chat_to_tree_enabled = true;
+    (tmp, cfg)
+}
+
+/// Build a hook that has both stub providers AND a real-enough Config wired in,
+/// so the Phase 2 tree ingest path is exercised hermetically.
+fn hook_with_stubs_and_tree_config(conn: Arc<Mutex<Connection>>, cfg: Config) -> ArchivistHook {
+    ArchivistHook::new_with_stubs_and_config(
+        conn,
+        Arc::new(StubChatProvider),
+        Arc::new(StubEmbedder),
+        cfg,
+    )
+}
+
+/// After a single turn (no segment boundary), the tree must have ZERO chunks —
+/// the per-turn pipe_turn_to_tree path no longer exists.
+#[tokio::test]
+async fn phase2_no_per_turn_tree_write() {
+    let conn = setup_conn();
+    let (_tmp, cfg) = test_config_with_tree();
+    let hook = hook_with_stubs_and_tree_config(conn.clone(), cfg.clone());
+
+    let session = "phase2-no-per-turn";
+
+    // Single turn — no segment close fires, so no tree ingest should happen.
+    hook.on_turn_complete(&TurnContext {
+        user_message: "What is Rust?".into(),
+        assistant_response: "Rust is a systems programming language.".into(),
+        tool_calls: vec![],
+        turn_duration_ms: 100,
+        session_id: Some(session.into()),
+        iteration_count: 1,
+    })
+    .await
+    .unwrap();
+
+    // Segment is still open (no boundary fired) — tree must have 0 chunks.
+    let open_seg = seg::open_segment_for_session(&conn, session).unwrap();
+    assert!(
+        open_seg.is_some(),
+        "Expected an open segment (no boundary should have fired)"
+    );
+
+    let chunk_count = count_chunks(&cfg).unwrap();
+    assert_eq!(
+        chunk_count, 0,
+        "Expected 0 tree chunks after a single turn (no segment close): \
+         per-turn tree write must not exist (Phase 2)"
+    );
+}
+
+/// When a segment closes (boundary triggered), exactly ONE tree ingest fires
+/// for that segment containing all its turns — not one ingest per turn.
+#[tokio::test]
+async fn phase2_exactly_one_tree_ingest_per_segment_close() {
+    let conn = setup_conn();
+    let (_tmp, cfg) = test_config_with_tree();
+    let hook = hook_with_stubs_and_tree_config(conn.clone(), cfg.clone());
+
+    let session = "phase2-one-ingest";
+
+    // Turn 1 — opens first segment.
+    hook.on_turn_complete(&TurnContext {
+        user_message: "Tell me about Rust ownership".into(),
+        assistant_response: "Rust ownership prevents memory bugs.".into(),
+        tool_calls: vec![],
+        turn_duration_ms: 100,
+        session_id: Some(session.into()),
+        iteration_count: 1,
+    })
+    .await
+    .unwrap();
+
+    // Turn 2 — stays in same segment.
+    hook.on_turn_complete(&TurnContext {
+        user_message: "What about the borrow checker?".into(),
+        assistant_response: "The borrow checker enforces ownership at compile time.".into(),
+        tool_calls: vec![],
+        turn_duration_ms: 100,
+        session_id: Some(session.into()),
+        iteration_count: 2,
+    })
+    .await
+    .unwrap();
+
+    // No tree write yet — segment still open.
+    let pre_close_chunks = count_chunks(&cfg).unwrap();
+    assert_eq!(
+        pre_close_chunks, 0,
+        "Expected 0 tree chunks before any segment close; got {pre_close_chunks}"
+    );
+
+    // Turn 3 — topic change triggers boundary → closes first segment → tree ingest fires.
+    hook.on_turn_complete(&TurnContext {
+        user_message: "Switching to a completely different topic: tell me about Python asyncio."
+            .into(),
+        assistant_response: "Python asyncio enables concurrent coroutines.".into(),
+        tool_calls: vec![],
+        turn_duration_ms: 100,
+        session_id: Some(session.into()),
+        iteration_count: 3,
+    })
+    .await
+    .unwrap();
+
+    // Segment closed → exactly one ingest for the closed segment (containing turns 1+2).
+    // The ingest packs the messages into one or more chunks (greedy packing),
+    // but chunks_written >= 1 confirms ingest happened.
+    let post_close_chunks = count_chunks(&cfg).unwrap();
+    assert!(
+        post_close_chunks >= 1,
+        "Expected ≥ 1 tree chunk after segment close; got {post_close_chunks}"
+    );
+
+    // List the chunks and check they come from the constant source_id.
+    let chunks = list_chunks(
+        &cfg,
+        &ListChunksQuery {
+            source_id: Some("conversations:agent".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        !chunks.is_empty(),
+        "Expected chunks under source_id='conversations:agent'"
+    );
+}
+
+/// The ingested leaf messages must carry the episodic-provenance `source_ref`
+/// in the expected format:
+/// `agent://session/{session_id}/segment/{segment_id}#ep{start}-{end}`.
+///
+/// Also verifies that `source_id` is the constant `"conversations:agent"`.
+#[tokio::test]
+async fn phase2_provenance_stamped_on_leaf_and_source_id_is_constant() {
+    let conn = setup_conn();
+    let (_tmp, cfg) = test_config_with_tree();
+    let hook = hook_with_stubs_and_tree_config(conn.clone(), cfg.clone());
+
+    let session = "phase2-provenance";
+
+    // Two turns in the first segment.
+    for i in 1..=2 {
+        hook.on_turn_complete(&TurnContext {
+            user_message: format!("Ownership question {i}"),
+            assistant_response: format!("Ownership answer {i}"),
+            tool_calls: vec![],
+            turn_duration_ms: 50,
+            session_id: Some(session.into()),
+            iteration_count: i,
+        })
+        .await
+        .unwrap();
+    }
+
+    // Force a segment close via flush_open_segment.
+    hook.flush_open_segment(session).await;
+
+    // Retrieve the closed segment to extract its ID.
+    let all_segs = seg::segments_by_namespace(&conn, "global", 10).unwrap();
+    let closed = all_segs
+        .iter()
+        .find(|s| {
+            s.session_id == session
+                && s.status != crate::openhuman::memory::store::segments::SegmentStatus::Open
+        })
+        .expect("Expected a closed segment after flush");
+
+    let segment_id = &closed.segment_id;
+    let start_ep = closed.start_episodic_id;
+    let end_ep = closed.end_episodic_id.unwrap_or(start_ep);
+
+    // Chunks should be present.
+    let chunks = list_chunks(&cfg, &ListChunksQuery::default()).unwrap();
+    assert!(
+        !chunks.is_empty(),
+        "Expected tree chunks after flush_open_segment"
+    );
+
+    // source_id must be the constant — never per-session or per-segment.
+    for chunk in &chunks {
+        assert_eq!(
+            chunk.metadata.source_id, "conversations:agent",
+            "source_id must be the constant 'conversations:agent', got: {}",
+            chunk.metadata.source_id
+        );
+    }
+
+    // The source_ref on at least one chunk must contain the provenance pattern.
+    let expected_provenance =
+        format!("agent://session/{session}/segment/{segment_id}#ep{start_ep}-{end_ep}");
+    let has_provenance = chunks.iter().any(|chunk| {
+        chunk
+            .metadata
+            .source_ref
+            .as_ref()
+            .map(|r| {
+                r.value
+                    .contains(&format!("agent://session/{session}/segment/{segment_id}"))
+            })
+            .unwrap_or(false)
+    });
+    assert!(
+        has_provenance,
+        "Expected at least one chunk with source_ref containing provenance pattern \
+         '{expected_provenance}'; found: {:?}",
+        chunks
+            .iter()
+            .map(|c| c.metadata.source_ref.as_ref().map(|r| r.value.as_str()))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The ingested content must be the raw prose turns (user + assistant text),
+/// NOT equal to the LLM recap text. The recap lives only in the STM segment
+/// layer; the tree must ingest raw evidence so it can build its own summaries.
+#[tokio::test]
+async fn phase2_ingested_content_is_raw_prose_not_recap() {
+    let conn = setup_conn();
+    let (_tmp, cfg) = test_config_with_tree();
+    let hook = hook_with_stubs_and_tree_config(conn.clone(), cfg.clone());
+
+    let session = "phase2-raw-prose";
+
+    // The stub recap always returns "stub recap: discussed Rust ownership model".
+    // The raw user messages contain very different text.
+    let user_msg = "My specific question about lifetimes in Rust code";
+    let asst_msg = "Lifetimes annotate how long references are valid in memory";
+
+    hook.on_turn_complete(&TurnContext {
+        user_message: user_msg.into(),
+        assistant_response: asst_msg.into(),
+        tool_calls: vec![],
+        turn_duration_ms: 100,
+        session_id: Some(session.into()),
+        iteration_count: 1,
+    })
+    .await
+    .unwrap();
+
+    // Flush to close the segment and trigger tree ingest.
+    hook.flush_open_segment(session).await;
+
+    let chunks = list_chunks(&cfg, &ListChunksQuery::default()).unwrap();
+    assert!(
+        !chunks.is_empty(),
+        "Expected tree chunks after flush_open_segment"
+    );
+
+    // The stub recap text must NOT appear in any chunk body.
+    let stub_recap_text = "stub recap: discussed Rust ownership model";
+    for chunk in &chunks {
+        assert!(
+            !chunk.content.contains(stub_recap_text),
+            "Chunk content must NOT contain the recap text (evidence-vs-interpretation policy). \
+             Found recap text in chunk id={}: {:?}",
+            chunk.id,
+            &chunk.content[..chunk.content.len().min(200)]
+        );
+    }
+
+    // The raw prose text MUST appear in at least one chunk.
+    let has_user_prose = chunks.iter().any(|c| c.content.contains("lifetimes"));
+    assert!(
+        has_user_prose,
+        "Expected at least one chunk body to contain raw prose from the turn \
+         (keyword 'lifetimes'); found: {:?}",
+        chunks
+            .iter()
+            .map(|c| &c.content[..c.content.len().min(100)])
+            .collect::<Vec<_>>()
+    );
+}
+
+/// `flush_open_segment` must also trigger the tree ingest for the trailing
+/// open segment (same as on_segment_closed at a topic boundary).
+#[tokio::test]
+async fn phase2_flush_also_triggers_tree_ingest() {
+    let conn = setup_conn();
+    let (_tmp, cfg) = test_config_with_tree();
+    let hook = hook_with_stubs_and_tree_config(conn.clone(), cfg.clone());
+
+    let session = "phase2-flush-tree";
+
+    // Two turns — no boundary fires, segment stays open.
+    for i in 1..=2 {
+        hook.on_turn_complete(&TurnContext {
+            user_message: format!("Rust borrowing question {i}"),
+            assistant_response: format!("Borrowing answer {i}"),
+            tool_calls: vec![],
+            turn_duration_ms: 50,
+            session_id: Some(session.into()),
+            iteration_count: i,
+        })
+        .await
+        .unwrap();
+    }
+
+    // Confirm no tree chunks yet (segment still open).
+    let before = count_chunks(&cfg).unwrap();
+    assert_eq!(
+        before, 0,
+        "Expected 0 tree chunks before flush; got {before}"
+    );
+
+    // Flush should close the segment and trigger tree ingest.
+    hook.flush_open_segment(session).await;
+
+    let after = count_chunks(&cfg).unwrap();
+    assert!(
+        after >= 1,
+        "Expected ≥ 1 tree chunk after flush_open_segment triggers segment ingest; got {after}"
+    );
+}

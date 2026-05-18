@@ -7,10 +7,14 @@
 //! 3. On segment close: produces an LLM recap (soft-fallback to heuristic),
 //!    embeds the recap, extracts events, and updates user profile.
 //! 4. Extracts simple lessons from tool failures.
-//! 5. (Phase 1 / #566) Pipes the turn into the memory tree as `conversations:agent`
-//!    when `config.learning.chat_to_tree_enabled` is true.
+//! 5. (Phase 2 / #566) At segment close/flush, ingests the segment's raw prose
+//!    turns (user + assistant; tool-call JSON stripped) into the memory tree as
+//!    `source_id = "conversations:agent"` when
+//!    `config.learning.chat_to_tree_enabled` is true. The leaf is RAW PROSE —
+//!    the LLM recap is NEVER fed into the tree (evidence-vs-interpretation
+//!    policy). Each leaf carries episodic provenance stamped in `source_ref`.
 //! 6. `flush_open_segment` force-closes the trailing open segment at session
-//!    end so the last segment always gets a recap + embedding.
+//!    end so the last segment always gets a recap + embedding + tree ingest.
 
 use crate::openhuman::agent::hooks::{PostTurnHook, TurnContext};
 use crate::openhuman::config::Config;
@@ -84,8 +88,9 @@ impl ArchivistHook {
     /// Attach runtime config so the archivist can gate the tree-ingest path
     /// and build its LLM chat provider + embedder from config.
     ///
-    /// When `config.learning.chat_to_tree_enabled` is `true`, each completed
-    /// turn is also piped into the memory tree as `source="conversations:agent"`.
+    /// When `config.learning.chat_to_tree_enabled` is `true`, each closed
+    /// segment's raw prose turns are ingested into the memory tree as
+    /// `source_id="conversations:agent"` (one batch per segment, not per turn).
     /// The chat provider is built via `build_chat_provider(config, Summarise)`;
     /// the embedder via `build_embedder_from_config(config)`. Both are
     /// soft-fallback: if construction fails, the fields stay `None` and the
@@ -512,72 +517,90 @@ impl ArchivistHook {
         }
 
         // ── Heuristic event extraction ────────────────────────────────────
-        if segment_text.is_empty() {
-            return;
+        if !segment_text.is_empty() {
+            let extracted = events::extract_events_heuristic(&segment_text);
+            tracing::debug!(
+                "[archivist] extracted {} events from segment {}",
+                extracted.len(),
+                segment.segment_id
+            );
+
+            for (event_type, content) in &extracted {
+                let event_id = format!("evt-{}", uuid_v4());
+                let event = EventRecord {
+                    event_id,
+                    segment_id: segment.segment_id.clone(),
+                    session_id: session_id.to_string(),
+                    namespace: segment.namespace.clone(),
+                    event_type: event_type.clone(),
+                    content: content.clone(),
+                    subject: None,
+                    timestamp_ref: None,
+                    confidence: 0.6,
+                    embedding: None,
+                    source_turn_ids: None,
+                    created_at: now,
+                };
+                if let Err(e) = events::event_insert(conn, &event) {
+                    tracing::warn!("[archivist] failed to insert event: {e}");
+                }
+
+                // Update user profile from preference and fact events.
+                match event_type {
+                    EventType::Preference => {
+                        let key = extract_profile_key(content, "preference");
+                        let facet_id = format!("prf-{}", uuid_v4());
+                        if let Err(e) = profile::profile_upsert(
+                            conn,
+                            &facet_id,
+                            &FacetType::Preference,
+                            &key,
+                            content,
+                            0.6,
+                            Some(&segment.segment_id),
+                            now,
+                        ) {
+                            tracing::warn!("[archivist] failed to upsert profile facet: {e}");
+                        }
+                    }
+                    EventType::Fact => {
+                        let key = extract_profile_key(content, "fact");
+                        let facet_id = format!("prf-{}", uuid_v4());
+                        if let Err(e) = profile::profile_upsert(
+                            conn,
+                            &facet_id,
+                            &FacetType::Context,
+                            &key,
+                            content,
+                            0.6,
+                            Some(&segment.segment_id),
+                            now,
+                        ) {
+                            tracing::warn!("[archivist] failed to upsert profile fact: {e}");
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
 
-        let extracted = events::extract_events_heuristic(&segment_text);
-        tracing::debug!(
-            "[archivist] extracted {} events from segment {}",
-            extracted.len(),
-            segment.segment_id
-        );
-
-        for (event_type, content) in &extracted {
-            let event_id = format!("evt-{}", uuid_v4());
-            let event = EventRecord {
-                event_id,
-                segment_id: segment.segment_id.clone(),
-                session_id: session_id.to_string(),
-                namespace: segment.namespace.clone(),
-                event_type: event_type.clone(),
-                content: content.clone(),
-                subject: None,
-                timestamp_ref: None,
-                confidence: 0.6,
-                embedding: None,
-                source_turn_ids: None,
-                created_at: now,
-            };
-            if let Err(e) = events::event_insert(conn, &event) {
-                tracing::warn!("[archivist] failed to insert event: {e}");
-            }
-
-            // Update user profile from preference and fact events.
-            match event_type {
-                EventType::Preference => {
-                    let key = extract_profile_key(content, "preference");
-                    let facet_id = format!("prf-{}", uuid_v4());
-                    if let Err(e) = profile::profile_upsert(
-                        conn,
-                        &facet_id,
-                        &FacetType::Preference,
-                        &key,
-                        content,
-                        0.6,
-                        Some(&segment.segment_id),
-                        now,
-                    ) {
-                        tracing::warn!("[archivist] failed to upsert profile facet: {e}");
-                    }
-                }
-                EventType::Fact => {
-                    let key = extract_profile_key(content, "fact");
-                    let facet_id = format!("prf-{}", uuid_v4());
-                    if let Err(e) = profile::profile_upsert(
-                        conn,
-                        &facet_id,
-                        &FacetType::Context,
-                        &key,
-                        content,
-                        0.6,
-                        Some(&segment.segment_id),
-                        now,
-                    ) {
-                        tracing::warn!("[archivist] failed to upsert profile fact: {e}");
-                    }
-                }
-                _ => {}
+        // ── Phase 2: tree ingest at segment granularity ───────────────────
+        // Gate: only when config is attached and chat_to_tree_enabled is true.
+        // Ingest the segment's raw prose turns (NOT the LLM recap) as one
+        // ChatBatch into the memory tree under `source_id="conversations:agent"`.
+        // Evidence-vs-interpretation: the tree must ingest raw prose and build
+        // its own summaries; feeding the recap would make the tree summarise
+        // a summary. Non-fatal: failures are logged and swallowed.
+        if let Some(ref cfg) = self.config {
+            if cfg.learning.chat_to_tree_enabled {
+                tracing::debug!(
+                    "[archivist] piping segment into tree as conversations:agent \
+                     session={session_id} segment={} entries={}",
+                    segment.segment_id,
+                    segment_entries.len()
+                );
+                self.pipe_segment_to_tree(cfg, segment, session_id, &segment_entries)
+                    .await;
             }
         }
     }
@@ -667,25 +690,12 @@ impl PostTurnHook for ArchivistHook {
             current_episodic_id,
         );
 
-        // Run async recap + embed on the closed segment (if any).
+        // Run async recap + embed + segment-tree ingest on the closed segment
+        // (if any). Per-turn tree ingest is intentionally absent — Phase 2
+        // moves the tree write to segment granularity inside on_segment_closed.
         if let Some(ref segment) = closed_segment {
             let now = Self::now_timestamp();
             self.on_segment_closed(conn, segment, session_id, now).await;
-        }
-
-        // ── Phase 1 / #566: pipe turn into the memory tree ───────────────────
-        // Gate: only when config is attached and chat_to_tree_enabled is true.
-        // Non-fatal: if tree-ingest fails, the episodic write already succeeded
-        // and the turn result is not affected.
-        if let Some(ref cfg) = self.config {
-            if cfg.learning.chat_to_tree_enabled {
-                tracing::debug!(
-                    "[archivist] piping turn into tree as conversations:agent session={}",
-                    session_id
-                );
-                self.pipe_turn_to_tree(cfg, ctx, session_id, timestamp)
-                    .await;
-            }
         }
 
         tracing::debug!("[archivist] turn indexed successfully: session={session_id}");
@@ -694,83 +704,121 @@ impl PostTurnHook for ArchivistHook {
 }
 
 impl ArchivistHook {
-    /// Pipe the completed turn into the memory tree as `source="conversations:agent"`.
+    /// Pipe a closed segment's raw prose turns into the memory tree as
+    /// `source_id="conversations:agent"`.
     ///
-    /// Tool-call JSON is stripped from the assistant text before ingest — only
-    /// the assistant's prose response flows into the tree (memory ingestion
-    /// policy: tool outputs must not reach memory).
+    /// **Design contract (Phase 2):**
+    /// - ONE ingest per segment (not per turn) — the batch boundary is the
+    ///   segment, so all turns land as a single ChatBatch.
+    /// - RAW PROSE only — the LLM recap (summary) is explicitly NOT ingested.
+    ///   The tree must build its own summaries from evidence (raw turns);
+    ///   feeding a summary-of-a-summary violates the evidence-vs-interpretation
+    ///   policy.
+    /// - `source_id = "conversations:agent"` is a CONSTANT — a single shared
+    ///   tree source for all agent chat sessions (never per-session or per-segment).
+    /// - Tool-call JSON is stripped from assistant entries so structured
+    ///   payloads do not reach the tree (memory ingestion policy).
+    /// - Provenance is stamped on each `ChatMessage.source_ref` as
+    ///   `agent://session/{session_id}/segment/{segment_id}#ep{start}-{end}`
+    ///   so tree leaves can be traced back to episodic rows for drill-down and
+    ///   deduplication.
     ///
     /// Failures are logged and swallowed; the episodic write is the source of
     /// truth.
-    async fn pipe_turn_to_tree(
+    async fn pipe_segment_to_tree(
         &self,
         config: &Config,
-        ctx: &TurnContext,
+        segment: &crate::openhuman::memory::store::segments::ConversationSegment,
         session_id: &str,
-        timestamp: f64,
+        entries: &[&fts5::EpisodicEntry],
     ) {
         use chrono::{TimeZone, Utc};
 
-        // Build turn timestamps. The assistant message is offset by 1ms as in
-        // the episodic write so ordering is stable.
-        let user_ts = Utc
-            .timestamp_opt(
-                timestamp as i64,
-                ((timestamp.fract() * 1e9) as u32).min(999_999_999),
-            )
-            .single()
-            .unwrap_or_else(Utc::now);
-        let asst_ts = Utc
-            .timestamp_opt(
-                (timestamp + 0.001) as i64,
-                (((timestamp + 0.001).fract() * 1e9) as u32).min(999_999_999),
-            )
-            .single()
-            .unwrap_or(user_ts);
+        // Collect the episodic id span for provenance stamping.
+        // start_episodic_id comes from the segment record (set at creation);
+        // end_episodic_id is the latest turn id (may be None if only one turn).
+        let start_ep = segment.start_episodic_id;
+        let end_ep = segment.end_episodic_id.unwrap_or(start_ep);
+        let segment_id = &segment.segment_id;
 
-        // Strip tool-call JSON from the assistant response.
-        // Per memory ingestion policy, structured tool-call payloads must not
-        // flow into the tree — only the prose response is ingested.
-        let assistant_prose = strip_tool_calls_from_response(&ctx.assistant_response);
+        // The provenance URI embeds session + segment + episodic id span so
+        // tree leaves can be traced back to episodic_log rows without a
+        // full-text scan.
+        let provenance =
+            format!("agent://session/{session_id}/segment/{segment_id}#ep{start_ep}-{end_ep}");
+
+        // Build one ChatMessage per episodic entry (user + assistant; skip
+        // empties). Tool-call JSON is stripped from assistant content so only
+        // prose flows into the tree.
+        let messages: Vec<ChatMessage> = entries
+            .iter()
+            .filter_map(|e| {
+                let raw_text = if e.role == "assistant" {
+                    strip_tool_calls_from_response(&e.content)
+                } else {
+                    e.content.clone()
+                };
+                let text = raw_text.trim().to_string();
+                if text.is_empty() {
+                    return None;
+                }
+
+                // Convert the f64 Unix timestamp to DateTime<Utc>.
+                let secs = e.timestamp as i64;
+                let nanos = ((e.timestamp.fract()) * 1e9) as u32;
+                let ts = Utc
+                    .timestamp_opt(secs, nanos.min(999_999_999))
+                    .single()
+                    .unwrap_or_else(Utc::now);
+
+                Some(ChatMessage {
+                    author: e.role.clone(),
+                    timestamp: ts,
+                    text,
+                    source_ref: Some(provenance.clone()),
+                })
+            })
+            .collect();
+
+        if messages.is_empty() {
+            tracing::debug!(
+                "[archivist] pipe_segment_to_tree: no prose messages in segment={segment_id} — skipping"
+            );
+            return;
+        }
 
         let batch = ChatBatch {
             platform: "agent".into(),
+            // channel_label carries session_id for human-readable context.
             channel_label: session_id.to_string(),
-            messages: vec![
-                ChatMessage {
-                    author: "user".into(),
-                    timestamp: user_ts,
-                    text: ctx.user_message.clone(),
-                    source_ref: Some(format!("agent://session/{session_id}")),
-                },
-                ChatMessage {
-                    author: "assistant".into(),
-                    timestamp: asst_ts,
-                    text: assistant_prose,
-                    source_ref: Some(format!("agent://session/{session_id}")),
-                },
-            ],
+            messages,
         };
 
-        // Use the session_id as the owner / identity tag.
+        // `source_id` is intentionally a CONSTANT — all agent sessions share
+        // one tree source so cross-session summarisation sees the full history.
         let source_id = "conversations:agent";
+        // `owner` scopes the memory to the session; `tags` enable filtering.
         let owner = session_id;
         let tags = vec!["agent_chat".to_string()];
+
+        tracing::debug!(
+            "[archivist] tree ingest start: source_id={source_id} session={session_id} \
+             segment={segment_id} ep_span={start_ep}-{end_ep} provenance={provenance}"
+        );
 
         match ingest::ingest_chat(config, source_id, owner, tags, batch).await {
             Ok(result) => {
                 tracing::debug!(
-                    "[archivist] tree ingest ok: source_id={} chunks_written={} session={}",
-                    source_id,
-                    result.chunks_written,
-                    session_id
+                    "[archivist] tree ingest ok: source_id={source_id} \
+                     session={session_id} segment={segment_id} \
+                     chunks_written={} provenance={provenance}",
+                    result.chunks_written
                 );
             }
             Err(e) => {
                 tracing::warn!(
-                    "[archivist] tree ingest failed (non-fatal): source_id={} session={} error={e}",
-                    source_id,
-                    session_id
+                    "[archivist] tree ingest failed (non-fatal): source_id={source_id} \
+                     session={session_id} segment={segment_id} error={e}"
                 );
             }
         }
@@ -918,6 +966,28 @@ impl ArchivistHook {
             enabled: true,
             boundary_config: BoundaryConfig::default(),
             config: None,
+            chat_provider: Some(chat_provider),
+            embedder: Some(embedder),
+        }
+    }
+
+    /// Test-only constructor that injects stub providers AND a `Config`, so the
+    /// Phase 2 segment-tree ingest path (gated by
+    /// `config.learning.chat_to_tree_enabled`) can be exercised hermetically.
+    ///
+    /// `config.learning.chat_to_tree_enabled` must be set to `true` by the caller
+    /// for the tree ingest to fire; the hook does NOT force it on.
+    pub(crate) fn new_with_stubs_and_config(
+        conn: Arc<Mutex<Connection>>,
+        chat_provider: Arc<dyn ChatProvider>,
+        embedder: Arc<dyn Embedder>,
+        config: Config,
+    ) -> Self {
+        Self {
+            conn: Some(conn),
+            enabled: true,
+            boundary_config: BoundaryConfig::default(),
+            config: Some(config),
             chat_provider: Some(chat_provider),
             embedder: Some(embedder),
         }
