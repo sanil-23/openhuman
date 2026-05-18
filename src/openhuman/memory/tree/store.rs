@@ -862,6 +862,34 @@ fn migrate_legacy_embeddings_to_sidecar(conn: &Connection, config: &Config) -> R
         }
     }
 
+    // #1574 §6: enqueue the re-embed backfill ONLY if there is genuinely
+    // uncovered work at the active signature (the dim-mismatch slice, or
+    // content-bearing rows with no vector). Gating this avoids queuing a
+    // no-op job on every DB open — which would otherwise pollute the jobs
+    // table for unrelated callers/tests. Enqueued atomically with the
+    // migration; dedupe key = signature, so exactly one chain per space.
+    let has_uncovered: bool = tx.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM mem_tree_chunks c
+              WHERE NOT EXISTS (SELECT 1 FROM mem_tree_chunk_embeddings e
+                                 WHERE e.chunk_id = c.id AND e.model_signature = ?1))
+           OR EXISTS(
+             SELECT 1 FROM mem_tree_summaries s
+              WHERE s.deleted = 0 AND NOT EXISTS (SELECT 1 FROM mem_tree_summary_embeddings e
+                                 WHERE e.summary_id = s.id AND e.model_signature = ?1))",
+        rusqlite::params![sig],
+        |r| r.get(0),
+    )?;
+    if has_uncovered {
+        let backfill_job = crate::openhuman::memory::tree::jobs::types::NewJob::reembed_backfill(
+            &crate::openhuman::memory::tree::jobs::types::ReembedBackfillPayload {
+                signature: sig.clone(),
+            },
+        )?;
+        crate::openhuman::memory::tree::jobs::enqueue_tx(&tx, &backfill_job)?;
+        crate::openhuman::memory::tree::jobs::set_backfill_in_progress(true);
+    }
+
     tx.commit()?;
     conn.pragma_update(None, "user_version", TREE_EMBEDDING_MIGRATION_VERSION)
         .context("set PRAGMA user_version after #1574 migration")?;
