@@ -1146,4 +1146,72 @@ mod tests {
             JobOutcome::Done
         );
     }
+
+    /// #1574 §4: `ensure_reembed_backfill` (the switch-path trigger) enqueues
+    /// exactly one chain when there is uncovered work, is idempotent on
+    /// re-call (per-signature dedupe), and enqueues nothing for an
+    /// empty/covered space.
+    #[tokio::test]
+    async fn ensure_reembed_backfill_enqueues_only_when_uncovered() {
+        use crate::openhuman::memory::tree::jobs::ensure_reembed_backfill;
+        use crate::openhuman::memory::tree::store::{upsert_chunks, upsert_staged_chunks_tx};
+        use crate::openhuman::memory::tree::types::{
+            chunk_id, Chunk, Metadata, SourceKind, SourceRef,
+        };
+
+        // Empty space → nothing to do → no job.
+        let (_t0, empty_cfg) = test_config();
+        ensure_reembed_backfill(&empty_cfg);
+        assert_eq!(
+            count_jobs_of_kind(&empty_cfg, "reembed_backfill"),
+            0,
+            "empty/covered space must not enqueue a backfill"
+        );
+
+        // Chunk with content but no sidecar vector → exactly one chain.
+        let (_t1, cfg) = test_config();
+        let ts = chrono::Utc.timestamp_millis_opt(1_700_000_000_000).unwrap();
+        let chunk = Chunk {
+            id: chunk_id(SourceKind::Chat, "slack:#eng", 0, "ensure-seed"),
+            content: "memory content needing a re-embed".into(),
+            metadata: Metadata {
+                source_kind: SourceKind::Chat,
+                source_id: "slack:#eng".into(),
+                owner: "alice".into(),
+                timestamp: ts,
+                time_range: (ts, ts),
+                tags: vec![],
+                source_ref: Some(SourceRef::new("slack://x")),
+            },
+            token_count: 12,
+            seq_in_source: 0,
+            created_at: ts,
+            partial_message: false,
+        };
+        upsert_chunks(&cfg, &[chunk.clone()]).unwrap();
+        let content_root = cfg.memory_tree_content_root();
+        std::fs::create_dir_all(&content_root).unwrap();
+        let staged = content_store::stage_chunks(&content_root, &[chunk.clone()]).unwrap();
+        with_connection(&cfg, |conn| {
+            let tx = conn.unchecked_transaction()?;
+            upsert_staged_chunks_tx(&tx, &staged)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+
+        ensure_reembed_backfill(&cfg);
+        assert_eq!(
+            count_jobs_of_kind(&cfg, "reembed_backfill"),
+            1,
+            "uncovered work must enqueue exactly one backfill chain"
+        );
+        // Idempotent — re-call must not create a second chain (dedupe by sig).
+        ensure_reembed_backfill(&cfg);
+        assert_eq!(
+            count_jobs_of_kind(&cfg, "reembed_backfill"),
+            1,
+            "re-call must dedupe to a single chain per signature"
+        );
+    }
 }
