@@ -39,10 +39,10 @@ import {
   openhumanHeartbeatSettingsSet,
   openhumanHeartbeatTickNow,
 } from '../../../utils/tauriCommands/heartbeat';
-import { memoryTreeBackfillStatus } from '../../../utils/tauriCommands/memoryTree';
 import { ConfirmationModal } from '../../intelligence/ConfirmationModal';
 import SettingsHeader from '../components/SettingsHeader';
 import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
+import { useReembedBackfillModal } from './useReembedBackfillModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -1723,59 +1723,9 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
   const { navigateBack, breadcrumbs } = useSettingsNavigation();
   const { saved, draft, setDraft, isDirty, save, discard, loading, error, reload } =
     useAISettings();
-  // #1574 §4b: advisory re-embed modal, driven entirely by the backend
-  // status RPC. After a save, the core's coverage-gated
-  // `ensure_reembed_backfill` has already decided whether a switch needs
-  // re-embedding; we just surface its progress. No fragile frontend
-  // "did the embedder change" detection.
-  const [reembed, setReembed] = useState<{ open: boolean; pending: number }>({
-    open: false,
-    pending: 0,
-  });
-  const handleSave = useCallback(async () => {
-    // Only check re-embed status if the save actually persisted — a failed
-    // save didn't change the embedder, so there's nothing to surface.
-    const ok = await save();
-    if (!ok) return;
-    try {
-      const st = await memoryTreeBackfillStatus();
-      if (st.in_progress) {
-        setReembed({ open: true, pending: st.pending_jobs });
-      }
-    } catch (e) {
-      console.warn('[ai-panel] backfill status check failed', e);
-    }
-  }, [save]);
-  useEffect(() => {
-    if (!reembed.open) return;
-    let cancelled = false;
-    // Serialize polls — if a status call takes >2s, skip the next tick
-    // rather than overlapping requests.
-    let inFlight = false;
-    const id = window.setInterval(() => {
-      if (inFlight) return;
-      inFlight = true;
-      void (async () => {
-        try {
-          const st = await memoryTreeBackfillStatus();
-          if (cancelled) return;
-          if (!st.in_progress) {
-            setReembed({ open: false, pending: 0 });
-          } else {
-            setReembed(r => ({ ...r, pending: st.pending_jobs }));
-          }
-        } catch (e) {
-          console.warn('[ai-panel] backfill poll failed', e);
-        } finally {
-          inFlight = false;
-        }
-      })();
-    }, 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [reembed.open]);
+  // #1574 §4b: advisory re-embed modal, driven by the backend status RPC.
+  // Logic lives in a unit-testable hook (see useReembedBackfillModal).
+  const { reembed, handleSave, dismissReembed } = useReembedBackfillModal(save);
   const ollama = useOllamaStatus();
   const installed = useInstalledModels(ollama.snapshot);
   const [editing, setEditing] = useState<CloudProvider | 'new' | null>(null);
@@ -2037,10 +1987,10 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
             `reduced until this finishes. Keyword search keeps working, and ` +
             `re-embedding continues in the background if you close this.`,
           confirmText: 'OK',
-          onConfirm: () => setReembed({ open: false, pending: 0 }),
-          onCancel: () => setReembed({ open: false, pending: 0 }),
+          onConfirm: dismissReembed,
+          onCancel: dismissReembed,
         }}
-        onClose={() => setReembed({ open: false, pending: 0 })}
+        onClose={dismissReembed}
       />
 
       {editing && (
