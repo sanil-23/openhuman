@@ -94,7 +94,9 @@ pub fn ensure_reembed_backfill(config: &crate::openhuman::config::Config) {
             }) {
                 Ok(j) => j,
                 Err(e) => {
-                    log::warn!("[memory_tree::jobs] ensure_reembed_backfill: build job failed: {e}");
+                    log::warn!(
+                        "[memory_tree::jobs] ensure_reembed_backfill: build job failed: {e}"
+                    );
                     return;
                 }
             };

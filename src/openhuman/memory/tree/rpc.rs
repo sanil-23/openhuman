@@ -381,15 +381,17 @@ mod tests {
         let s0 = backfill_status_rpc(&cfg).await.unwrap().value;
         assert_eq!(s0.pending_jobs, 0, "idle space has no pending backfill");
 
-        let job =
-            jobs::types::NewJob::reembed_backfill(&jobs::types::ReembedBackfillPayload {
-                signature: "provider=test;model=x;dims=1".into(),
-            })
-            .unwrap();
+        let job = jobs::types::NewJob::reembed_backfill(&jobs::types::ReembedBackfillPayload {
+            signature: "provider=test;model=x;dims=1".into(),
+        })
+        .unwrap();
         jobs::enqueue(&cfg, &job).unwrap();
 
         let s1 = backfill_status_rpc(&cfg).await.unwrap().value;
-        assert_eq!(s1.pending_jobs, 1, "a ready reembed_backfill job must count");
+        assert_eq!(
+            s1.pending_jobs, 1,
+            "a ready reembed_backfill job must count"
+        );
         assert!(s1.in_progress, "pending>0 forces in_progress=true");
     }
 }

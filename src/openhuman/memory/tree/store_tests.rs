@@ -325,7 +325,10 @@ fn legacy_embeddings_migrate_to_sidecar_once() {
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, TREE_EMBEDDING_MIGRATION_VERSION, "version gate must be set");
+        assert_eq!(
+            v, TREE_EMBEDDING_MIGRATION_VERSION,
+            "version gate must be set"
+        );
         Ok(())
     })
     .unwrap();
