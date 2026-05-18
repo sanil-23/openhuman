@@ -491,6 +491,13 @@ pub async fn apply_model_settings(
     }
 
     config.save().await.map_err(|e| e.to_string())?;
+    // #1574 §4: the AIPanel workload matrix changes the embedder via THIS
+    // (model-settings) path — `embeddings_provider` above — not the
+    // memory-settings path. Trigger the same idempotent re-embed backfill
+    // so a UI embedder switch recovers prior memory under the new
+    // signature. Coverage-gated + non-fatal: if the active signature did
+    // not actually change, this enqueues nothing.
+    crate::openhuman::memory::tree::jobs::ensure_reembed_backfill(config);
     let snapshot = snapshot_config_json(config)?;
     Ok(RpcOutcome::new(
         snapshot,
