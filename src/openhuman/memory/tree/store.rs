@@ -43,6 +43,11 @@ pub const CHUNK_STATUS_SEALED: &str = "sealed";
 /// Chunk lifecycle: rejected by the admission gate (too low signal).
 pub const CHUNK_STATUS_DROPPED: &str = "dropped";
 
+/// `PRAGMA user_version` value once the one-shot legacy→sidecar embedding
+/// migration (#1574 §7) has run. `0` (fresh/legacy DB) triggers the copy on
+/// next open; `>= 1` skips it. Bump only for a new one-shot data migration.
+const TREE_EMBEDDING_MIGRATION_VERSION: i64 = 1;
+
 const SCHEMA: &str = "
 PRAGMA foreign_keys = ON;
 
@@ -776,7 +781,95 @@ pub(crate) fn with_connection<T>(
         "is_user",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
+    // #1574 §7: one-shot, version-gated copy of legacy embedding columns
+    // into the per-model sidecar at the active signature. Runs once
+    // (PRAGMA user_version gate); cheap no-op on every subsequent open.
+    migrate_legacy_embeddings_to_sidecar(&conn, config)?;
     f(&conn)
+}
+
+/// One-shot migration (#1574 §7, vN): copy legacy `mem_tree_chunks.embedding`
+/// / `mem_tree_summaries.embedding` blobs into the per-model sidecar tables
+/// under the **active** signature, when (and only when) the legacy vector's
+/// dimensionality matches the active embedder's.
+///
+/// Version-gated via `PRAGMA user_version`: returns immediately once
+/// `>= TREE_EMBEDDING_MIGRATION_VERSION`, so the per-open cost is a single
+/// pragma read. Dim-mismatched rows are left for the §6 re-embed backfill —
+/// the blob's signature is unrecoverable (see spec §7b), so a same-length
+/// copy under the active signature is the only provably-safe move and
+/// anything else must be re-embedded. The legacy columns are **kept** (read
+/// here, dropped only in a later release — spec §7c). Idempotent: re-running
+/// before the version bumps re-copies the same rows harmlessly (sidecar
+/// upsert is ON CONFLICT); after the bump it is skipped entirely.
+fn migrate_legacy_embeddings_to_sidecar(conn: &Connection, config: &Config) -> Result<()> {
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .context("read PRAGMA user_version for #1574 migration")?;
+    if version >= TREE_EMBEDDING_MIGRATION_VERSION {
+        return Ok(());
+    }
+
+    let (provider, model, dims) = crate::openhuman::memory::store::effective_embedding_settings(
+        &config.memory,
+        config.workload_local_model("embeddings").as_deref(),
+    );
+    let sig = crate::openhuman::embeddings::format_embedding_signature(&provider, &model, dims);
+    log::info!(
+        "[memory_tree::migrate] #1574 §7: copying legacy embeddings → sidecar at sig={sig} (dims={dims})"
+    );
+
+    let tx = conn.unchecked_transaction()?;
+    let mut copied_chunks = 0usize;
+    let mut copied_summaries = 0usize;
+    let mut skipped_dim_mismatch = 0usize;
+
+    for (table, is_chunk) in [("mem_tree_chunks", true), ("mem_tree_summaries", false)] {
+        let mut stmt = tx.prepare(&format!(
+            "SELECT id, embedding FROM {table} WHERE embedding IS NOT NULL"
+        ))?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (id, blob) = row?;
+            if !blob.len().is_multiple_of(4) {
+                log::warn!(
+                    "[memory_tree::migrate] {table} id={id}: legacy blob len {} not /4, skipping",
+                    blob.len()
+                );
+                continue;
+            }
+            if blob.len() / 4 != dims {
+                // Different embedding space — unrecoverable from the blob.
+                // Leave for the §6 re-embed backfill.
+                skipped_dim_mismatch += 1;
+                continue;
+            }
+            let vec: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            if is_chunk {
+                set_chunk_embedding_for_signature_tx(&tx, &id, &sig, &vec)?;
+                copied_chunks += 1;
+            } else {
+                crate::openhuman::memory::tree::tree_source::store::set_summary_embedding_for_signature_tx(
+                    &tx, &id, &sig, &vec,
+                )?;
+                copied_summaries += 1;
+            }
+        }
+    }
+
+    tx.commit()?;
+    conn.pragma_update(None, "user_version", TREE_EMBEDDING_MIGRATION_VERSION)
+        .context("set PRAGMA user_version after #1574 migration")?;
+    log::info!(
+        "[memory_tree::migrate] #1574 §7 done: copied chunks={copied_chunks} summaries={copied_summaries} \
+         skipped_dim_mismatch={skipped_dim_mismatch} (left for §6 re-embed); user_version={TREE_EMBEDDING_MIGRATION_VERSION}"
+    );
+    Ok(())
 }
 
 /// One pointer into the raw archive. A chunk's body is reconstructed by
