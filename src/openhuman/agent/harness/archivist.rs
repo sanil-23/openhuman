@@ -353,106 +353,9 @@ impl ArchivistHook {
             .join(". ");
 
         // ── Segment recap (LLM or heuristic fallback) ────────────────────
-        // Build a full prose corpus from ALL entries (user + assistant
-        // prose; tool-call JSON is already excluded because the archivist
-        // stores stripped prose in the `content` column).
-        let corpus_inputs: Vec<SummaryInput> = segment_entries
-            .iter()
-            .filter(|e| !e.content.trim().is_empty())
-            .map(|e| {
-                use crate::openhuman::memory::tree::types::approx_token_count;
-                let content = e.content.clone();
-                let token_count = approx_token_count(&content);
-                let ts = chrono::DateTime::from_timestamp(e.timestamp as i64, 0)
-                    .unwrap_or_else(chrono::Utc::now);
-                SummaryInput {
-                    id: format!("{}-{}", e.role, e.timestamp as u64),
-                    content,
-                    token_count,
-                    entities: Vec::new(),
-                    topics: Vec::new(),
-                    time_range_start: ts,
-                    time_range_end: ts,
-                    score: 0.5,
-                }
-            })
-            .collect();
-
-        let summary_ctx = SummaryContext {
-            tree_id: &segment.segment_id,
-            tree_kind: TreeKind::Source,
-            target_level: 0,
-            token_budget: 2_000,
-        };
-
-        let summary = if let Some(ref provider) = self.chat_provider {
-            let cfg = LlmSummariserConfig {
-                model: provider.name().to_string(),
-                structured_facet_extraction: false,
-            };
-            let summariser = LlmSummariser::new(cfg, Arc::clone(provider));
-            tracing::debug!(
-                "[archivist] generating LLM recap for segment={} provider={}",
-                segment.segment_id,
-                provider.name()
-            );
-            // `Summariser::summarise` never returns Err per its contract.
-            match summariser.summarise(&corpus_inputs, &summary_ctx).await {
-                Ok(output) if !output.content.is_empty() => {
-                    tracing::debug!(
-                        "[archivist] LLM recap ok segment={} chars={}",
-                        segment.segment_id,
-                        output.content.len()
-                    );
-                    output.content
-                }
-                Ok(_) => {
-                    tracing::debug!(
-                        "[archivist] LLM recap returned empty — using fallback segment={}",
-                        segment.segment_id
-                    );
-                    let first = segment_entries
-                        .first()
-                        .map(|e| e.content.as_str())
-                        .unwrap_or("");
-                    let last = segment_entries
-                        .last()
-                        .map(|e| e.content.as_str())
-                        .unwrap_or(first);
-                    segments::fallback_summary(first, last, segment.turn_count)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "[archivist] LLM recap failed (non-fatal) segment={}: {e} — using fallback",
-                        segment.segment_id
-                    );
-                    let first = segment_entries
-                        .first()
-                        .map(|e| e.content.as_str())
-                        .unwrap_or("");
-                    let last = segment_entries
-                        .last()
-                        .map(|e| e.content.as_str())
-                        .unwrap_or(first);
-                    segments::fallback_summary(first, last, segment.turn_count)
-                }
-            }
-        } else {
-            // No chat provider — use heuristic fallback.
-            let first = segment_entries
-                .first()
-                .map(|e| e.content.as_str())
-                .unwrap_or("");
-            let last = segment_entries
-                .last()
-                .map(|e| e.content.as_str())
-                .unwrap_or(first);
-            tracing::debug!(
-                "[archivist] no chat provider — using heuristic fallback segment={}",
-                segment.segment_id
-            );
-            segments::fallback_summary(first, last, segment.turn_count)
-        };
+        let summary = self
+            .summarize_entries(&segment_entries, &segment.segment_id, segment.turn_count)
+            .await;
 
         // Persist the recap.
         if let Err(e) = segments::segment_set_summary(conn, &segment.segment_id, &summary, now) {
@@ -704,6 +607,217 @@ impl PostTurnHook for ArchivistHook {
 }
 
 impl ArchivistHook {
+    /// Shared summarize helper — the **single LLM summarizer** used by both
+    /// the finalize path (`on_segment_closed`) and the rolling-recap path
+    /// (`rolling_segment_recap`).
+    ///
+    /// Builds a prose corpus from `entries`, calls the `LlmSummariser` when a
+    /// `chat_provider` is configured, and falls back to the heuristic
+    /// `segments::fallback_summary` on any failure or when no provider is
+    /// wired in. Always returns a non-empty string.
+    ///
+    /// Invariants:
+    /// - NEVER mutates DB state (no `segment_set_summary`, no embedding).
+    /// - NEVER closes a segment.
+    /// - Safe to call on both open and closed segments.
+    async fn summarize_entries(
+        &self,
+        entries: &[&EpisodicEntry],
+        segment_id: &str,
+        turn_count: i32,
+    ) -> String {
+        if entries.is_empty() {
+            tracing::debug!(
+                "[archivist] summarize_entries: no entries for segment={segment_id} — \
+                 returning empty fallback"
+            );
+            return segments::fallback_summary("", "", turn_count);
+        }
+
+        // Build a full prose corpus from ALL entries (user + assistant prose;
+        // tool-call JSON is already excluded because the archivist stores
+        // stripped prose in the `content` column).
+        let corpus_inputs: Vec<SummaryInput> = entries
+            .iter()
+            .filter(|e| !e.content.trim().is_empty())
+            .map(|e| {
+                use crate::openhuman::memory::tree::types::approx_token_count;
+                let content = e.content.clone();
+                let token_count = approx_token_count(&content);
+                let ts = chrono::DateTime::from_timestamp(e.timestamp as i64, 0)
+                    .unwrap_or_else(chrono::Utc::now);
+                SummaryInput {
+                    id: format!("{}-{}", e.role, e.timestamp as u64),
+                    content,
+                    token_count,
+                    entities: Vec::new(),
+                    topics: Vec::new(),
+                    time_range_start: ts,
+                    time_range_end: ts,
+                    score: 0.5,
+                }
+            })
+            .collect();
+
+        let summary_ctx = SummaryContext {
+            tree_id: segment_id,
+            tree_kind: TreeKind::Source,
+            target_level: 0,
+            token_budget: 2_000,
+        };
+
+        let first = entries.first().map(|e| e.content.as_str()).unwrap_or("");
+        let last = entries.last().map(|e| e.content.as_str()).unwrap_or(first);
+
+        if let Some(ref provider) = self.chat_provider {
+            let cfg = LlmSummariserConfig {
+                model: provider.name().to_string(),
+                structured_facet_extraction: false,
+            };
+            let summariser = LlmSummariser::new(cfg, Arc::clone(provider));
+            tracing::debug!(
+                "[archivist] summarize_entries: LLM recap segment={segment_id} \
+                 provider={} entries={}",
+                provider.name(),
+                entries.len()
+            );
+            match summariser.summarise(&corpus_inputs, &summary_ctx).await {
+                Ok(output) if !output.content.is_empty() => {
+                    tracing::debug!(
+                        "[archivist] summarize_entries: LLM recap ok segment={segment_id} \
+                         chars={}",
+                        output.content.len()
+                    );
+                    output.content
+                }
+                Ok(_) => {
+                    tracing::debug!(
+                        "[archivist] summarize_entries: LLM returned empty — \
+                         heuristic fallback segment={segment_id}"
+                    );
+                    segments::fallback_summary(first, last, turn_count)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "[archivist] summarize_entries: LLM recap failed (non-fatal) \
+                         segment={segment_id}: {e} — heuristic fallback"
+                    );
+                    segments::fallback_summary(first, last, turn_count)
+                }
+            }
+        } else {
+            tracing::debug!(
+                "[archivist] summarize_entries: no chat provider — \
+                 heuristic fallback segment={segment_id}"
+            );
+            segments::fallback_summary(first, last, turn_count)
+        }
+    }
+
+    /// Produce a rolling recap of the **currently-open** segment for
+    /// `session_id` WITHOUT closing it, writing `segment_set_summary`, or
+    /// embedding.
+    ///
+    /// This is the Phase 1.5 "one summarizer" entry point. Both
+    /// `on_segment_closed` (finalize) and this function delegate to the same
+    /// [`Self::summarize_entries`] helper so the same LLM path is used in both
+    /// cases. The distinction is purely in what happens *after* the summary
+    /// string is produced:
+    ///
+    /// - **Finalize** (`on_segment_closed`): persists the summary via
+    ///   `segment_set_summary`, embeds it, extracts events, pipes tree ingest.
+    /// - **Rolling** (this function): returns the summary string and does
+    ///   nothing else — segment stays open, DB is untouched.
+    ///
+    /// Returns `None` when:
+    /// - The archivist is disabled or has no connection.
+    /// - There is no open segment for `session_id`.
+    /// - The open segment has no episodic entries.
+    /// - The LLM call fails AND the heuristic fallback is empty (edge case).
+    ///
+    /// Callers must treat `None` as "recap unavailable" and fall back to
+    /// their own compaction strategy.
+    pub async fn rolling_segment_recap(&self, session_id: &str) -> Option<String> {
+        if !self.enabled {
+            tracing::debug!(
+                "[archivist] rolling_segment_recap: archivist disabled \
+                 session={session_id} — returning None"
+            );
+            return None;
+        }
+        let conn = self.conn.as_ref()?;
+
+        // Find the currently-open segment for this session.
+        let open_segment = match segments::open_segment_for_session(conn, session_id) {
+            Ok(Some(seg)) => seg,
+            Ok(None) => {
+                tracing::debug!(
+                    "[archivist] rolling_segment_recap: no open segment for \
+                     session={session_id} — returning None"
+                );
+                return None;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[archivist] rolling_segment_recap: failed to query open segment \
+                     session={session_id}: {e} — returning None"
+                );
+                return None;
+            }
+        };
+
+        // Gather the episodic entries for this session so far.
+        let all_entries = fts5::episodic_session_entries(conn, session_id).unwrap_or_default();
+
+        // Keep only entries within the open segment's time window (start →
+        // now, inclusive). An open segment has `end_timestamp = None`.
+        let segment_entries: Vec<&EpisodicEntry> = all_entries
+            .iter()
+            .filter(|e| e.timestamp >= open_segment.start_timestamp)
+            .collect();
+
+        if segment_entries.is_empty() {
+            tracing::debug!(
+                "[archivist] rolling_segment_recap: no entries in open segment={} \
+                 session={session_id} — returning None",
+                open_segment.segment_id
+            );
+            return None;
+        }
+
+        tracing::debug!(
+            "[archivist] rolling_segment_recap: summarizing open segment={} \
+             entries={} session={session_id}",
+            open_segment.segment_id,
+            segment_entries.len()
+        );
+
+        let recap = self
+            .summarize_entries(
+                &segment_entries,
+                &open_segment.segment_id,
+                open_segment.turn_count,
+            )
+            .await;
+
+        if recap.is_empty() {
+            tracing::debug!(
+                "[archivist] rolling_segment_recap: summarize_entries returned empty \
+                 session={session_id} segment={} — returning None",
+                open_segment.segment_id
+            );
+            return None;
+        }
+
+        tracing::debug!(
+            "[archivist] rolling_segment_recap: produced recap chars={} \
+             session={session_id} segment={}",
+            recap.len(),
+            open_segment.segment_id
+        );
+        Some(recap)
+    }
+
     /// Pipe a closed segment's raw prose turns into the memory tree as
     /// `source_id="conversations:agent"`.
     ///
