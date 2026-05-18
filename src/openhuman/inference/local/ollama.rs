@@ -196,8 +196,9 @@ pub(crate) fn context_length_from_model_info(
         }
     }
     info.iter()
-        .find(|(key, _)| key.ends_with(".context_length"))
-        .and_then(|(_, value)| as_u64(value))
+        .filter(|(key, _)| key.ends_with(".context_length"))
+        .filter_map(|(_, value)| as_u64(value))
+        .max()
 }
 
 #[derive(Debug, Serialize)]
@@ -389,6 +390,21 @@ mod tests {
             }
         }));
         assert_eq!(resp.context_length(), Some(8192));
+    }
+
+    #[test]
+    fn context_length_fallback_returns_max_not_first() {
+        // Without `general.architecture`, the fallback must pick the *largest*
+        // `.context_length` value, not the first one encountered. Multimodal
+        // models can carry a low secondary value (e.g. `clip.context_length:77`)
+        // which, if chosen first, would incorrectly mark the model below minimum.
+        let resp = show_response(serde_json::json!({
+            "model_info": {
+                "clip.context_length": 77,
+                "llama.context_length": 32768
+            }
+        }));
+        assert_eq!(resp.context_length(), Some(32768));
     }
 
     // ── ollama_base_url env-override behaviour ───────────────────────
