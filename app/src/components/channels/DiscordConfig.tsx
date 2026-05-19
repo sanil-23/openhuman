@@ -139,6 +139,13 @@ const DiscordConfig = ({ definition }: DiscordConfigProps) => {
     (spec: AuthModeSpec) => {
       const key = `discord:${spec.mode}`;
       void runBusy(key, async () => {
+        // Cancel any in-flight managed-link poll before clearing sibling
+        // state. Without this, a stale poll completion could later dispatch
+        // `managed_dm` back to connected/error, reviving a flow the user
+        // just switched away from. (CodeRabbit on PR #2256.)
+        pollAbort.current?.abort();
+        setLinkToken(null);
+
         // Drop any sibling auth mode that's still mid-`connecting` so the
         // panel doesn't show two methods pinned simultaneously (#2128).
         dispatch(clearOtherPendingForChannel({ channel: 'discord', exceptAuthMode: spec.mode }));

@@ -164,6 +164,14 @@ const TelegramConfig = ({ definition }: TelegramConfigProps) => {
     (spec: AuthModeSpec) => {
       const key = `telegram:${spec.mode}`;
       void runBusy(key, async () => {
+        // Abort sibling managed-dm polls before clearing their slice rows;
+        // a still-running poll could otherwise complete after the clear and
+        // dispatch the sibling back to connected/error, leaking the prior
+        // attempt into state. (CodeRabbit on PR #2256.) Only managed_dm
+        // polls today, so stop that one explicitly.
+        const managedDmKey = 'telegram:managed_dm';
+        if (key !== managedDmKey) stopManagedDmPolling(managedDmKey);
+
         // Cancel any sibling auth mode still mid-`connecting` so the panel
         // doesn't pin multiple methods simultaneously (#2128).
         dispatch(clearOtherPendingForChannel({ channel: 'telegram', exceptAuthMode: spec.mode }));
@@ -289,7 +297,15 @@ const TelegramConfig = ({ definition }: TelegramConfigProps) => {
         }
       });
     },
-    [dispatch, fieldValues, runBusy, startManagedDmPolling, MANAGED_DM_CONNECTING_MESSAGE, t]
+    [
+      dispatch,
+      fieldValues,
+      runBusy,
+      startManagedDmPolling,
+      stopManagedDmPolling,
+      MANAGED_DM_CONNECTING_MESSAGE,
+      t,
+    ]
   );
 
   const handleDisconnect = useCallback(
