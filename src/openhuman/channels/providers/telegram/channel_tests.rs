@@ -1810,7 +1810,10 @@ fn approval_debounce_evicts_entries_past_window() {
 
     // Non-suppressed call for a new key triggers the eviction sweep + insert.
     let suppressed = ch.check_and_update_approval_debounce("new_chat", "new_sender");
-    assert!(!suppressed, "first call for a new key must not be suppressed");
+    assert!(
+        !suppressed,
+        "first call for a new key must not be suppressed"
+    );
 
     let prompts = ch.recent_approval_prompts.lock();
     assert!(
@@ -1822,7 +1825,10 @@ fn approval_debounce_evicts_entries_past_window() {
         "[telegram][approval] fresh entry within the window must be retained"
     );
     assert!(
-        prompts.contains_key(&TelegramChannel::approval_debounce_key("new_chat", "new_sender")),
+        prompts.contains_key(&TelegramChannel::approval_debounce_key(
+            "new_chat",
+            "new_sender"
+        )),
         "[telegram][approval] the new entry must be inserted"
     );
 }

@@ -219,7 +219,8 @@ impl TelegramChannel {
         // map grow without bound if the bot is exposed to a public group or spam
         // (review note on #1948). This caps the map to senders seen within the
         // last APPROVAL_PROMPT_DEBOUNCE_SECS.
-        prompts.retain(|_, last_sent| last_sent.elapsed().as_secs() < APPROVAL_PROMPT_DEBOUNCE_SECS);
+        prompts
+            .retain(|_, last_sent| last_sent.elapsed().as_secs() < APPROVAL_PROMPT_DEBOUNCE_SECS);
         prompts.insert(key, Instant::now());
         false
     }
