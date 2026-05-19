@@ -161,10 +161,19 @@ fn extract_provider_error_detail_returns_none_for_transport_errors() {
 
 #[test]
 fn classify_inference_error_quotes_model_unavailable_detail() {
+    // A stale model pin (`model_not_found` / "does not exist or you do not
+    // have access") is the #2202 config-rejection class: it now resolves
+    // via the provider-config-rejection arm (ordered before the generic
+    // model-unavailable arm) and gets the actionable Settings remediation,
+    // while still classifying as `model_unavailable` and quoting the
+    // upstream detail.
     let raw = r#"custom_openai API error (404 Not Found): {"error":{"message":"The model `gpt-5.5` does not exist or you do not have access to it.","code":"model_not_found"}}"#;
     let (category, message) = classify_inference_error(raw);
     assert_eq!(category, "model_unavailable");
-    assert!(message.contains("Check your model settings"));
+    assert!(
+        message.contains("Settings → LLM"),
+        "config-rejection must give the actionable remediation: {message}"
+    );
     assert!(
         message.contains("gpt-5.5"),
         "should quote model name: {message}"
