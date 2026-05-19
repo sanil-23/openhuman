@@ -1336,8 +1336,20 @@ impl Agent {
                 .await
                 .unwrap_or_default();
 
-            // Filter to the user_profile namespace only (list without namespace
-            // filter would return everything; list WITH namespace already scopes it).
+            // `.list()` already scopes to the `user_profile` namespace at the
+            // store layer (via the `Some("user_profile")` argument above).  This
+            // `.filter()` is a defensive guard against any future store-layer
+            // change that might weaken that scoping — it is not load-bearing
+            // under the current implementation.
+            if profile_entries.len() > 50 {
+                tracing::warn!(
+                    total = profile_entries.len(),
+                    dropped = profile_entries.len() - 50,
+                    "[learning] user_profile pinned preferences exceed prompt cap of 50; \
+                     {} entries will be dropped from this turn's context",
+                    profile_entries.len() - 50,
+                );
+            }
             let user_profile: Vec<String> = profile_entries
                 .iter()
                 .filter(|e| {
