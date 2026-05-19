@@ -2234,6 +2234,23 @@ mod tests {
             "provider_chat",
             &[("provider", "ollama")],
         );
+        // #2079 / #2076 / #2202 — exercises the expected_error_kind
+        // ProviderConfigRejection branch AND the report_expected_message
+        // skip-log arm (the agent/web-channel re-report demotion path).
+        report_error_or_expected(
+            "agent.run_single failed: custom_openai API error (400 Bad Request): \
+             The supported API model names are deepseek-v4-pro or deepseek-v4-flash, \
+             but you passed reasoning-v1.",
+            "agent",
+            "native_chat",
+            &[("provider", "custom_openai")],
+        );
+        report_error_or_expected(
+            "custom_openai API error (400): invalid temperature: only 1 is allowed for this model",
+            "web_channel",
+            "run_chat_task",
+            &[("provider", "custom_openai")],
+        );
     }
 
     fn event_with_message(msg: &str) -> sentry::protocol::Event<'static> {
