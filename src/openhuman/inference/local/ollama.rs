@@ -163,6 +163,7 @@ pub(crate) struct OllamaShowRequest {
 pub(crate) struct OllamaShowResponse {
     #[serde(default)]
     pub model_info: serde_json::Map<String, serde_json::Value>,
+    // Present in the Ollama API response; retained to document the wire shape, not yet consumed.
     #[serde(default)]
     #[allow(dead_code)]
     pub capabilities: Vec<String>,

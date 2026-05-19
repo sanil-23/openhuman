@@ -33,7 +33,7 @@ pub mod install;
 pub(crate) mod install_piper;
 pub(crate) mod install_whisper;
 pub(crate) mod lm_studio;
-pub mod model_requirements;
+pub(crate) mod model_requirements;
 mod ollama;
 mod process_util;
 pub(crate) mod provider;
