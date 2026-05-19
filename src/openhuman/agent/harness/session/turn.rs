@@ -1343,7 +1343,7 @@ impl Agent {
                 .filter(|e| {
                     e.namespace
                         .as_deref()
-                        .map_or(true, |ns| ns == "user_profile")
+                        .map_or(false, |ns| ns == "user_profile")
                 })
                 .take(50)
                 .map(|e| sanitize_learned_entry(&e.content))

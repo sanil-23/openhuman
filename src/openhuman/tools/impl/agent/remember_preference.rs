@@ -173,10 +173,13 @@ impl Tool for RememberPreferenceTool {
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         tracing::debug!(
-            "[tool][remember_preference] invoked with args: class={:?} key={:?} value={:?}",
+            "[tool][remember_preference] invoked with args: class={:?} key={:?} value_present={} value_len={}",
             args.get("class").and_then(|v| v.as_str()),
             args.get("key").and_then(|v| v.as_str()),
-            args.get("value").and_then(|v| v.as_str()),
+            args.get("value").is_some(),
+            args.get("value")
+                .and_then(|v| v.as_str())
+                .map_or(0, |s| s.len()),
         );
 
         // Security gate — tool requires Write-level autonomy.
@@ -226,28 +229,37 @@ impl Tool for RememberPreferenceTool {
         }
         if !key
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
         {
             tracing::warn!(
                 "[tool][remember_preference] key {:?} contains invalid characters; \
-                 only lowercase letters, digits, underscores, and hyphens are allowed",
+                 only lowercase letters, digits, and underscores are allowed (snake_case)",
                 key
             );
             return Ok(ToolResult::error(format!(
-                "key {:?} contains invalid characters; use only lowercase letters, digits, underscores, or hyphens",
+                "key {:?} contains invalid characters; use only lowercase letters, digits, and underscores (snake_case)",
                 key
             )));
         }
 
-        // Parse value.
-        let value = match args.get("value").and_then(|v| v.as_str()) {
-            Some(v) => v.trim(),
+        // Parse value — normalize to a single line so that embedded \r/\n cannot
+        // corrupt the line-oriented `[pinned] … key: value` storage format.
+        let value_raw = match args.get("value").and_then(|v| v.as_str()) {
+            Some(v) => v,
             None => {
                 return Ok(ToolResult::error(
                     "missing required argument: value".to_string(),
                 ));
             }
         };
+        // Collapse any embedded CR/LF to a single space, then trim surrounding
+        // whitespace so the stored and pinned representations are always one line.
+        let value_normalized: String = value_raw
+            .replace(['\r', '\n'], " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let value = value_normalized.as_str();
         if value.is_empty() {
             return Ok(ToolResult::error("value cannot be empty".to_string()));
         }
@@ -256,11 +268,11 @@ impl Tool for RememberPreferenceTool {
         let content = pinned_content(class, key, value);
 
         tracing::debug!(
-            "[tool][remember_preference] upserting pinned preference: namespace={} key={} class={} value={:?}",
+            "[tool][remember_preference] upserting pinned preference: namespace={} key={} class={} value_len={}",
             PINNED_PREFERENCES_NAMESPACE,
             mem_key,
             class.as_str(),
-            value
+            value.len()
         );
 
         match self
