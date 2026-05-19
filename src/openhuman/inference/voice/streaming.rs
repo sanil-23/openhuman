@@ -223,7 +223,7 @@ pub async fn handle_dictation_ws(mut socket: WebSocket, config: Arc<Config>) {
                             let err_msg = serde_json::json!({
                                 "type": "error",
                                 "message": format!(
-                                    "Recording limit reached: maximum {} seconds of audio per session",
+                                    "Recording limit reached: maximum {} minutes of audio per session",
                                     MAX_FULL_AUDIO_SAMPLES / AUDIO_SAMPLE_RATE / 60
                                 ),
                             });
