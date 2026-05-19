@@ -25,7 +25,7 @@
 //! ## Memory cap
 //! The full-audio accumulation buffer (`full_audio_buf`) is bounded by
 //! `MAX_FULL_AUDIO_SAMPLES` (~5 min at 16 kHz). Clients that stream beyond this limit
-//! are disconnected with an error frame; see `append_stream_samples_checked`.
+//! are disconnected with an error frame; see `append_stream_samples`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
