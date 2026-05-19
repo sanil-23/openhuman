@@ -345,21 +345,20 @@ async fn soft_fallback_when_archivist_absent() {
 
 // ── Test 4: soft-fallback when LLM stub fails ────────────────────────────────
 
-/// When the archivist has a failing chat provider, `rolling_segment_recap`
-/// still returns a non-empty heuristic fallback string (never panics/fails).
-/// The `SegmentRecapSummarizer` uses that string as the replacement text.
-/// The prompt must never be left over-budget.
+/// Tier 3 — the bookend heuristic stub must NEVER become live compaction
+/// text. Here there is no chat provider configured, so `summarize_entries`
+/// produces only `segments::fallback_summary` (bookend stub) with
+/// `produced_by_llm = false`. `rolling_segment_recap` must therefore return
+/// `None`, and `SegmentRecapSummarizer` falls back to the inner summarizer.
+/// (Option A: only a genuine summariser-produced recap may be compaction.)
 #[tokio::test]
-async fn soft_fallback_uses_heuristic_when_llm_fails() {
+async fn bookend_stub_never_becomes_compaction_falls_back_to_inner() {
     let conn = setup_conn();
-    // Archivist with a failing LLM — heuristic fallback fires internally.
-    let hook = Arc::new(ArchivistHook::new_with_stubs(
-        conn.clone(),
-        Arc::new(FailingChatProvider),
-        Arc::new(StubEmbedder),
-    ));
+    // `ArchivistHook::new` leaves `chat_provider = None` → summarize_entries
+    // takes the no-provider branch → bookend stub, produced_by_llm = false.
+    let hook = Arc::new(ArchivistHook::new(conn.clone(), true));
 
-    let session = "p15-fallback-llm-fail";
+    let session = "p15-bookend-stub-none";
 
     hook.on_turn_complete(&TurnContext {
         user_message: "Hello, what is Rust?".into(),
@@ -372,14 +371,12 @@ async fn soft_fallback_uses_heuristic_when_llm_fails() {
     .await
     .unwrap();
 
-    // rolling_segment_recap must return Some (heuristic fallback, not None).
+    // Only the bookend stub is available → MUST be None.
     let recap = hook.rolling_segment_recap(session).await;
-    // With a failing LLM, summarize_entries falls back to segments::fallback_summary
-    // which always returns a non-empty string.
     assert!(
-        recap.is_some(),
-        "rolling_segment_recap must return Some even when LLM fails \
-         (heuristic fallback must fire)"
+        recap.is_none(),
+        "rolling_segment_recap must return None when only the bookend stub \
+         is available — the stub must never be live compaction text"
     );
 
     let inner = RecordingSummarizer::new();
@@ -391,21 +388,77 @@ async fn soft_fallback_uses_heuristic_when_llm_fails() {
     .with_keep_recent(1);
 
     let mut history = vec![user("evict"), user("evict2"), user("keep")];
-    let stats = recap_summ
+    recap_summ
         .summarize(&mut history, "test-model")
         .await
-        .expect("must not panic or error — heuristic recap suffices");
+        .expect("must not panic — inner summarizer is the safety net");
 
-    // Because rolling_segment_recap returned Some (heuristic), the inner
-    // summarizer should NOT have been called — the recap path succeeded.
+    assert_eq!(
+        inner.call_count(),
+        1,
+        "Inner summarizer must run when only the bookend stub is available \
+         (stub must never be live compaction text)"
+    );
+}
+
+/// Tier 2 — when a chat provider IS configured but its call fails,
+/// `LlmSummariser`'s soft-fallback yields an *inert clipped-content* recap
+/// (the real conversation text, truncated — NOT the bookend stub). Per
+/// Option A this is acceptable as live compaction text (real content,
+/// strictly better than no compaction), so `rolling_segment_recap` returns
+/// `Some` and the inner summarizer is NOT used.
+#[tokio::test]
+async fn failing_provider_yields_inert_clipped_recap_used_as_compaction() {
+    let conn = setup_conn();
+    let hook = Arc::new(ArchivistHook::new_with_stubs(
+        conn.clone(),
+        Arc::new(FailingChatProvider),
+        Arc::new(StubEmbedder),
+    ));
+
+    let session = "p15-inert-clipped-kept";
+
+    hook.on_turn_complete(&TurnContext {
+        user_message: "Explain ownership in Rust in detail.".into(),
+        assistant_response: "Ownership means each value has a single owner; \
+                             borrows are checked at compile time."
+            .into(),
+        tool_calls: vec![],
+        turn_duration_ms: 50,
+        session_id: Some(session.into()),
+        iteration_count: 1,
+    })
+    .await
+    .unwrap();
+
+    // Provider present but failing → LlmSummariser inert fallback → real
+    // clipped content (not the bookend stub) → Some, treated as usable.
+    let recap = hook.rolling_segment_recap(session).await;
+    assert!(
+        recap.is_some(),
+        "Inert clipped-content recap (real text) is acceptable compaction \
+         text — must be Some, not None"
+    );
+
+    let inner = RecordingSummarizer::new();
+    let recap_summ = SegmentRecapSummarizer::new(
+        Arc::clone(&hook),
+        session.to_string(),
+        inner.clone() as Arc<dyn Summarizer>,
+    )
+    .with_keep_recent(1);
+
+    let mut history = vec![user("evict"), user("evict2"), user("keep")];
+    recap_summ
+        .summarize(&mut history, "test-model")
+        .await
+        .expect("must not panic");
+
     assert_eq!(
         inner.call_count(),
         0,
-        "Inner summarizer must not be called when heuristic recap is available"
-    );
-    assert!(
-        stats.messages_removed > 0,
-        "Expected messages to be removed; got 0"
+        "Inner summarizer must NOT run when an inert clipped-content recap \
+         is available (real content, better than no compaction)"
     );
 }
 

@@ -353,7 +353,7 @@ impl ArchivistHook {
             .join(". ");
 
         // ── Segment recap (LLM or heuristic fallback) ────────────────────
-        let summary = self
+        let (summary, _from_llm) = self
             .summarize_entries(&segment_entries, &segment.segment_id, segment.turn_count)
             .await;
 
@@ -620,18 +620,27 @@ impl ArchivistHook {
     /// - NEVER mutates DB state (no `segment_set_summary`, no embedding).
     /// - NEVER closes a segment.
     /// - Safe to call on both open and closed segments.
+    /// Summarize a set of episodic entries into a recap string.
+    ///
+    /// Returns `(text, produced_by_llm)`. `produced_by_llm == false` means the
+    /// LLM was unavailable / failed / returned empty and `text` is the shallow
+    /// heuristic `fallback_summary` bookend stub. That stub is an acceptable
+    /// durable last-resort on the *finalize* path, but callers driving the
+    /// **live prompt** (rolling recap → compaction) must treat
+    /// `produced_by_llm == false` as "no real recap" and fall back to their
+    /// own strategy — the stub must never become live compaction text.
     async fn summarize_entries(
         &self,
         entries: &[&EpisodicEntry],
         segment_id: &str,
         turn_count: i32,
-    ) -> String {
+    ) -> (String, bool) {
         if entries.is_empty() {
             tracing::debug!(
                 "[archivist] summarize_entries: no entries for segment={segment_id} — \
                  returning empty fallback"
             );
-            return segments::fallback_summary("", "", turn_count);
+            return (segments::fallback_summary("", "", turn_count), false);
         }
 
         // Build a full prose corpus from ALL entries (user + assistant prose;
@@ -688,21 +697,21 @@ impl ArchivistHook {
                          chars={}",
                         output.content.len()
                     );
-                    output.content
+                    (output.content, true)
                 }
                 Ok(_) => {
                     tracing::debug!(
                         "[archivist] summarize_entries: LLM returned empty — \
                          heuristic fallback segment={segment_id}"
                     );
-                    segments::fallback_summary(first, last, turn_count)
+                    (segments::fallback_summary(first, last, turn_count), false)
                 }
                 Err(e) => {
                     tracing::warn!(
                         "[archivist] summarize_entries: LLM recap failed (non-fatal) \
                          segment={segment_id}: {e} — heuristic fallback"
                     );
-                    segments::fallback_summary(first, last, turn_count)
+                    (segments::fallback_summary(first, last, turn_count), false)
                 }
             }
         } else {
@@ -710,7 +719,7 @@ impl ArchivistHook {
                 "[archivist] summarize_entries: no chat provider — \
                  heuristic fallback segment={segment_id}"
             );
-            segments::fallback_summary(first, last, turn_count)
+            (segments::fallback_summary(first, last, turn_count), false)
         }
     }
 
@@ -733,10 +742,12 @@ impl ArchivistHook {
     /// - The archivist is disabled or has no connection.
     /// - There is no open segment for `session_id`.
     /// - The open segment has no episodic entries.
-    /// - The LLM call fails AND the heuristic fallback is empty (edge case).
+    /// - No real LLM recap was produced (LLM unavailable / failed / empty, so
+    ///   only the heuristic bookend stub is available). The shallow stub is
+    ///   deliberately NOT used as live compaction text.
     ///
     /// Callers must treat `None` as "recap unavailable" and fall back to
-    /// their own compaction strategy.
+    /// their own compaction strategy (e.g. `ProviderSummarizer`).
     pub async fn rolling_segment_recap(&self, session_id: &str) -> Option<String> {
         if !self.enabled {
             tracing::debug!(
@@ -792,13 +803,23 @@ impl ArchivistHook {
             segment_entries.len()
         );
 
-        let recap = self
+        let (recap, from_llm) = self
             .summarize_entries(
                 &segment_entries,
                 &open_segment.segment_id,
                 open_segment.turn_count,
             )
             .await;
+
+        if !from_llm {
+            tracing::debug!(
+                "[archivist] rolling_segment_recap: only heuristic bookend stub \
+                 available (no real LLM recap) session={session_id} segment={} — \
+                 returning None so compaction falls back to ProviderSummarizer",
+                open_segment.segment_id
+            );
+            return None;
+        }
 
         if recap.is_empty() {
             tracing::debug!(
@@ -810,7 +831,7 @@ impl ArchivistHook {
         }
 
         tracing::debug!(
-            "[archivist] rolling_segment_recap: produced recap chars={} \
+            "[archivist] rolling_segment_recap: produced LLM recap chars={} \
              session={session_id} segment={}",
             recap.len(),
             open_segment.segment_id
