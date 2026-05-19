@@ -579,9 +579,9 @@ pub fn stm_recall(
             }
             (Some(s), Some(e)) => {
                 if s.timestamp() >= e.timestamp() {
-                    merged.push(seg_iter.next().unwrap());
+                    merged.push(seg_iter.next().expect("peek confirmed Some"));
                 } else {
-                    merged.push(ep_iter.next().unwrap());
+                    merged.push(ep_iter.next().expect("peek confirmed Some"));
                 }
             }
         }

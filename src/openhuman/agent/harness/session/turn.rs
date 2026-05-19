@@ -974,7 +974,7 @@ impl Agent {
         // later), which is the right amount of retry behaviour for a
         // librarian task that's idempotent across reruns.
         if result.is_ok() && self.context.should_extract_session_memory() {
-            self.spawn_session_memory_extraction();
+            self.spawn_session_memory_extraction().await;
             // Sibling pipeline (#1399): heuristic transcript ingestion
             // turns the just-written transcript into durable
             // conversational memory + reflections so a brand-new chat
@@ -1757,7 +1757,7 @@ impl Agent {
     /// Gated by [`context_pipeline::SessionMemoryState::should_extract`]
     /// — see its docs for the threshold invariants. Safe to call from
     /// inside `turn()` after the turn body has settled.
-    pub(super) fn spawn_session_memory_extraction(&mut self) {
+    pub(super) async fn spawn_session_memory_extraction(&mut self) {
         // ── Flush the trailing open segment before the session winds down ──
         //
         // The ArchivistHook manages per-turn segment lifecycle but cannot
@@ -1766,17 +1766,18 @@ impl Agent {
         // is the closest available signal: it fires when the context manager
         // decides the session has accumulated enough material to archive.
         //
-        // We spawn a dedicated background task so the flush (async LLM recap
-        // + embedding) does not block the main turn loop.
+        // GUARANTEE: the flush is *awaited* here (not fire-and-forget) so
+        // the trailing segment always receives its recap + embedding + tree
+        // ingest before the function returns, even during runtime wind-down.
+        // This honours the doc-comment guarantee on `flush_open_segment` in
+        // `archivist.rs`. No deadlock risk: no mutex guard is held across
+        // this await point.
         if let Some(ref archivist) = self.archivist_hook {
-            let hook = Arc::clone(archivist);
             let session_id = self.event_session_id.clone();
             log::debug!(
-                "[archivist] spawning flush_open_segment for session={session_id} at session wind-down"
+                "[archivist] awaiting flush_open_segment for session={session_id} at session wind-down"
             );
-            tokio::spawn(async move {
-                hook.flush_open_segment(&session_id).await;
-            });
+            archivist.flush_open_segment(&session_id).await;
         }
 
         let Some(registry) = harness::AgentDefinitionRegistry::global() else {

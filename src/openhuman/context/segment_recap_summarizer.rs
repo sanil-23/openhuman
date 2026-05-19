@@ -128,8 +128,10 @@ impl Summarizer for SegmentRecapSummarizer {
                 // Use the same "never break a tool-call pair" split rule as
                 // ProviderSummarizer so the API invariant
                 // (AssistantToolCalls ↔ ToolResults) is preserved.
+                // Delegates to the canonical implementation in `summarizer`
+                // so the two compaction paths share a single definition.
                 let proposed_head = total - self.keep_recent;
-                let head_len = snap_split_forward_no_break(history, proposed_head);
+                let head_len = super::summarizer::snap_split_forward(history, proposed_head);
                 if head_len == 0 {
                     tracing::debug!(
                         session_id = %self.session_id,
@@ -197,28 +199,6 @@ impl Summarizer for SegmentRecapSummarizer {
                 self.inner.summarize(history, model).await
             }
         }
-    }
-}
-
-/// Mirror of `snap_split_forward` in `summarizer.rs` — avoids re-exporting a
-/// private function by copying the four-line logic here. Kept local because
-/// only `SegmentRecapSummarizer` needs it outside the `summarizer` module.
-fn snap_split_forward_no_break(history: &[ConversationMessage], proposed_head: usize) -> usize {
-    let mut head = proposed_head.min(history.len());
-    if head > 0
-        && head < history.len()
-        && matches!(
-            &history[head - 1],
-            ConversationMessage::AssistantToolCalls { .. }
-        )
-        && matches!(&history[head], ConversationMessage::ToolResults(_))
-    {
-        head += 1;
-    }
-    if head >= history.len() {
-        0
-    } else {
-        head
     }
 }
 
