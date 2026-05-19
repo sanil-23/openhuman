@@ -1786,3 +1786,43 @@ fn approval_debounce_four_rapid_calls_suppressed_after_first() {
         "[telegram][approval] exactly 1 of 4 rapid calls must not be suppressed (de-bounce)"
     );
 }
+
+/// Review note on #1948 (@graycyrus): the de-bounce map must not grow without
+/// bound. Entries older than the de-bounce window are dead weight — they can
+/// never suppress again — so a non-suppressed call evicts them. Pre-seed one
+/// stale entry and one fresh entry, trigger a new non-suppressed call, and
+/// assert the stale entry is gone while the fresh and new ones remain.
+#[test]
+fn approval_debounce_evicts_entries_past_window() {
+    let ch = TelegramChannel::new("t".into(), vec![], false);
+    let stale = std::time::Instant::now()
+        .checked_sub(Duration::from_secs(3600))
+        .expect("monotonic clock far enough from boot for a 1h offset");
+
+    {
+        let mut prompts = ch.recent_approval_prompts.lock();
+        prompts.insert("stale_chat:stale_sender".to_string(), stale);
+        prompts.insert(
+            "fresh_chat:fresh_sender".to_string(),
+            std::time::Instant::now(),
+        );
+    }
+
+    // Non-suppressed call for a new key triggers the eviction sweep + insert.
+    let suppressed = ch.check_and_update_approval_debounce("new_chat", "new_sender");
+    assert!(!suppressed, "first call for a new key must not be suppressed");
+
+    let prompts = ch.recent_approval_prompts.lock();
+    assert!(
+        !prompts.contains_key("stale_chat:stale_sender"),
+        "[telegram][approval] stale entry past the de-bounce window must be evicted (no unbounded growth)"
+    );
+    assert!(
+        prompts.contains_key("fresh_chat:fresh_sender"),
+        "[telegram][approval] fresh entry within the window must be retained"
+    );
+    assert!(
+        prompts.contains_key(&TelegramChannel::approval_debounce_key("new_chat", "new_sender")),
+        "[telegram][approval] the new entry must be inserted"
+    );
+}
