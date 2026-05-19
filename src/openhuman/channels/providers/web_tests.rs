@@ -172,6 +172,33 @@ fn classify_inference_error_quotes_model_unavailable_detail() {
 }
 
 #[test]
+fn classify_inference_error_surfaces_provider_config_rejection_actionably() {
+    // #2079 / #2076 / #2202: before this arm these fell through to the
+    // generic "inference" bucket and the user saw no actionable
+    // remediation. Each must now classify as `model_unavailable` with the
+    // "fix your model/routing" copy, and quote the upstream detail.
+    let cases = [
+        // #2079 — abstract tier alias leaked to a custom provider.
+        r#"custom_openai API error (400 Bad Request): {"error":{"message":"The supported API model names are deepseek-v4-pro or deepseek-v4-flash, but you passed reasoning-v1.","type":"invalid_request_error"}}"#,
+        // #2076 — Moonshot Kimi K2 only accepts temperature: 1.
+        r#"custom_openai API error (400): {"error":{"message":"invalid temperature: only 1 is allowed for this model","type":"invalid_request_error"}}"#,
+        // #2202 — unknown / stale model pin.
+        r#"custom_openai API error (400): {"error":{"message":"Model 'claude-opus-4-7' is not available. Use GET /openai/v1/models to list available models."}}"#,
+    ];
+    for raw in cases {
+        let (category, message) = classify_inference_error(raw);
+        assert_eq!(
+            category, "model_unavailable",
+            "config-rejection must classify as model_unavailable, not generic: {raw}"
+        );
+        assert!(
+            message.contains("Settings → LLM"),
+            "must give actionable remediation: {message}"
+        );
+    }
+}
+
+#[test]
 fn generic_error_copy_is_sanitized_and_has_discord_report_action() {
     let message = generic_inference_error_user_message();
     assert!(message.contains("Something went wrong. Please try again."));
