@@ -277,15 +277,24 @@ pub async fn backfill_status_rpc(
     config: &Config,
 ) -> Result<RpcOutcome<BackfillStatusResponse>, String> {
     log::debug!("[memory_tree::rpc] backfill_status: entry");
-    let pending_jobs: u64 = store::with_connection(config, |conn| {
-        let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM mem_tree_jobs
-              WHERE kind = 'reembed_backfill' AND status IN ('ready', 'running')",
-            [],
-            |r| r.get(0),
-        )?;
-        Ok(n.max(0) as u64)
+    // SQLite I/O off the async runtime thread, matching the sibling
+    // DB-backed handlers in this module (`get_chunk_rpc`, etc.).
+    let pending_jobs: u64 = tokio::task::spawn_blocking({
+        let config = config.clone();
+        move || {
+            store::with_connection(&config, |conn| {
+                let n: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM mem_tree_jobs
+                      WHERE kind = 'reembed_backfill' AND status IN ('ready', 'running')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok(n.max(0) as u64)
+            })
+        }
     })
+    .await
+    .map_err(|e| format!("memory_backfill_status join error: {e}"))?
     .map_err(|e| {
         let msg = format!("memory_backfill_status: {e}");
         log::debug!("[memory_tree::rpc] backfill_status: error: {msg}");
