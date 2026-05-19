@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Assert tauri-cef pin matches expected SHA
         run: |
           set -euo pipefail
