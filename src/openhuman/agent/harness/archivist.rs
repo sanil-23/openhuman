@@ -997,6 +997,20 @@ fn strip_tool_calls_from_response(response: &str) -> String {
         }
     }
 
+    // Drop JSON / tool-use payload lines the XML strip above cannot catch
+    // (evidence-vs-interpretation policy: tool-call payloads must never reach
+    // tree ingest).
+    cleaned = cleaned
+        .lines()
+        .filter(|line| {
+            let l = line.trim();
+            !(l.contains("\"tool_use\"")
+                || l.starts_with("{\"tool_calls\"")
+                || l.starts_with("\"tool_calls\""))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
     // Trim and collapse runs of blank lines left by block removal.
     let trimmed = cleaned
         .lines()

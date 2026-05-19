@@ -268,9 +268,11 @@ impl Agent {
         // when the digest is empty) so an empty workspace doesn't get
         // re-queried every turn.
         //
-        // Capture the first-turn sentinel BEFORE the tree block updates it,
-        // so the STM recall block below can gate on "first turn only".
-        let is_first_turn_for_stm = self.last_tree_prefetch_at.is_none();
+        // Gate STM preemptive recall on the session turn index, independent
+        // of tree-prefetch success/failure. (Previously keyed off
+        // `last_tree_prefetch_at.is_none()`, which stays `None` when tree
+        // prefetch fails — re-firing STM recall on every later turn.)
+        let is_first_turn_for_stm = self.context.stats().session_memory_current_turn == 0;
         let now = std::time::Instant::now();
         let context = if crate::openhuman::agent::tree_loader::should_prefetch(
             self.last_tree_prefetch_at,

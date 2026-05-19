@@ -135,18 +135,6 @@ pub fn all_tools_with_runtime(
         Box::new(MemoryStoreTool::new(memory.clone(), security.clone())),
         Box::new(MemoryRecallTool::new(memory.clone())),
         Box::new(MemoryForgetTool::new(memory.clone(), security.clone())),
-        // Phase 3 STM recall — on-demand cross-thread episodic search.
-        // Gated on stm_recall_enabled (default true). The session_id
-        // is not available here; exclude-own-session is enforced by the
-        // preemptive first-turn injection in turn.rs. The on-demand tool
-        // defaults to empty exclude_session (no self-exclusion).
-        Box::new(
-            crate::openhuman::memory::stm_recall::tool::StmRecallTool::new(
-                memory.clone(),
-                String::new(), // session_id not known at tool-build time
-                None,
-            ),
-        ),
         Box::new(MemoryTreeTool),
         // WhatsApp data store — read-only agent surface (issue #1341).
         // The matching `whatsapp_data_ingest` write-path stays internal-only
@@ -239,6 +227,22 @@ pub fn all_tools_with_runtime(
         root_config.curl.max_download_bytes,
         root_config.curl.timeout_secs,
     )));
+
+    // Phase 3 STM recall — on-demand cross-thread episodic search tool.
+    // Feature-gated on `learning.stm_recall_enabled` (default true) so the
+    // tool surface and the preemptive prompt injection are enabled/disabled
+    // together. `session_id` is not known at tool-build time; exclude-own-
+    // session is enforced by the preemptive first-turn injection in turn.rs
+    // (the on-demand tool intentionally uses an empty exclude_session).
+    if root_config.learning.stm_recall_enabled {
+        tools.push(Box::new(
+            crate::openhuman::memory::stm_recall::tool::StmRecallTool::new(
+                memory.clone(),
+                String::new(),
+                None,
+            ),
+        ));
+    }
 
     // gitbooks — answers questions about OpenHuman by calling the
     // GitBook MCP server. Two tools mirroring the upstream MCP tools.

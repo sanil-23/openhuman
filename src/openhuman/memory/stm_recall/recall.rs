@@ -185,7 +185,21 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Decode a raw BLOB from `segment_embeddings.vector` into `Vec<f32>`.
+///
+/// A well-formed embedding blob is a whole number of little-endian `f32`s
+/// (length a multiple of 4). A non-multiple-of-4 length means the blob is
+/// truncated/corrupt; silently dropping the trailing bytes would yield a
+/// wrong-length vector, so we reject it (empty → cosine treats it as a
+/// non-match, which is the safe outcome).
 fn decode_vector_blob(bytes: &[u8]) -> Vec<f32> {
+    if bytes.len() % 4 != 0 {
+        tracing::warn!(
+            "[stm_recall] decode_vector_blob: blob length {} is not a multiple of 4 — \
+             discarding malformed embedding",
+            bytes.len()
+        );
+        return Vec::new();
+    }
     bytes
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
@@ -503,10 +517,11 @@ pub fn stm_recall(
             continue;
         }
 
-        // Only include entries from within the recency window
-        if entry.timestamp < cutoff_ts && opts.query.is_none() {
-            // For keyword search, FTS5 already returned these; for recency fallback
-            // we already applied cutoff in SQL.
+        // Recency window applies consistently — including keyword/FTS mode.
+        // FTS5 keyword search is not time-bounded, so without this an
+        // older-than-window episodic hit could leak into STM. The recency
+        // window IS the STM/LTM boundary and must always hold.
+        if entry.timestamp < cutoff_ts {
             continue;
         }
 
