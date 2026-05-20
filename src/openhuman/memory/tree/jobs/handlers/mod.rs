@@ -665,7 +665,10 @@ async fn handle_reembed_backfill(config: &Config, job: &Job) -> Result<JobOutcom
                         "[memory_tree::jobs] reembed_backfill: chunk {id} embed wrong dim, skipping (sig={active_sig})"
                     );
                     let _ = chunk_store::mark_chunk_reembed_skipped(
-                        config, id, &active_sig, "embed wrong dim",
+                        config,
+                        id,
+                        &active_sig,
+                        "embed wrong dim",
                     );
                 }
                 Err(e) => {
