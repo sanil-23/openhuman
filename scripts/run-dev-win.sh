@@ -499,8 +499,18 @@ echo "[run-dev-win] pnpm resolved to: $PNPM_EXE"
 # enclosing `export`. `dirname` on a validated absolute path is reliable
 # in practice, but the strict-mode posture is worth the extra line.
 PNPM_DIR="$(dirname "$PNPM_EXE")"
-export PATH="$PNPM_DIR:$PATH"
-echo "[run-dev-win] pnpm dir prepended to PATH: $PNPM_DIR"
+# `dirname` returns `.` for a bare filename (e.g. if PNPM_EXE somehow
+# resolved to just "pnpm" without a path component). Prepending `.` would
+# inject the current working directory into PATH on a Windows dev machine
+# — a privilege-escalation-flavoured surprise. Skip the prepend in that
+# case (and on the also-degenerate empty result); the absolute-path call
+# sites elsewhere in this script still work.
+if [[ -n "$PNPM_DIR" && "$PNPM_DIR" != "." ]]; then
+  export PATH="$PNPM_DIR:$PATH"
+  echo "[run-dev-win] pnpm dir prepended to PATH: $PNPM_DIR"
+else
+  echo "[run-dev-win] pnpm dir not prepended to PATH (PNPM_EXE has no path component: $PNPM_EXE)"
+fi
 echo "[run-dev-win] node on bash PATH:    $(command -v node 2>/dev/null || echo '<not found>')"
 echo "[run-dev-win] node.exe on bash PATH: $(command -v node.exe 2>/dev/null || echo '<not found>')"
 
