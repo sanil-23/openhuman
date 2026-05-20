@@ -266,15 +266,24 @@ fn render_tools_markdown(resp: &super::types::ComposioToolsResponse) -> String {
 // translation contract.
 
 /// Format a user-facing error message for a scope-blocked execution.
+///
+/// Embeds the unlock paths in the error itself so the agent can read the
+/// available options straight off the tool response — same policy-in-data
+/// approach as the `gated_tools` surface. Two paths today: the agent-side
+/// meta-tool (with explicit user consent) and the manual UI toggle.
 fn scope_error_message(slug: &str, scope: ToolScope, pref: UserScopePref) -> String {
+    let toolkit = toolkit_from_slug(slug).unwrap_or_default();
+    let scope_str = scope.as_str();
     format!(
-        "composio_execute: action `{slug}` is classified `{}` and is disabled in your \
-         current scope preferences (read={}, write={}, admin={}). Update the toolkit's \
-         scope preference (composio_set_user_scopes) to enable this category.",
-        scope.as_str(),
-        pref.read,
-        pref.write,
-        pref.admin,
+        "composio_execute: action `{slug}` is classified `{scope_str}` and is \
+         disabled in the user's current scope preferences for `{toolkit}` \
+         (read={}, write={}, admin={}). Surface ALL unlock paths to the user \
+         and let them choose — don't drop one or substitute your own framing:\n\
+         - unlock path: ask the user for consent, then call \
+         `composio_enable_scope(toolkit=\"{toolkit}\", scope=\"{scope_str}\")`\n\
+         - unlock path: the user can toggle it themselves in \
+         Settings → Integrations → {toolkit} → {scope_str} scope",
+        pref.read, pref.write, pref.admin,
     )
 }
 
@@ -1052,13 +1061,16 @@ impl Tool for ComposioEnableScopeTool {
          (e.g. `GMAIL_BATCH_DELETE_MESSAGES`, `GMAIL_DELETE_THREAD`) that the \
          user has not pre-enabled. \
          \
-         CRITICAL: ALWAYS ask the user for explicit consent before calling this \
-         tool. Granting a scope persists across sessions and lets future turns \
-         invoke destructive actions without re-prompting. Phrase the request \
-         specifically (\"You're asking me to bulk-delete 200 emails. This needs \
-         Admin scope for Gmail, which I don't have. Want me to enable it now? \
-         You can always revoke in Settings → Integrations → Gmail.\"). Only call \
-         after the user clearly agrees."
+         CRITICAL: ALWAYS ask the user for explicit consent before calling \
+         this tool. Granting a scope persists across sessions and lets future \
+         turns invoke destructive actions without re-prompting. \
+         \
+         When you offer the unlock to the user, surface ALL of the action's \
+         `unlock paths` (listed beside the gated action in the integrations \
+         data) so the user can choose between letting the agent do it or \
+         flipping it themselves in the UI — do not present only the agent \
+         path. Only call this tool after the user clearly picks the agent \
+         path."
     }
     fn parameters_schema(&self) -> Value {
         json!({

@@ -157,11 +157,10 @@ fn render_connected_integrations(integrations: &[ConnectedIntegration]) -> Strin
             "\n### Additional capabilities behind a permission toggle\n\n\
              These actions exist in the toolkit but are NOT currently in your callable \
              tool list — the user has not granted the required scope. Do NOT pretend \
-             they're unavailable. If the user asks for one (or you'd otherwise need it), \
-             tell them what it does and offer to flip the required scope on. With explicit \
-             user consent, call `composio_enable_scope(toolkit, scope)` to elevate; the \
-             action becomes callable on your next turn. The user can also flip it manually \
-             in Settings → Integrations → {toolkit} → scope toggles.\n\n",
+             they're unavailable. When the user asks for one (or you'd otherwise need \
+             it), tell them what the action does and present ALL of its `unlock paths` \
+             listed below so the user can choose how to enable it. Never drop a path or \
+             rewrite it into your own framing.\n\n",
         );
         for ci in integrations
             .iter()
@@ -179,6 +178,9 @@ fn render_connected_integrations(integrations: &[ConnectedIntegration]) -> Strin
                     "  - `{}` — {} (requires `{}` scope)",
                     gt.name, desc, gt.required_scope
                 );
+                for path in &gt.unlock_paths {
+                    let _ = writeln!(out, "    - unlock path: {path}");
+                }
             }
         }
         out.push('\n');

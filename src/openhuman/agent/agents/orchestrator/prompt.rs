@@ -136,7 +136,16 @@ fn render_delegation_guide(integrations: &[ConnectedIntegration]) -> String {
          unavailable.\n\
          - The only honest \"no\" comes back from a delegation that found the \
          action neither in the visible `tools` list nor in the `gated_tools` \
-         (permission-toggle) list of the sub-agent.\n\n",
+         (permission-toggle) list of the sub-agent.\n\
+         - **Cross-chat context is historical, not authoritative.** If the \
+         `[Cross-chat context — historical]` block contains a past \"I can / \
+         can't do X with {toolkit}\" statement, treat it as a snapshot from an \
+         earlier moment. The tool list, connected integrations, and per-toolkit \
+         scope toggles (read / write / admin) can all change between chats — a \
+         past refusal may be stale. Verify against the **current** `## Connected \
+         Integrations` block above and (when in doubt) **DELEGATE** before \
+         quoting any past capability claim. Never echo a stale \"I can't\" \
+         without re-checking.\n\n",
     );
     tracing::debug!(
         section_len = out.len(),

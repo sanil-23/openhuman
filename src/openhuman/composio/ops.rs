@@ -1724,10 +1724,30 @@ async fn fetch_connected_integrations_uncached(
                         // Deliberately NO `parameters` field: the LLM should
                         // not be able to construct a call envelope; it can
                         // only describe + point at the unlock path.
+                        // Ship the unlock paths as data so the agent can show
+                        // the user every option (agent-side meta-tool + manual
+                        // UI toggle) and let them pick — without the system
+                        // prompt having to hardcode a template. Two paths
+                        // today; if a third route exists in future (per-action
+                        // approval modal, time-boxed elevation, etc.) it lands
+                        // here and the prompt renderer picks it up for free.
+                        let scope_str = required_scope.as_str();
+                        let unlock_paths = vec![
+                            format!(
+                                "ask the user for consent, then call \
+                                 `composio_enable_scope(toolkit=\"{slug}\", \
+                                 scope=\"{scope_str}\")`"
+                            ),
+                            format!(
+                                "the user can toggle it themselves in \
+                                 Settings → Integrations → {slug} → {scope_str} scope"
+                            ),
+                        ];
                         gated.push(GatedIntegrationTool {
                             name: t.function.name.clone(),
                             description: t.function.description.clone().unwrap_or_default(),
-                            required_scope: required_scope.as_str().to_string(),
+                            required_scope: scope_str.to_string(),
+                            unlock_paths,
                         });
                     }
                 }

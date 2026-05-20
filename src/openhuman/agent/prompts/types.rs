@@ -134,6 +134,15 @@ pub struct GatedIntegrationTool {
     /// rows are `"admin"` (destructive actions); `"write"` only appears for
     /// users who have explicitly turned write off, which is unusual.
     pub required_scope: String,
+    /// Literal lines the agent should show the user, verbatim, when offering
+    /// to unlock this action — one entry per available path (typically: the
+    /// agent-side meta-tool, and the manual UI toggle). Populated at
+    /// partition time in `composio::ops`. The prompt-side rule is "show
+    /// these to the user, don't substitute your own framing" — keeping the
+    /// text in the data (not in the system prompt) lets us tweak wording
+    /// without invalidating the KV-cache prefix and avoids biasing the
+    /// model toward a memorized template that drops options.
+    pub unlock_paths: Vec<String>,
 }
 
 /// A single action available on a connected integration.

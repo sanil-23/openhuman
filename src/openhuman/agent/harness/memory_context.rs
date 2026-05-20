@@ -135,7 +135,14 @@ pub(crate) async fn build_context(
         );
 
         if !cross.is_empty() {
-            context.push_str("[Cross-chat context]\n");
+            // Keep this header in sync with `memory_loader.rs` — the
+            // orchestrator's "Capability questions" section references it
+            // verbatim to teach the model that a past "I can't do X"
+            // statement may be stale (capabilities + scopes can change
+            // between chats).
+            context.push_str(
+                "[Cross-chat context — historical; capabilities may have changed since]\n",
+            );
             for entry in &cross {
                 let prov = entry
                     .session_id
@@ -351,7 +358,7 @@ mod tests {
 
         let context = build_context(&mem, "what database should I use?", 0.4).await;
         assert!(
-            context.contains("[Cross-chat context]"),
+            context.contains("[Cross-chat context"),
             "expected cross-chat header, got:\n{context}"
         );
         assert!(
@@ -417,7 +424,7 @@ mod tests {
         let mem = MockMemory::new(Vec::new(), Vec::new(), false);
         let context = build_context(&mem, "Postgres", 0.4).await;
         assert!(
-            !context.contains("[Cross-chat context]"),
+            !context.contains("[Cross-chat context"),
             "no cross-chat hits must produce no header, got:\n{context}"
         );
     }

@@ -371,7 +371,17 @@ impl MemoryLoader for DefaultMemoryLoader {
             };
             let prov = provenance_tag(&sid);
             if !appended_cross_header {
-                let section = "[Cross-chat context]\n";
+                // The header explicitly labels these snippets as historical so
+                // the model down-weights them when answering capability
+                // questions. The agent's *own* past "I can/can't do X" answers
+                // are FTS-retrievable here and were the original failure mode:
+                // a stale "nope, I can't delete emails" from a chat predating
+                // the user's Admin-scope toggle would be quoted verbatim as
+                // current truth. The orchestrator prompt's "Capability
+                // questions" section cross-references this header — keep the
+                // wording in sync.
+                let section =
+                    "[Cross-chat context — historical; capabilities may have changed since]\n";
                 if context.len() + section.len() > budget {
                     break;
                 }
@@ -594,7 +604,7 @@ mod tests {
             .await
             .expect("loader must succeed");
         assert!(
-            out.contains("[Cross-chat context]"),
+            out.contains("[Cross-chat context"),
             "expected cross-chat header, got:\n{out}"
         );
         assert!(
@@ -669,7 +679,7 @@ mod tests {
             .await
             .expect("loader must succeed");
         assert!(
-            !out.contains("[Cross-chat context]"),
+            !out.contains("[Cross-chat context"),
             "no cross-chat hits must produce no header, got:\n{out}"
         );
     }
@@ -741,7 +751,7 @@ mod tests {
             .expect("loader must succeed");
 
         assert!(
-            out.contains("[Cross-chat context]"),
+            out.contains("[Cross-chat context"),
             "JSONL primary path must emit the cross-chat header, got:\n{out}"
         );
         assert!(
