@@ -212,8 +212,9 @@ fn agent_tools_register_when_backend_signed_in() {
     let tools = all_composio_agent_tools(&config);
     assert_eq!(
         tools.len(),
-        5,
-        "backend session present → all 5 generic composio agent tools should register"
+        6,
+        "backend session present → all 6 generic composio agent tools should register \
+         (list_toolkits, list_connections, authorize, list_tools, execute, enable_scope)"
     );
 }
 
@@ -223,7 +224,8 @@ fn agent_tools_register_when_direct_mode_with_stored_key_and_no_backend_session(
     // user with a working personal Composio API key was getting `0`
     // tools registered because the gate hard-bound to
     // `build_composio_client` (backend-only). With the mode-aware probe
-    // in place this now correctly returns the full 5 generic tools.
+    // in place this now correctly returns the full generic tool set
+    // (originally 5; grew to 6 with `composio_enable_scope`).
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = crate::openhuman::config::Config::default();
     config.config_path = tmp.path().join("config.toml");
@@ -234,9 +236,9 @@ fn agent_tools_register_when_direct_mode_with_stored_key_and_no_backend_session(
     let tools = all_composio_agent_tools(&config);
     assert_eq!(
         tools.len(),
-        5,
+        6,
         "direct mode with stored API key (no backend session) must still register \
-         all 5 generic composio agent tools — the pre-Option-C bug returned 0 here"
+         all 6 generic composio agent tools — the pre-Option-C bug returned 0 here"
     );
 }
 
