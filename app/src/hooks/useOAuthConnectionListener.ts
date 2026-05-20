@@ -29,6 +29,12 @@ import type { ChannelAuthMode, ChannelType } from '../types/channels';
 
 const log = debug('channels:oauth-listener');
 
+// Module-level constant so the default identity is stable across renders.
+// Without this, an inline default array literal would land in the effect's
+// dep array and re-subscribe the global oauth:* listeners on every parent
+// render. (CodeRabbit on PR #2256.)
+const DEFAULT_OAUTH_CAPABILITIES = ['read', 'write'] as const;
+
 interface OAuthSuccessDetail {
   integrationId?: string;
   toolkit?: string;
@@ -64,7 +70,7 @@ export interface UseOAuthConnectionListenerOptions {
 export function useOAuthConnectionListener({
   channel,
   authMode,
-  capabilitiesOnSuccess = ['read', 'write'],
+  capabilitiesOnSuccess = DEFAULT_OAUTH_CAPABILITIES,
 }: UseOAuthConnectionListenerOptions): void {
   const dispatch = useAppDispatch();
 
