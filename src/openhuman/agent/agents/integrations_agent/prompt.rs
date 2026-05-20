@@ -138,13 +138,14 @@ fn render_connected_integrations(integrations: &[ConnectedIntegration]) -> Strin
         let _ = writeln!(out, "- **{}** — {}", ci.toolkit, ci.description);
     }
 
-    // Surface pref-gated tools so the agent can honestly answer "do you
-    // support X?" and offer to elevate. The agent CANNOT call these
-    // directly — no parameters schema is exposed and they aren't in its
-    // function list. To make one callable, ask the user for permission
-    // and then call the `composio_enable_scope` meta-tool, which flips
-    // the per-toolkit scope pref. After the next prompt rebuild the
-    // action graduates into the callable list above.
+    // Surface pref-gated tools so the agent can honestly say "I have this
+    // capability but it needs the {scope} toggle in Connections → {toolkit}".
+    // The agent CANNOT call these directly (no parameters schema is exposed)
+    // and CANNOT flip the gating scope itself — there is no agent-callable
+    // scope-elevate tool. The user must toggle the scope in the Connections
+    // UI; after the next prompt rebuild the action graduates into the
+    // callable list above. The per-row `unlock paths` rendered below carry
+    // the exact UI hint the agent should show.
     let mut has_gated = false;
     for ci in integrations.iter().filter(|ci| ci.connected) {
         if !ci.gated_tools.is_empty() {

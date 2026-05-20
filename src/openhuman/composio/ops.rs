@@ -1695,11 +1695,12 @@ async fn fetch_connected_integrations_uncached(
                 // Actions that the catalog *does* know about but the user's
                 // current scope pref denies are routed into `gated_tools` so
                 // the agent can honestly answer "I have this capability but
-                // it needs your permission" (and call the `composio_enable_scope`
-                // meta-tool to elevate). Without that surface the LLM has no
-                // way to know the gated action exists at all and will tell the
-                // user "I don't support that" — which is technically correct
-                // about its callable surface, but misleading about the toolkit.
+                // it needs the {scope} toggle in Connections → {toolkit}".
+                // The agent cannot flip the scope itself — that's a UI-only
+                // action. Without this gated surface the LLM has no way to
+                // know the gated action exists at all and will tell the user
+                // "I don't support that" — technically correct about its
+                // callable surface, but misleading about the toolkit.
                 let pref = super::providers::load_user_scope_or_default(slug).await;
                 let mut visible: Vec<ConnectedIntegrationTool> = Vec::new();
                 let mut gated: Vec<GatedIntegrationTool> = Vec::new();
@@ -1724,25 +1725,20 @@ async fn fetch_connected_integrations_uncached(
                         // Deliberately NO `parameters` field: the LLM should
                         // not be able to construct a call envelope; it can
                         // only describe + point at the unlock path.
-                        // Ship the unlock paths as data so the agent can show
-                        // the user every option (agent-side meta-tool + manual
-                        // UI toggle) and let them pick — without the system
-                        // prompt having to hardcode a template. Two paths
-                        // today; if a third route exists in future (per-action
-                        // approval modal, time-boxed elevation, etc.) it lands
-                        // here and the prompt renderer picks it up for free.
+                        // Ship the unlock path as data — single path today
+                        // (the Connections UI toggle). The agent does NOT
+                        // have a tool to flip scopes; that capability was
+                        // removed because LLM-mediated scope elevation made
+                        // the safety contract depend on model behavior and
+                        // was a soft gate the model could route around. If
+                        // more unlock paths exist in future (per-action
+                        // approval modal, time-boxed elevation, etc.) they
+                        // land here and the prompt renderer picks them up.
                         let scope_str = required_scope.as_str();
-                        let unlock_paths = vec![
-                            format!(
-                                "ask the user for consent, then call \
-                                 `composio_enable_scope(toolkit=\"{slug}\", \
-                                 scope=\"{scope_str}\")`"
-                            ),
-                            format!(
-                                "the user can toggle it themselves in \
-                                 Settings → Integrations → {slug} → {scope_str} scope"
-                            ),
-                        ];
+                        let unlock_paths = vec![format!(
+                            "the user enables it themselves in \
+                             Connections → {slug} → {scope_str}"
+                        )];
                         gated.push(GatedIntegrationTool {
                             name: t.function.name.clone(),
                             description: t.function.description.clone().unwrap_or_default(),

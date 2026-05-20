@@ -192,11 +192,11 @@ pub fn curated_scope_for(slug: &str) -> Option<ToolScope> {
 
 /// Does any curated action for `toolkit` require `scope`?
 ///
-/// Used by the agent-callable `composio_enable_scope` meta-tool to
-/// short-circuit no-op flips: if e.g. a toolkit's catalog has zero
-/// Admin-tagged actions, flipping the user's Admin bit graduates
-/// nothing into the callable surface and the tool can return a
-/// "not applicable" message instead of silently mutating prefs.
+/// Currently unused in production code (added when the now-removed
+/// `composio_enable_scope` meta-tool needed a no-op short-circuit). Kept
+/// because the same probe is useful any time we ask "would flipping the
+/// {scope} bit unlock anything in this toolkit?" — e.g. for a UI hint
+/// that greys out a toggle with no effect.
 ///
 /// Walks both the native provider catalog and the fallback
 /// [`catalog_for_toolkit`] so the answer matches what

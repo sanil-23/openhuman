@@ -93,17 +93,18 @@ pub struct ConnectedIntegration {
     /// the user has **not** unlocked via their per-toolkit scope preferences.
     /// The prompt renderer surfaces these descriptively (name + one-line +
     /// which scope is missing) so the agent can honestly answer "do you have
-    /// X?" with "yes, but you need to flip the {scope} toggle in Settings →
-    /// Integrations → {toolkit}; I can do that for you" — instead of silently
-    /// claiming the capability doesn't exist (which is what happens when the
-    /// agent has zero awareness of pref-gated actions).
+    /// X?" with "yes, but you need to flip the {scope} toggle in
+    /// Connections → {toolkit}" — instead of silently claiming the
+    /// capability doesn't exist (which is what happens when the agent has
+    /// zero awareness of pref-gated actions).
     ///
     /// The agent CANNOT directly invoke these (no `parameters` schema is
-    /// exposed; the LLM lacks the function definition). The intended flow:
-    /// agent sees a gated tool → asks user permission → calls the
-    /// `composio_enable_scope` meta-tool (with user consent) → on the next
-    /// turn the action graduates from `gated_tools` to `tools` and becomes
-    /// callable.
+    /// exposed; the LLM lacks the function definition) and it cannot flip
+    /// the gating scope itself — there is no agent-callable scope-elevate
+    /// tool. Intended flow: agent sees a gated tool → tells the user what
+    /// it does + names the `unlock_paths` from the data → the user toggles
+    /// the scope in the Connections UI → on the next turn the action
+    /// graduates from `gated_tools` to `tools` and becomes callable.
     pub gated_tools: Vec<GatedIntegrationTool>,
     /// Whether the user has an active OAuth connection for this
     /// toolkit. When `false`, the toolkit is in the backend allowlist
@@ -119,10 +120,10 @@ pub struct ConnectedIntegration {
 ///
 /// Deliberately no `parameters` field: the LLM should NOT be able to construct
 /// a call envelope for a gated tool — it can only describe its existence and
-/// point the user at the unlock path. Once the scope is granted (via the
-/// `composio_enable_scope` meta-tool or a manual UI toggle), the action moves
-/// from `ConnectedIntegration.gated_tools` to `ConnectedIntegration.tools` on
-/// the next prompt rebuild and becomes a real callable function.
+/// point the user at the unlock path. The agent has no scope-elevate tool;
+/// once the user toggles the gating scope in the Connections UI, the action
+/// moves from `ConnectedIntegration.gated_tools` to `ConnectedIntegration.tools`
+/// on the next prompt rebuild and becomes a real callable function.
 #[derive(Debug, Clone)]
 pub struct GatedIntegrationTool {
     /// Action slug, e.g. `"GMAIL_BATCH_DELETE_MESSAGES"`.
