@@ -579,10 +579,22 @@ async fn handle_reembed_backfill(config: &Config, job: &Job) -> Result<JobOutcom
         chunk_store::with_connection(config, |conn| {
             let chunks: Vec<String> = {
                 let mut stmt = conn.prepare(
+                    // The second NOT EXISTS — `mem_tree_chunk_reembed_skipped` —
+                    // is the runaway-loop fix (#1574 §6): without it, rows whose
+                    // body file is missing on disk (or whose embed failed
+                    // terminally) keep matching the worklist on every batch
+                    // because the failure path only LOG-skipped, never wrote
+                    // anything persistent. The handler below now marks such
+                    // rows in `mem_tree_chunk_reembed_skipped` so they're
+                    // excluded here on the next batch and the chain can
+                    // actually reach "fully covered".
                     "SELECT id FROM mem_tree_chunks c
                       WHERE NOT EXISTS (
                           SELECT 1 FROM mem_tree_chunk_embeddings e
                            WHERE e.chunk_id = c.id AND e.model_signature = ?1)
+                        AND NOT EXISTS (
+                          SELECT 1 FROM mem_tree_chunk_reembed_skipped s
+                           WHERE s.chunk_id = c.id AND s.model_signature = ?1)
                       LIMIT ?2",
                 )?;
                 let ids = stmt
@@ -598,10 +610,16 @@ async fn handle_reembed_backfill(config: &Config, job: &Job) -> Result<JobOutcom
                 Vec::new()
             } else {
                 let mut stmt = conn.prepare(
+                    // Summary-side counterpart of the runaway-loop fix; see
+                    // the chunks worklist above for the full rationale.
                     "SELECT id FROM mem_tree_summaries s
-                      WHERE s.deleted = 0 AND NOT EXISTS (
+                      WHERE s.deleted = 0
+                        AND NOT EXISTS (
                           SELECT 1 FROM mem_tree_summary_embeddings e
                            WHERE e.summary_id = s.id AND e.model_signature = ?1)
+                        AND NOT EXISTS (
+                          SELECT 1 FROM mem_tree_summary_reembed_skipped sk
+                           WHERE sk.summary_id = s.id AND sk.model_signature = ?1)
                       LIMIT ?2",
                 )?;
                 let ids = stmt
@@ -625,6 +643,16 @@ async fn handle_reembed_backfill(config: &Config, job: &Job) -> Result<JobOutcom
 
     // Phase 2 (no tx held): embed each row's stored source text. Per-row
     // errors are skipped (logged) so a single bad row can't strand memory.
+    //
+    // #1574 §6 fix: terminal failures (body file missing on disk, embed
+    // wrong dim, embed unrecoverable error) are *persistently* tombstoned
+    // via `mark_chunk_reembed_skipped` / `mark_summary_reembed_skipped`.
+    // The worklist queries above exclude these tombstones, so a single
+    // unembeddable row is attempted at most ONCE per signature instead of
+    // re-selected on every batch forever (the original bug: 16 orphans
+    // generating ~128k warns across ~8k defers, observed in the wild).
+    // The mark itself is best-effort — if its own SQLite write fails the
+    // row will be retried on a later batch, which is the desired fallback.
     let embedder =
         build_embedder_from_config(config).context("build embedder in reembed_backfill")?;
     let mut chunk_vecs: Vec<(String, Vec<f32>)> = Vec::new();
@@ -632,16 +660,37 @@ async fn handle_reembed_backfill(config: &Config, job: &Job) -> Result<JobOutcom
         match content_read::read_chunk_body(config, id) {
             Ok(body) => match embedder.embed(&body).await {
                 Ok(v) if pack_checked(&v).is_ok() => chunk_vecs.push((id.clone(), v)),
-                Ok(_) => log::warn!(
-                    "[memory_tree::jobs] reembed_backfill: chunk {id} embed wrong dim, skipping"
-                ),
-                Err(e) => log::warn!(
-                    "[memory_tree::jobs] reembed_backfill: chunk {id} embed failed: {e}; skipping"
-                ),
+                Ok(_) => {
+                    log::warn!(
+                        "[memory_tree::jobs] reembed_backfill: chunk {id} embed wrong dim, skipping (sig={active_sig})"
+                    );
+                    let _ = chunk_store::mark_chunk_reembed_skipped(
+                        config, id, &active_sig, "embed wrong dim",
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[memory_tree::jobs] reembed_backfill: chunk {id} embed failed: {e}; skipping (sig={active_sig})"
+                    );
+                    let _ = chunk_store::mark_chunk_reembed_skipped(
+                        config,
+                        id,
+                        &active_sig,
+                        &format!("embed failed: {e}"),
+                    );
+                }
             },
-            Err(e) => log::warn!(
-                "[memory_tree::jobs] reembed_backfill: chunk {id} body read failed: {e}; skipping"
-            ),
+            Err(e) => {
+                log::warn!(
+                    "[memory_tree::jobs] reembed_backfill: chunk {id} body read failed: {e}; skipping (sig={active_sig})"
+                );
+                let _ = chunk_store::mark_chunk_reembed_skipped(
+                    config,
+                    id,
+                    &active_sig,
+                    &format!("body read failed: {e}"),
+                );
+            }
         }
     }
     let mut summary_vecs: Vec<(String, Vec<f32>)> = Vec::new();
@@ -649,16 +698,37 @@ async fn handle_reembed_backfill(config: &Config, job: &Job) -> Result<JobOutcom
         match content_read::read_summary_body(config, id) {
             Ok(body) => match embedder.embed(&body).await {
                 Ok(v) if pack_checked(&v).is_ok() => summary_vecs.push((id.clone(), v)),
-                Ok(_) => log::warn!(
-                    "[memory_tree::jobs] reembed_backfill: summary {id} embed wrong dim, skipping"
-                ),
-                Err(e) => log::warn!(
-                    "[memory_tree::jobs] reembed_backfill: summary {id} embed failed: {e}; skipping"
-                ),
+                Ok(_) => {
+                    log::warn!(
+                        "[memory_tree::jobs] reembed_backfill: summary {id} embed wrong dim, skipping (sig={active_sig})"
+                    );
+                    let _ = crate::openhuman::memory::tree::tree_source::store::mark_summary_reembed_skipped(
+                        config, id, &active_sig, "embed wrong dim",
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[memory_tree::jobs] reembed_backfill: summary {id} embed failed: {e}; skipping (sig={active_sig})"
+                    );
+                    let _ = crate::openhuman::memory::tree::tree_source::store::mark_summary_reembed_skipped(
+                        config,
+                        id,
+                        &active_sig,
+                        &format!("embed failed: {e}"),
+                    );
+                }
             },
-            Err(e) => log::warn!(
-                "[memory_tree::jobs] reembed_backfill: summary {id} body read failed: {e}; skipping"
-            ),
+            Err(e) => {
+                log::warn!(
+                    "[memory_tree::jobs] reembed_backfill: summary {id} body read failed: {e}; skipping (sig={active_sig})"
+                );
+                let _ = crate::openhuman::memory::tree::tree_source::store::mark_summary_reembed_skipped(
+                    config,
+                    id,
+                    &active_sig,
+                    &format!("body read failed: {e}"),
+                );
+            }
         }
     }
 
