@@ -1120,6 +1120,34 @@ impl Tool for ComposioEnableScopeTool {
             "[composio] tool enable_scope.execute (user-consent assumed enforced by agent prompt)"
         );
 
+        // Map the validated string back to the typed scope enum so we
+        // can reuse it for both the applicability probe and the merge.
+        let scope_enum = match scope.as_str() {
+            "read" => crate::openhuman::composio::providers::tool_scope::ToolScope::Read,
+            "write" => crate::openhuman::composio::providers::tool_scope::ToolScope::Write,
+            "admin" => crate::openhuman::composio::providers::tool_scope::ToolScope::Admin,
+            _ => unreachable!("validated above"),
+        };
+
+        // Guard 1: applicability. If no curated action for this toolkit
+        // requires the requested scope, flipping the bit graduates nothing
+        // into the callable surface — short-circuit with a clear message
+        // so the agent doesn't burn a turn (and doesn't mislead the user
+        // into thinking a destructive capability just opened up).
+        if !crate::openhuman::composio::providers::toolkit_has_scope(&toolkit, scope_enum) {
+            tracing::info!(
+                toolkit = %toolkit,
+                scope = %scope,
+                "[composio] enable_scope no-op: toolkit has no curated actions at this scope"
+            );
+            return Ok(ToolResult::success(format!(
+                "No-op. Toolkit `{toolkit}` has no curated actions that require `{scope}` \
+                 scope, so enabling it would not unlock anything new. Re-check the user's \
+                 original ask — the capability they want may live on a different toolkit, \
+                 or may not be supported by this integration at all."
+            )));
+        }
+
         // Resolve the live memory client. The setter writes to the per-toolkit
         // KV row. Mirrors the `load_or_default` pattern's fallback handling.
         let memory = match crate::openhuman::memory::global::client_if_ready() {
@@ -1132,11 +1160,34 @@ impl Tool for ComposioEnableScopeTool {
             }
         };
 
+        // Guard 2: already-enabled short-circuit. Avoid a redundant write +
+        // a misleading "Enabled" message when the bit is already set.
+        let mut pref =
+            crate::openhuman::composio::providers::user_scopes::load(&memory, &toolkit).await;
+        let already_on = match scope.as_str() {
+            "read" => pref.read,
+            "write" => pref.write,
+            "admin" => pref.admin,
+            _ => unreachable!(),
+        };
+        if already_on {
+            tracing::info!(
+                toolkit = %toolkit,
+                scope = %scope,
+                "[composio] enable_scope no-op: already enabled"
+            );
+            return Ok(ToolResult::success(format!(
+                "No-op. `{scope}` scope is already enabled for `{toolkit}` \
+                 (current pref: read={} write={} admin={}). The matching actions \
+                 should already be in your callable tool list — if a specific \
+                 capability is still missing, the toolkit may simply not expose it.",
+                pref.read, pref.write, pref.admin
+            )));
+        }
+
         // Load → merge requested bit → save. We deliberately do NOT touch
         // the other two flags — flipping admin on does not change the
         // user's read/write choices.
-        let mut pref =
-            crate::openhuman::composio::providers::user_scopes::load(&memory, &toolkit).await;
         match scope.as_str() {
             "read" => pref.read = true,
             "write" => pref.write = true,

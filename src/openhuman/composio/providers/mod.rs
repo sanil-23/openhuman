@@ -190,6 +190,27 @@ pub fn curated_scope_for(slug: &str) -> Option<ToolScope> {
     find_curated(catalog, slug).map(|c| c.scope)
 }
 
+/// Does any curated action for `toolkit` require `scope`?
+///
+/// Used by the agent-callable `composio_enable_scope` meta-tool to
+/// short-circuit no-op flips: if e.g. a toolkit's catalog has zero
+/// Admin-tagged actions, flipping the user's Admin bit graduates
+/// nothing into the callable surface and the tool can return a
+/// "not applicable" message instead of silently mutating prefs.
+///
+/// Walks both the native provider catalog and the fallback
+/// [`catalog_for_toolkit`] so the answer matches what
+/// [`is_action_visible_with_pref`] would gate against.
+pub fn toolkit_has_scope(toolkit: &str, scope: ToolScope) -> bool {
+    let catalog = get_provider(toolkit)
+        .and_then(|p| p.curated_tools())
+        .or_else(|| catalog_for_toolkit(toolkit));
+    match catalog {
+        Some(cat) => cat.iter().any(|t| t.scope == scope),
+        None => false,
+    }
+}
+
 pub fn catalog_for_toolkit(toolkit: &str) -> Option<&'static [CuratedTool]> {
     match toolkit.trim().to_ascii_lowercase().as_str() {
         // Native providers
@@ -300,6 +321,19 @@ mod tests {
         assert_eq!(s, "\"connection_created\"");
         let back: SyncReason = serde_json::from_str(&s).unwrap();
         assert_eq!(back, SyncReason::ConnectionCreated);
+    }
+
+    #[test]
+    fn toolkit_has_scope_distinguishes_gated_from_ungated_scopes() {
+        // gmail catalog includes destructive verbs (delete / trash /
+        // batch_delete), so admin-gating actually unlocks something.
+        assert!(toolkit_has_scope("gmail", ToolScope::Admin));
+        assert!(toolkit_has_scope("gmail", ToolScope::Read));
+        assert!(toolkit_has_scope("gmail", ToolScope::Write));
+        // Case-insensitive toolkit slug → still routes to the catalog.
+        assert!(toolkit_has_scope("GMAIL", ToolScope::Admin));
+        // Unknown toolkit → no catalog → no scope is "gating" anything.
+        assert!(!toolkit_has_scope("nonexistent-toolkit", ToolScope::Admin));
     }
 
     #[test]
