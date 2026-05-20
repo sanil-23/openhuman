@@ -34,6 +34,7 @@
 
 mod descriptions;
 pub(crate) mod helpers;
+mod scope_lookup;
 pub mod tool_scope;
 mod traits;
 mod types;
@@ -171,46 +172,6 @@ pub fn is_action_visible_with_pref(slug: &str, pref: &UserScopePref) -> bool {
     }
 }
 
-/// Look up the curated scope for `slug` if it appears in any registered
-/// catalog (native provider's `curated_tools()` first, then the fallback
-/// catalog from [`catalog_for_toolkit`]). Returns `None` for genuinely
-/// uncurated slugs — callers that want a defensible heuristic for those
-/// should fall back to [`classify_unknown`] explicitly.
-///
-/// Sibling of [`is_action_visible_with_pref`]: that one decides "visible?",
-/// this one returns "what scope is required?" so callers (e.g. the
-/// `gated_tools` partition in `composio::ops::fetch_connected_integrations`)
-/// can render a useful unlock hint to the agent without re-doing the
-/// catalog walk.
-pub fn curated_scope_for(slug: &str) -> Option<ToolScope> {
-    let toolkit = toolkit_from_slug(slug)?;
-    let catalog = get_provider(&toolkit)
-        .and_then(|p| p.curated_tools())
-        .or_else(|| catalog_for_toolkit(&toolkit))?;
-    find_curated(catalog, slug).map(|c| c.scope)
-}
-
-/// Does any curated action for `toolkit` require `scope`?
-///
-/// Currently unused in production code (added when the now-removed
-/// `composio_enable_scope` meta-tool needed a no-op short-circuit). Kept
-/// because the same probe is useful any time we ask "would flipping the
-/// {scope} bit unlock anything in this toolkit?" — e.g. for a UI hint
-/// that greys out a toggle with no effect.
-///
-/// Walks both the native provider catalog and the fallback
-/// [`catalog_for_toolkit`] so the answer matches what
-/// [`is_action_visible_with_pref`] would gate against.
-pub fn toolkit_has_scope(toolkit: &str, scope: ToolScope) -> bool {
-    let catalog = get_provider(toolkit)
-        .and_then(|p| p.curated_tools())
-        .or_else(|| catalog_for_toolkit(toolkit));
-    match catalog {
-        Some(cat) => cat.iter().any(|t| t.scope == scope),
-        None => false,
-    }
-}
-
 pub fn catalog_for_toolkit(toolkit: &str) -> Option<&'static [CuratedTool]> {
     match toolkit.trim().to_ascii_lowercase().as_str() {
         // Native providers
@@ -252,6 +213,7 @@ pub(crate) use helpers::pick_str;
 pub use registry::{
     all_providers, get_provider, init_default_providers, register_provider, ProviderArc,
 };
+pub use scope_lookup::{curated_scope_for, toolkit_has_scope};
 pub use tool_scope::{classify_unknown, find_curated, toolkit_from_slug, CuratedTool, ToolScope};
 pub use traits::ComposioProvider;
 pub use types::{ProviderContext, ProviderUserProfile, SyncOutcome, SyncReason};
@@ -323,18 +285,8 @@ mod tests {
         assert_eq!(back, SyncReason::ConnectionCreated);
     }
 
-    #[test]
-    fn toolkit_has_scope_distinguishes_gated_from_ungated_scopes() {
-        // gmail catalog includes destructive verbs (delete / trash /
-        // batch_delete), so admin-gating actually unlocks something.
-        assert!(toolkit_has_scope("gmail", ToolScope::Admin));
-        assert!(toolkit_has_scope("gmail", ToolScope::Read));
-        assert!(toolkit_has_scope("gmail", ToolScope::Write));
-        // Case-insensitive toolkit slug → still routes to the catalog.
-        assert!(toolkit_has_scope("GMAIL", ToolScope::Admin));
-        // Unknown toolkit → no catalog → no scope is "gating" anything.
-        assert!(!toolkit_has_scope("nonexistent-toolkit", ToolScope::Admin));
-    }
+    // Note: `toolkit_has_scope` tests now live in `scope_lookup.rs`
+    // alongside the implementation.
 
     #[test]
     fn capability_matrix_distinguishes_native_from_catalog_only_toolkits() {

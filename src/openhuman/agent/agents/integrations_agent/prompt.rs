@@ -147,12 +147,19 @@ fn render_connected_integrations(integrations: &[ConnectedIntegration]) -> Strin
     // callable list above. The per-row `unlock paths` rendered below carry
     // the exact UI hint the agent should show.
     let mut has_gated = false;
+    let mut connected_with_gated = 0usize;
     for ci in integrations.iter().filter(|ci| ci.connected) {
         if !ci.gated_tools.is_empty() {
             has_gated = true;
-            break;
+            connected_with_gated += 1;
         }
     }
+    tracing::debug!(
+        total_integrations = integrations.len(),
+        has_gated,
+        connected_with_gated,
+        "[integrations-prompt] gated-tools scan complete"
+    );
     if has_gated {
         out.push_str(
             "\n### Additional capabilities behind a permission toggle\n\n\

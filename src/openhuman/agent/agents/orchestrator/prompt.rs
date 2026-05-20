@@ -117,15 +117,22 @@ fn render_delegation_guide(integrations: &[ConnectedIntegration]) -> String {
     // has the ground-truth tool catalogue (`tools` + `gated_tools`); only
     // it can answer "can I do X?" honestly. Force-delegate capability
     // questions, not just task requests.
-    out.push_str(
+    // The cross-chat bullet names the canonical header literal verbatim
+    // so the model knows exactly which block to mistrust. Sourced from
+    // CROSS_CHAT_HEADER (single source of truth) — drift would silently
+    // detune the rule.
+    let cross_chat_header_for_prompt =
+        crate::openhuman::agent::memory_loader::CROSS_CHAT_HEADER.trim_end();
+    let _ = write!(
+        out,
         "\n### Capability questions about connected toolkits\n\n\
          Your prior knowledge of \"what a toolkit can do\" is UNRELIABLE — the \
          real per-toolkit catalogue is wider than the common-knowledge summary \
          (e.g. Gmail exposes bulk delete, batch modify, thread trash, etc.) and \
          the user may have enabled scopes that expose further destructive actions. \
          Therefore:\n\n\
-         - If the user asks **\"can you do X with {toolkit}?\"** or \"does \
-         {toolkit} support Y?\" for a connected toolkit above, **DO NOT** answer \
+         - If the user asks **\"can you do X with {{toolkit}}?\"** or \"does \
+         {{toolkit}} support Y?\" for a connected toolkit above, **DO NOT** answer \
          from priors. **DELEGATE** to `integrations_agent` first and let it \
          inspect its live tool list (including `gated_tools` behind permission \
          toggles) before answering.\n\
@@ -138,8 +145,8 @@ fn render_delegation_guide(integrations: &[ConnectedIntegration]) -> String {
          action neither in the visible `tools` list nor in the `gated_tools` \
          (permission-toggle) list of the sub-agent.\n\
          - **Cross-chat context is historical, not authoritative.** If the \
-         `[Cross-chat context — historical]` block contains a past \"I can / \
-         can't do X with {toolkit}\" statement, treat it as a snapshot from an \
+         `{cross_chat_header_for_prompt}` block contains a past \"I can / can't \
+         do X with {{toolkit}}\" statement, treat it as a snapshot from an \
          earlier moment. The tool list, connected integrations, and per-toolkit \
          scope toggles (read / write / admin) can all change between chats — a \
          past refusal may be stale. Verify against the **current** `## Connected \

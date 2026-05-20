@@ -135,14 +135,12 @@ pub(crate) async fn build_context(
         );
 
         if !cross.is_empty() {
-            // Keep this header in sync with `memory_loader.rs` — the
-            // orchestrator's "Capability questions" section references it
-            // verbatim to teach the model that a past "I can't do X"
-            // statement may be stale (capabilities + scopes can change
-            // between chats).
-            context.push_str(
-                "[Cross-chat context — historical; capabilities may have changed since]\n",
-            );
+            // Use the canonical CROSS_CHAT_HEADER from `memory_loader` so
+            // this fallback recall path emits the same literal as the
+            // primary JSONL path, and the orchestrator prompt's
+            // "Capability questions" section that names this header stays
+            // in sync. See CROSS_CHAT_HEADER's doc for the rationale.
+            context.push_str(crate::openhuman::agent::memory_loader::CROSS_CHAT_HEADER);
             for entry in &cross {
                 let prov = entry
                     .session_id
@@ -358,7 +356,7 @@ mod tests {
 
         let context = build_context(&mem, "what database should I use?", 0.4).await;
         assert!(
-            context.contains("[Cross-chat context"),
+            context.contains(crate::openhuman::agent::memory_loader::CROSS_CHAT_HEADER.trim_end()),
             "expected cross-chat header, got:\n{context}"
         );
         assert!(
@@ -424,7 +422,7 @@ mod tests {
         let mem = MockMemory::new(Vec::new(), Vec::new(), false);
         let context = build_context(&mem, "Postgres", 0.4).await;
         assert!(
-            !context.contains("[Cross-chat context"),
+            !context.contains(crate::openhuman::agent::memory_loader::CROSS_CHAT_HEADER.trim_end()),
             "no cross-chat hits must produce no header, got:\n{context}"
         );
     }
