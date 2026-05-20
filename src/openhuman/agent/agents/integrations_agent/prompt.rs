@@ -163,7 +163,10 @@ fn render_connected_integrations(integrations: &[ConnectedIntegration]) -> Strin
              action becomes callable on your next turn. The user can also flip it manually \
              in Settings → Integrations → {toolkit} → scope toggles.\n\n",
         );
-        for ci in integrations.iter().filter(|ci| ci.connected && !ci.gated_tools.is_empty()) {
+        for ci in integrations
+            .iter()
+            .filter(|ci| ci.connected && !ci.gated_tools.is_empty())
+        {
             let _ = writeln!(out, "- **{}**:", ci.toolkit);
             for gt in &ci.gated_tools {
                 let desc = if gt.description.is_empty() {

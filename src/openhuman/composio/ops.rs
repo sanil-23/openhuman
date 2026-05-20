@@ -1685,61 +1685,62 @@ async fn fetch_connected_integrations_uncached(
         // each other's actions. `GMAIL_SEND_EMAIL` matches `gmail_`,
         // not just `gmail`, so siblings stay in their own buckets.
         let action_prefix = format!("{}_", slug.to_uppercase());
-        let (tools, gated_tools): (Vec<ConnectedIntegrationTool>, Vec<GatedIntegrationTool>) = if connected {
-            // Apply the same curated-whitelist + user-scope filter the
-            // meta-tool layer uses, so the integrations_agent prompt
-            // only advertises actions the agent is actually allowed to
-            // call. One pref load per toolkit (not per action).
-            //
-            // Actions that the catalog *does* know about but the user's
-            // current scope pref denies are routed into `gated_tools` so
-            // the agent can honestly answer "I have this capability but
-            // it needs your permission" (and call the `composio_enable_scope`
-            // meta-tool to elevate). Without that surface the LLM has no
-            // way to know the gated action exists at all and will tell the
-            // user "I don't support that" — which is technically correct
-            // about its callable surface, but misleading about the toolkit.
-            let pref = super::providers::load_user_scope_or_default(slug).await;
-            let mut visible: Vec<ConnectedIntegrationTool> = Vec::new();
-            let mut gated: Vec<GatedIntegrationTool> = Vec::new();
-            for t in tools_by_toolkit
-                .iter()
-                .filter(|t| t.function.name.starts_with(&action_prefix))
-            {
-                if super::providers::is_action_visible_with_pref(&t.function.name, &pref) {
-                    visible.push(ConnectedIntegrationTool {
-                        name: t.function.name.clone(),
-                        description: t.function.description.clone().unwrap_or_default(),
-                        parameters: t.function.parameters.clone(),
-                    });
-                } else if let Some(required_scope) =
-                    super::providers::curated_scope_for(&t.function.name)
+        let (tools, gated_tools): (Vec<ConnectedIntegrationTool>, Vec<GatedIntegrationTool>) =
+            if connected {
+                // Apply the same curated-whitelist + user-scope filter the
+                // meta-tool layer uses, so the integrations_agent prompt
+                // only advertises actions the agent is actually allowed to
+                // call. One pref load per toolkit (not per action).
+                //
+                // Actions that the catalog *does* know about but the user's
+                // current scope pref denies are routed into `gated_tools` so
+                // the agent can honestly answer "I have this capability but
+                // it needs your permission" (and call the `composio_enable_scope`
+                // meta-tool to elevate). Without that surface the LLM has no
+                // way to know the gated action exists at all and will tell the
+                // user "I don't support that" — which is technically correct
+                // about its callable surface, but misleading about the toolkit.
+                let pref = super::providers::load_user_scope_or_default(slug).await;
+                let mut visible: Vec<ConnectedIntegrationTool> = Vec::new();
+                let mut gated: Vec<GatedIntegrationTool> = Vec::new();
+                for t in tools_by_toolkit
+                    .iter()
+                    .filter(|t| t.function.name.starts_with(&action_prefix))
                 {
-                    // Only surface CURATED actions as `gated` — uncurated
-                    // tools (which fall through to `classify_unknown` and
-                    // happen to land outside the user's pref) are not
-                    // first-class user-facing capabilities, and listing
-                    // them would clutter the prompt with internal slugs.
-                    // Deliberately NO `parameters` field: the LLM should
-                    // not be able to construct a call envelope; it can
-                    // only describe + point at the unlock path.
-                    gated.push(GatedIntegrationTool {
-                        name: t.function.name.clone(),
-                        description: t.function.description.clone().unwrap_or_default(),
-                        required_scope: required_scope.as_str().to_string(),
-                    });
+                    if super::providers::is_action_visible_with_pref(&t.function.name, &pref) {
+                        visible.push(ConnectedIntegrationTool {
+                            name: t.function.name.clone(),
+                            description: t.function.description.clone().unwrap_or_default(),
+                            parameters: t.function.parameters.clone(),
+                        });
+                    } else if let Some(required_scope) =
+                        super::providers::curated_scope_for(&t.function.name)
+                    {
+                        // Only surface CURATED actions as `gated` — uncurated
+                        // tools (which fall through to `classify_unknown` and
+                        // happen to land outside the user's pref) are not
+                        // first-class user-facing capabilities, and listing
+                        // them would clutter the prompt with internal slugs.
+                        // Deliberately NO `parameters` field: the LLM should
+                        // not be able to construct a call envelope; it can
+                        // only describe + point at the unlock path.
+                        gated.push(GatedIntegrationTool {
+                            name: t.function.name.clone(),
+                            description: t.function.description.clone().unwrap_or_default(),
+                            required_scope: required_scope.as_str().to_string(),
+                        });
+                    }
                 }
-            }
-            tracing::debug!(
-                toolkit = %slug,
-                visible = visible.len(),
-                gated = gated.len(),
-                "[composio][scopes] integrations prompt action set"
-            );
-            (visible, gated)
-        } else {
-            (Vec::new(), Vec::new())
-        };
+                tracing::debug!(
+                    toolkit = %slug,
+                    visible = visible.len(),
+                    gated = gated.len(),
+                    "[composio][scopes] integrations prompt action set"
+                );
+                (visible, gated)
+            } else {
+                (Vec::new(), Vec::new())
+            };
 
         integrations.push(ConnectedIntegration {
             toolkit: slug.clone(),
