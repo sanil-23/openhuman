@@ -14,6 +14,8 @@
 //! | `composio_authorize`          | Start an OAuth handoff for a toolkit, returns `connectUrl`  |
 //! | `composio_list_tools`         | Discover available action slugs + their JSON schemas        |
 //! | `composio_execute`            | Run a Composio action with `{tool, arguments}`              |
+//! | `composio_enable_scope`       | Flip a per-toolkit user scope (read/write/admin) — gates    |
+//! |                               | destructive actions; **requires explicit user consent**     |
 //!
 //! The agent loop is expected to chain `composio_list_tools` →
 //! `composio_execute` when it needs to use a new action. The full schema
@@ -1007,6 +1009,158 @@ impl Tool for ComposioExecuteTool {
     }
 }
 
+// ── composio_enable_scope ───────────────────────────────────────────
+
+/// Agent-callable meta-tool: enable one of the per-toolkit user scopes
+/// (`read` / `write` / `admin`). The default user pref is
+/// `{read: true, write: true, admin: false}`, so Admin-scoped actions
+/// (bulk delete, destructive label modifications, etc.) are hidden from
+/// the agent's callable tool list — and from its `gated_tools` prompt
+/// surface — until this tool flips the bit.
+///
+/// **Safety contract (the agent prompt must enforce this):** the LLM
+/// MUST ask the user for explicit consent BEFORE invoking this tool.
+/// Granting Admin scope persists across sessions and lets future agent
+/// turns invoke destructive Composio actions without re-consenting.
+/// The tool itself does not currently surface a UI approval modal — it
+/// trusts the agent to have asked first. (When the wider tool-policy /
+/// approval-gate layer lands more broadly, this tool should be wired
+/// into it as a `destructive` action.)
+pub struct ComposioEnableScopeTool {
+    /// Held as `Arc<Config>` for the same mode-aware reasons as the
+    /// other composio meta-tools; the actual save path resolves the
+    /// memory client itself via the global registry, so no live config
+    /// reload is needed for this verb.
+    _config: Arc<Config>,
+}
+
+impl ComposioEnableScopeTool {
+    pub fn new(config: Arc<Config>) -> Self {
+        Self { _config: config }
+    }
+}
+
+#[async_trait]
+impl Tool for ComposioEnableScopeTool {
+    fn name(&self) -> &str {
+        "composio_enable_scope"
+    }
+    fn description(&self) -> &str {
+        "Enable a per-toolkit user scope (`read` / `write` / `admin`) so the \
+         agent gains access to actions in that scope on the next prompt rebuild. \
+         The most common use is `scope='admin'` to unlock destructive actions \
+         (e.g. `GMAIL_BATCH_DELETE_MESSAGES`, `GMAIL_DELETE_THREAD`) that the \
+         user has not pre-enabled. \
+         \
+         CRITICAL: ALWAYS ask the user for explicit consent before calling this \
+         tool. Granting a scope persists across sessions and lets future turns \
+         invoke destructive actions without re-prompting. Phrase the request \
+         specifically (\"You're asking me to bulk-delete 200 emails. This needs \
+         Admin scope for Gmail, which I don't have. Want me to enable it now? \
+         You can always revoke in Settings → Integrations → Gmail.\"). Only call \
+         after the user clearly agrees."
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "toolkit": {
+                    "type": "string",
+                    "description": "Toolkit slug, e.g. 'gmail' or 'notion'. \
+                                    Lowercase; must match a connected toolkit."
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["read", "write", "admin"],
+                    "description": "Which scope to enable. Defaults to 'admin' \
+                                    (the only scope that's off by default)."
+                }
+            },
+            "required": ["toolkit"],
+            "additionalProperties": false
+        })
+    }
+    fn permission_level(&self) -> PermissionLevel {
+        // Marked as Write rather than Admin so the session sandbox doesn't
+        // unintentionally lock the tool out when running in non-Admin
+        // contexts — the *toolkit*-level Admin gate is the user pref this
+        // tool flips, not the session-level sandbox. The user-consent
+        // requirement is enforced via the prompt contract above.
+        PermissionLevel::Write
+    }
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Skill
+    }
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+        let toolkit = args
+            .get("toolkit")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if toolkit.is_empty() {
+            return Ok(ToolResult::error(
+                "composio_enable_scope: 'toolkit' is required",
+            ));
+        }
+        let scope = args
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("admin")
+            .trim()
+            .to_ascii_lowercase();
+        if !matches!(scope.as_str(), "read" | "write" | "admin") {
+            return Ok(ToolResult::error(format!(
+                "composio_enable_scope: 'scope' must be one of 'read'|'write'|'admin' (got '{scope}')"
+            )));
+        }
+        tracing::info!(
+            toolkit = %toolkit,
+            scope = %scope,
+            "[composio] tool enable_scope.execute (user-consent assumed enforced by agent prompt)"
+        );
+
+        // Resolve the live memory client. The setter writes to the per-toolkit
+        // KV row. Mirrors the `load_or_default` pattern's fallback handling.
+        let memory = match crate::openhuman::memory::global::client_if_ready() {
+            Some(c) => c,
+            None => {
+                return Ok(ToolResult::error(
+                    "composio_enable_scope: memory client is not initialised — \
+                     scope prefs cannot be persisted",
+                ));
+            }
+        };
+
+        // Load → merge requested bit → save. We deliberately do NOT touch
+        // the other two flags — flipping admin on does not change the
+        // user's read/write choices.
+        let mut pref =
+            crate::openhuman::composio::providers::user_scopes::load(&memory, &toolkit).await;
+        match scope.as_str() {
+            "read" => pref.read = true,
+            "write" => pref.write = true,
+            "admin" => pref.admin = true,
+            _ => unreachable!(),
+        }
+        if let Err(e) =
+            crate::openhuman::composio::providers::user_scopes::save(&memory, &toolkit, pref).await
+        {
+            return Ok(ToolResult::error(format!(
+                "composio_enable_scope: save failed for toolkit={toolkit} scope={scope}: {e}"
+            )));
+        }
+
+        let out = format!(
+            "OK. Enabled `{scope}` scope for `{toolkit}`. Effective on the next \
+             prompt rebuild (typically the next turn). New pref: \
+             read={} write={} admin={}.",
+            pref.read, pref.write, pref.admin
+        );
+        Ok(ToolResult::success(out))
+    }
+}
+
 // ── Bulk registration helper ────────────────────────────────────────
 
 /// Build the full set of composio agent tools when the integrations
@@ -1039,7 +1193,13 @@ pub fn all_composio_agent_tools(config: &crate::openhuman::config::Config) -> Ve
         Box::new(ComposioListConnectionsTool::new(config_arc.clone())),
         Box::new(ComposioAuthorizeTool::new(config_arc.clone())),
         Box::new(ComposioListToolsTool::new(config_arc.clone())),
-        Box::new(ComposioExecuteTool::new(config_arc)),
+        Box::new(ComposioExecuteTool::new(config_arc.clone())),
+        // Pref-elevation meta-tool — the LLM-visible companion to the
+        // `ConnectedIntegration.gated_tools` surface. With explicit user
+        // consent, the agent calls this to flip a per-toolkit scope bit
+        // (typically `admin`); the corresponding gated actions graduate
+        // into the callable tool list on the next prompt rebuild.
+        Box::new(ComposioEnableScopeTool::new(config_arc)),
     ];
     tracing::debug!(count = tools.len(), "[composio] agent tools registered");
     tools

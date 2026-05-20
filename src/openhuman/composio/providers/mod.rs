@@ -171,6 +171,25 @@ pub fn is_action_visible_with_pref(slug: &str, pref: &UserScopePref) -> bool {
     }
 }
 
+/// Look up the curated scope for `slug` if it appears in any registered
+/// catalog (native provider's `curated_tools()` first, then the fallback
+/// catalog from [`catalog_for_toolkit`]). Returns `None` for genuinely
+/// uncurated slugs — callers that want a defensible heuristic for those
+/// should fall back to [`classify_unknown`] explicitly.
+///
+/// Sibling of [`is_action_visible_with_pref`]: that one decides "visible?",
+/// this one returns "what scope is required?" so callers (e.g. the
+/// `gated_tools` partition in `composio::ops::fetch_connected_integrations`)
+/// can render a useful unlock hint to the agent without re-doing the
+/// catalog walk.
+pub fn curated_scope_for(slug: &str) -> Option<ToolScope> {
+    let toolkit = toolkit_from_slug(slug)?;
+    let catalog = get_provider(&toolkit)
+        .and_then(|p| p.curated_tools())
+        .or_else(|| catalog_for_toolkit(&toolkit))?;
+    find_curated(catalog, slug).map(|c| c.scope)
+}
+
 pub fn catalog_for_toolkit(toolkit: &str) -> Option<&'static [CuratedTool]> {
     match toolkit.trim().to_ascii_lowercase().as_str() {
         // Native providers

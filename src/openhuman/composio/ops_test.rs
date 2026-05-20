@@ -839,6 +839,7 @@ fn integration(toolkit: &str, connected: bool) -> ConnectedIntegration {
         toolkit: toolkit.to_string(),
         description: String::new(),
         tools: Vec::new(),
+        gated_tools: Vec::new(),
         connected,
     }
 }

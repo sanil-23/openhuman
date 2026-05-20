@@ -137,6 +137,50 @@ fn render_connected_integrations(integrations: &[ConnectedIntegration]) -> Strin
     for ci in connected {
         let _ = writeln!(out, "- **{}** — {}", ci.toolkit, ci.description);
     }
+
+    // Surface pref-gated tools so the agent can honestly answer "do you
+    // support X?" and offer to elevate. The agent CANNOT call these
+    // directly — no parameters schema is exposed and they aren't in its
+    // function list. To make one callable, ask the user for permission
+    // and then call the `composio_enable_scope` meta-tool, which flips
+    // the per-toolkit scope pref. After the next prompt rebuild the
+    // action graduates into the callable list above.
+    let mut has_gated = false;
+    for ci in integrations.iter().filter(|ci| ci.connected) {
+        if !ci.gated_tools.is_empty() {
+            has_gated = true;
+            break;
+        }
+    }
+    if has_gated {
+        out.push_str(
+            "\n### Additional capabilities behind a permission toggle\n\n\
+             These actions exist in the toolkit but are NOT currently in your callable \
+             tool list — the user has not granted the required scope. Do NOT pretend \
+             they're unavailable. If the user asks for one (or you'd otherwise need it), \
+             tell them what it does and offer to flip the required scope on. With explicit \
+             user consent, call `composio_enable_scope(toolkit, scope)` to elevate; the \
+             action becomes callable on your next turn. The user can also flip it manually \
+             in Settings → Integrations → {toolkit} → scope toggles.\n\n",
+        );
+        for ci in integrations.iter().filter(|ci| ci.connected && !ci.gated_tools.is_empty()) {
+            let _ = writeln!(out, "- **{}**:", ci.toolkit);
+            for gt in &ci.gated_tools {
+                let desc = if gt.description.is_empty() {
+                    "(no description)".to_string()
+                } else {
+                    gt.description.clone()
+                };
+                let _ = writeln!(
+                    out,
+                    "  - `{}` — {} (requires `{}` scope)",
+                    gt.name, desc, gt.required_scope
+                );
+            }
+        }
+        out.push('\n');
+    }
+
     out
 }
 
@@ -187,6 +231,7 @@ mod tests {
             toolkit: "gmail".into(),
             description: "Email access.".into(),
             tools: Vec::new(),
+            gated_tools: Vec::new(),
             connected: true,
         }];
         let body = build(&ctx_with(&integrations, &[])).unwrap();
@@ -205,6 +250,7 @@ mod tests {
             toolkit: "notion".into(),
             description: "Pages.".into(),
             tools: Vec::new(),
+            gated_tools: Vec::new(),
             connected: false,
         }];
         let body = build(&ctx_with(&integrations, &[])).unwrap();

@@ -89,12 +89,51 @@ pub struct ConnectedIntegration {
     pub description: String,
     /// Per-action catalogue (only populated when `connected == true`).
     pub tools: Vec<ConnectedIntegrationTool>,
+    /// Per-action catalogue for actions that the toolkit **does** support but
+    /// the user has **not** unlocked via their per-toolkit scope preferences.
+    /// The prompt renderer surfaces these descriptively (name + one-line +
+    /// which scope is missing) so the agent can honestly answer "do you have
+    /// X?" with "yes, but you need to flip the {scope} toggle in Settings →
+    /// Integrations → {toolkit}; I can do that for you" — instead of silently
+    /// claiming the capability doesn't exist (which is what happens when the
+    /// agent has zero awareness of pref-gated actions).
+    ///
+    /// The agent CANNOT directly invoke these (no `parameters` schema is
+    /// exposed; the LLM lacks the function definition). The intended flow:
+    /// agent sees a gated tool → asks user permission → calls the
+    /// `composio_enable_scope` meta-tool (with user consent) → on the next
+    /// turn the action graduates from `gated_tools` to `tools` and becomes
+    /// callable.
+    pub gated_tools: Vec<GatedIntegrationTool>,
     /// Whether the user has an active OAuth connection for this
     /// toolkit. When `false`, the toolkit is in the backend allowlist
     /// but no authorization has been completed yet — `tools` is empty
     /// and the orchestrator must point the user at Settings instead of
     /// attempting to delegate.
     pub connected: bool,
+}
+
+/// A toolkit action that exists in the catalog but is currently hidden from
+/// the agent's callable function list because the user's scope preference
+/// for this toolkit does not allow the action's required scope.
+///
+/// Deliberately no `parameters` field: the LLM should NOT be able to construct
+/// a call envelope for a gated tool — it can only describe its existence and
+/// point the user at the unlock path. Once the scope is granted (via the
+/// `composio_enable_scope` meta-tool or a manual UI toggle), the action moves
+/// from `ConnectedIntegration.gated_tools` to `ConnectedIntegration.tools` on
+/// the next prompt rebuild and becomes a real callable function.
+#[derive(Debug, Clone)]
+pub struct GatedIntegrationTool {
+    /// Action slug, e.g. `"GMAIL_BATCH_DELETE_MESSAGES"`.
+    pub name: String,
+    /// One-line description of the action.
+    pub description: String,
+    /// Which scope the user must enable for this action to become callable.
+    /// Lowercase: `"read"`, `"write"`, `"admin"`. The vast majority of gated
+    /// rows are `"admin"` (destructive actions); `"write"` only appears for
+    /// users who have explicitly turned write off, which is unusual.
+    pub required_scope: String,
 }
 
 /// A single action available on a connected integration.
