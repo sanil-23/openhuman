@@ -646,6 +646,10 @@ fn existing_wal_db_migrates_to_truncate() {
             mode.eq_ignore_ascii_case("truncate"),
             "WAL db must migrate to TRUNCATE on open, got '{mode}'"
         );
+        // Data written under WAL must survive the checkpoint-and-switch — the
+        // migration must not lose committed rows.
+        let marker: i64 = conn.query_row("SELECT x FROM legacy_marker", [], |r| r.get(0))?;
+        assert_eq!(marker, 1, "row committed under WAL must survive migration");
         Ok(())
     })
     .expect("with_connection migrates");
