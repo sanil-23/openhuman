@@ -1493,63 +1493,24 @@ impl Agent {
             return LearnedContextData::default();
         }
 
-        // Narrow explicit-preferences path: only fetch pinned user_profile
-        // entries; skip all inference-derived data.
+        // Narrow explicit-preferences path (Lane A): inject the latest-N general
+        // (always-on) preferences written via `save_preference`. Topic-scoped
+        // (situational) prefs are NOT injected here — they ride the user message
+        // via per-turn recall (Lane B). The legacy `user_profile` pinned namespace
+        // is no longer read here; explicit prefs now live in `user_pref_general`.
         if !self.learning_enabled && self.explicit_preferences_enabled {
+            let general = crate::openhuman::memory::preferences::load_general_preferences(
+                &self.memory,
+                crate::openhuman::memory::preferences::STANDING_PREFS_LIMIT,
+            )
+            .await;
             tracing::debug!(
-                "[learning] fetch_learned_context: explicit_preferences_enabled=true, \
-                 learning_enabled=false — fetching only pinned user_profile entries"
+                "[learning] fetch_learned_context: explicit_preferences_enabled — loaded {} general preference(s) for the system prompt",
+                general.len()
             );
-            let profile_entries = self
-                .memory
-                .list(
-                    Some("user_profile"),
-                    // Core category is used by RememberPreferenceTool for pinned entries.
-                    // We list without category filter so we pick up both Core entries
-                    // (pinned) and any Custom("user_profile") entries from the older
-                    // UserProfileHook code path, keeping this backward-compatible.
-                    None,
-                    None,
-                )
-                .await
-                .unwrap_or_default();
-
-            // `.list()` already scopes to the `user_profile` namespace at the
-            // store layer (via the `Some("user_profile")` argument above).  This
-            // `.filter()` is a defensive guard against any future store-layer
-            // change that might weaken that scoping — it is not load-bearing
-            // under the current implementation.
-            if profile_entries.len() > 50 {
-                tracing::warn!(
-                    total = profile_entries.len(),
-                    dropped = profile_entries.len() - 50,
-                    "[learning] user_profile pinned preferences exceed prompt cap of 50; \
-                     {} entries will be dropped from this turn's context",
-                    profile_entries.len() - 50,
-                );
-            }
-            let user_profile: Vec<String> = profile_entries
-                .iter()
-                .filter(|e| {
-                    e.namespace
-                        .as_deref()
-                        .map_or(false, |ns| ns == "user_profile")
-                })
-                .take(50)
-                .map(|e| sanitize_learned_entry(&e.content))
-                .collect();
-
-            tracing::debug!(
-                "[learning] fetch_learned_context: fetched {} pinned user_profile entries",
-                user_profile.len()
-            );
-
             return LearnedContextData {
-                observations: Vec::new(),
-                patterns: Vec::new(),
-                user_profile,
-                reflections: Vec::new(),
-                tree_root_summaries: Vec::new(),
+                user_profile: general,
+                ..LearnedContextData::default()
             };
         }
 
