@@ -503,6 +503,10 @@ pub enum DomainEvent {
     /// Distinct from [`Self::SystemShutdown`] (per-component shutdown
     /// notification) — this variant asks the running process to exit.
     SystemShutdownRequested { source: String, reason: String },
+    /// The `[autonomy]` block (agent access mode / filesystem permissions) was
+    /// changed at runtime. Live sessions should rebuild their `SecurityPolicy`
+    /// from the persisted config before the next turn.
+    AutonomyConfigChanged,
     /// A component's health status changed.
     HealthChanged {
         component: String,
@@ -596,6 +600,7 @@ impl DomainEvent {
             | Self::SystemShutdown { .. }
             | Self::SystemRestartRequested { .. }
             | Self::SystemShutdownRequested { .. }
+            | Self::AutonomyConfigChanged
             | Self::HealthChanged { .. }
             | Self::HealthRestarted { .. } => "system",
 
