@@ -12,8 +12,9 @@
 //! `with_connection()` previously opened a new SQLite connection and re-ran
 //! the full schema init (8 tables, 15+ indexes, 8+ migrations) on **every**
 //! call. With 4 workers polling every 5 s this amounted to ~69K connection
-//! opens/day, and three I/O error codes (1546 IOERR_TRUNCATE, 4874
-//! IOERR_SHMMAP, 14 CANTOPEN) flooded Sentry with ~19K events in 4 days.
+//! opens/day, and a family of WAL/SHM cold-start I/O codes (1546
+//! IOERR_TRUNCATE, 4618 IOERR_SHMOPEN, 4874 IOERR_SHMSIZE, 14 CANTOPEN)
+//! flooded Sentry with ~19K events in 4 days.
 //!
 //! Fix: a process-level `ConnectionCache` keyed by DB path. Each entry holds
 //! one `parking_lot::Mutex<Connection>` that is initialised once (schema +
@@ -792,25 +793,41 @@ pub(crate) fn schema_apply_count_for_path_for_tests(path: &Path) -> usize {
         .unwrap_or(0)
 }
 
-/// SQLite extended result code `CANTOPEN` — surfaces when a cold-start
-/// caller races the lockfile/WAL creation done by another connection.
+// SQLite extended result codes that fire during cold-start WAL/SHM bootstrap
+// races. NOTE on values: extended codes are `SQLITE_IOERR (10) | (sub << 8)`.
+// 4874 is `IOERR_SHMSIZE` (sub 19), NOT `SHMMAP` — the real `SHMMAP` is 5386
+// (sub 21) and the "open a new shared-memory segment" failure is `SHMOPEN`
+// 4618 (sub 18), which is what surfaced on macOS. The whole `-shm` family is
+// listed so the classifiers don't miss any of them.
+/// `CANTOPEN` — racing the lockfile/WAL creation done by another connection.
 const SQLITE_CANTOPEN: i32 = 14;
-/// SQLite extended result code `IOERR_TRUNCATE` — fires when the WAL is
-/// being truncated by another connection during bootstrap.
+/// `IOERR_TRUNCATE` — the WAL/db is being truncated during bootstrap.
 const SQLITE_IOERR_TRUNCATE: i32 = 1546;
-/// SQLite extended result code `IOERR_SHMMAP` — fires when the shared
-/// memory file is resized by another connection during bootstrap.
-const SQLITE_IOERR_SHMMAP: i32 = 4874;
+/// `IOERR_SHMOPEN` — opening a new `-shm` shared-memory segment failed (the
+/// macOS cold-start failure, e.g. Sentry TAURI-RUST-X1).
+const SQLITE_IOERR_SHMOPEN: i32 = 4618;
+/// `IOERR_SHMSIZE` — the `-shm` file is being resized during bootstrap.
+const SQLITE_IOERR_SHMSIZE: i32 = 4874;
+/// `IOERR_SHMMAP` — mapping a page of the `-shm` wal-index failed.
+const SQLITE_IOERR_SHMMAP: i32 = 5386;
+/// `IOERR_IN_PAGE` — an mmap-page I/O fault, also seen under WAL cold-start.
+const SQLITE_IOERR_IN_PAGE: i32 = 8714;
 
-/// True if `err` (or anything in its cause chain) is one of the three
-/// SQLite codes that fire during cold-start WAL/SHM bootstrap races:
-/// `CANTOPEN`, `IOERR_TRUNCATE`, `IOERR_SHMMAP`.
+/// True if `err` (or anything in its cause chain) is one of the SQLite codes
+/// that fire during cold-start WAL/SHM bootstrap races: `CANTOPEN`,
+/// `IOERR_TRUNCATE`, the `-shm` family (`SHMOPEN` / `SHMSIZE` / `SHMMAP`), and
+/// `IOERR_IN_PAGE`.
 pub(crate) fn is_transient_cold_start(err: &anyhow::Error) -> bool {
     fn is_transient_sqlite(e: &(dyn std::error::Error + 'static)) -> bool {
         if let Some(rusqlite::Error::SqliteFailure(ffi, _)) = e.downcast_ref::<rusqlite::Error>() {
             return matches!(
                 ffi.extended_code,
-                SQLITE_CANTOPEN | SQLITE_IOERR_TRUNCATE | SQLITE_IOERR_SHMMAP
+                SQLITE_CANTOPEN
+                    | SQLITE_IOERR_TRUNCATE
+                    | SQLITE_IOERR_SHMOPEN
+                    | SQLITE_IOERR_SHMSIZE
+                    | SQLITE_IOERR_SHMMAP
+                    | SQLITE_IOERR_IN_PAGE
             );
         }
         false
@@ -1060,9 +1077,15 @@ fn apply_schema(conn: &Connection) -> Result<()> {
 /// stale-file cleanup + single retry before giving up.
 fn is_io_open_error(err: &anyhow::Error) -> bool {
     if let Some(rusqlite::Error::SqliteFailure(f, _)) = err.downcast_ref::<rusqlite::Error>() {
-        // 1546 = SQLITE_IOERR_TRUNCATE, 4874 = SQLITE_IOERR_SHMMAP, 14 = SQLITE_CANTOPEN
-        return matches!(f.extended_code, 1546 | 4874 | 14)
-            || f.code == rusqlite::ErrorCode::CannotOpen;
+        return matches!(
+            f.extended_code,
+            SQLITE_CANTOPEN
+                | SQLITE_IOERR_TRUNCATE
+                | SQLITE_IOERR_SHMOPEN
+                | SQLITE_IOERR_SHMSIZE
+                | SQLITE_IOERR_SHMMAP
+                | SQLITE_IOERR_IN_PAGE
+        ) || f.code == rusqlite::ErrorCode::CannotOpen;
     }
     let msg = format!("{err:#}").to_ascii_lowercase();
     msg.contains("disk i/o error")

@@ -268,9 +268,9 @@ fn schema_has_content_path_and_content_sha256_columns() {
 /// Regression: OPENHUMAN-TAURI-HH / -ZM / -MB.
 ///
 /// Before this fix, N `tree_jobs_worker` tasks racing into
-/// `with_connection` on a cold workspace would trigger one of three
-/// SQLite cold-start codes — 14 (CANTOPEN), 1546 (IOERR_TRUNCATE),
-/// or 4874 (IOERR_SHMMAP) — surfaced as
+/// `with_connection` on a cold workspace would trigger a WAL/SHM
+/// cold-start code — 14 (CANTOPEN), 1546 (IOERR_TRUNCATE), or a
+/// `-shm` code (4618 SHMOPEN / 4874 SHMSIZE / 5386 SHMMAP) — surfaced as
 /// `Failed to initialize memory_tree schema`. The mutex-gated init set
 /// in `store::open_and_init_with_retry` serialises the WAL+SHM
 /// bootstrap so only one thread runs `apply_schema` per DB path.
@@ -324,12 +324,16 @@ fn is_transient_cold_start_classifies_known_extended_codes() {
     use rusqlite::ffi;
     use rusqlite::ErrorCode;
 
-    // The three SHMmap/WAL bootstrap codes that fire under cold-start
-    // contention. All must classify as transient → retried.
+    // The WAL/SHM cold-start codes that fire under contention. All must
+    // classify as transient → retried. (4618 SHMOPEN is the macOS failure;
+    // 5386 is the real SHMMAP; 4874 is SHMSIZE — all of the `-shm` family.)
     for extended in [
         14,   // CANTOPEN
         1546, // IOERR_TRUNCATE
-        4874, // IOERR_SHMMAP
+        4618, // IOERR_SHMOPEN
+        4874, // IOERR_SHMSIZE
+        5386, // IOERR_SHMMAP
+        8714, // IOERR_IN_PAGE
     ] {
         let err = anyhow::Error::from(rusqlite::Error::SqliteFailure(
             ffi::Error {
