@@ -135,9 +135,8 @@ describe('NotificationCard <openhuman-link> rendering', () => {
 
   // Keyboard-activation coverage for the `<div role="button">` wrapper we use
   // instead of a real `<button>` (a real button can't legally contain the
-  // `<openhuman-link>` pill which is also a button — CodeRabbit catch on
-  // PR #2339). Exercises the `onKeyDown` branch so the diff-coverage gate
-  // sees those lines hit.
+  // `<openhuman-link>` pill which is also a button). Exercises the `onKeyDown`
+  // branch so the diff-coverage gate sees those lines hit.
   it('activates the card body via Enter and Space keys', () => {
     const onMarkRead = vi.fn();
     const notification = makeNotification('plain body, no pill so no inner button');
@@ -162,7 +161,6 @@ describe('NotificationCard <openhuman-link> rendering', () => {
   // Bubbling guard: pressing Enter/Space while focused on the inner pill must
   // NOT also activate the surrounding card. Without `e.target !== e.currentTarget`
   // the keydown would bubble up and trigger `handleBodyClick` accidentally.
-  // CodeRabbit catch on PR #2339.
   it('does NOT activate the card when keydown bubbles from the inner pill', () => {
     const onMarkRead = vi.fn();
     const body = '<openhuman-link path="community/discord">Discord</openhuman-link>';
