@@ -422,3 +422,168 @@ async fn format_context_text_includes_entity_types() {
         context.context_text
     );
 }
+
+// ── vector_chunks model-signature guard (embedding model-swap safety) ─────────
+
+use async_trait::async_trait;
+
+use crate::openhuman::embeddings::EmbeddingProvider;
+
+/// Embedder stub that returns a fixed vector for any text, with a controllable
+/// name + dimension so tests can produce distinct embedding signatures and
+/// dimensionalities.
+struct StubEmbedder {
+    name: &'static str,
+    vector: Vec<f32>,
+}
+
+#[async_trait]
+impl EmbeddingProvider for StubEmbedder {
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn model_id(&self) -> &str {
+        self.name
+    }
+    fn dimensions(&self) -> usize {
+        self.vector.len()
+    }
+    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| self.vector.clone()).collect())
+    }
+}
+
+fn pref_doc(key: &str, content: &str) -> NamespaceDocumentInput {
+    NamespaceDocumentInput {
+        namespace: "user_pref".to_string(),
+        key: key.to_string(),
+        title: key.to_string(),
+        content: content.to_string(),
+        source_type: "pref".to_string(),
+        priority: "medium".to_string(),
+        tags: vec![],
+        metadata: json!({}),
+        category: "core".to_string(),
+        session_id: None,
+        document_id: None,
+    }
+}
+
+#[tokio::test]
+async fn upsert_tags_vector_chunks_with_signature_and_dim() {
+    let tmp = TempDir::new().unwrap();
+    let embedder = Arc::new(StubEmbedder {
+        name: "stub-a",
+        vector: vec![1.0, 0.0, 0.0],
+    });
+    let memory = UnifiedMemory::new(tmp.path(), embedder.clone(), None).unwrap();
+
+    memory
+        .upsert_document(pref_doc("reply_language", "Reply in British English."))
+        .await
+        .unwrap();
+
+    // The stored chunk carries the active model's signature.
+    let chunks = memory.load_chunks_for_scope("user_pref").await.unwrap();
+    assert_eq!(chunks.len(), 1, "expected exactly one chunk for the doc");
+    assert_eq!(
+        chunks[0].model_signature.as_deref(),
+        Some(embedder.signature().as_str()),
+        "chunk should be tagged with the embedder signature"
+    );
+
+    // The `dim` column reflects the embedding dimensionality.
+    let dim: Option<i64> = memory
+        .conn
+        .lock()
+        .query_row(
+            "SELECT dim FROM vector_chunks WHERE namespace = 'user_pref' LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(dim, Some(3));
+}
+
+#[tokio::test]
+async fn vector_recall_excludes_other_model_signature() {
+    let tmp = TempDir::new().unwrap();
+
+    // Write under model A.
+    let emb_a = Arc::new(StubEmbedder {
+        name: "model-a",
+        vector: vec![1.0, 0.0, 0.0],
+    });
+    {
+        let memory = UnifiedMemory::new(tmp.path(), emb_a.clone(), None).unwrap();
+        memory
+            .upsert_document(pref_doc("p1", "formal tone for emails to my manager"))
+            .await
+            .unwrap();
+
+        // Same model → the vector is scored.
+        let chunks = memory.load_chunks_for_scope("user_pref").await.unwrap();
+        let scores = memory
+            .query_vector_scores_from_chunks(&chunks, "email tone")
+            .await
+            .unwrap();
+        assert!(!scores.is_empty(), "same-signature vectors must be scored");
+    }
+
+    // Reopen the same DB under a DIFFERENT model (swap), same dim + vector.
+    let emb_b = Arc::new(StubEmbedder {
+        name: "model-b",
+        vector: vec![1.0, 0.0, 0.0],
+    });
+    let memory_b = UnifiedMemory::new(tmp.path(), emb_b, None).unwrap();
+    let chunks = memory_b.load_chunks_for_scope("user_pref").await.unwrap();
+    assert_eq!(chunks.len(), 1, "the chunk persists across reopen");
+    let scores = memory_b
+        .query_vector_scores_from_chunks(&chunks, "email tone")
+        .await
+        .unwrap();
+    assert!(
+        scores.is_empty(),
+        "vectors from a different embedding model must be excluded, not compared as garbage"
+    );
+}
+
+#[tokio::test]
+async fn vector_recall_skips_dimension_mismatch_for_untagged_rows() {
+    let tmp = TempDir::new().unwrap();
+    // Active model produces 4-dim vectors.
+    let emb = Arc::new(StubEmbedder {
+        name: "model-a",
+        vector: vec![1.0, 0.0, 0.0, 0.0],
+    });
+    let memory = UnifiedMemory::new(tmp.path(), emb, None).unwrap();
+
+    // Insert a legacy chunk: NULL signature, 2-dim vector (a pre-tagging row left
+    // behind by a dimension-changing model swap).
+    let legacy_vec = UnifiedMemory::vec_to_bytes(&[1.0_f32, 0.0]);
+    memory
+        .conn
+        .lock()
+        .execute(
+            "INSERT INTO vector_chunks
+               (namespace, document_id, chunk_id, text, embedding, metadata_json, created_at, updated_at, model_signature, dim)
+             VALUES ('user_pref','legacy','legacy:0','old pref',?1,'{}',0,0,NULL,2)",
+            rusqlite::params![legacy_vec],
+        )
+        .unwrap();
+
+    let chunks = memory.load_chunks_for_scope("user_pref").await.unwrap();
+    assert_eq!(chunks.len(), 1);
+    assert!(
+        chunks[0].model_signature.is_none(),
+        "legacy row should have no signature"
+    );
+    let scores = memory
+        .query_vector_scores_from_chunks(&chunks, "old pref")
+        .await
+        .unwrap();
+    assert!(
+        scores.is_empty(),
+        "dimension-mismatched legacy vectors must be skipped, not scored 0"
+    );
+}
