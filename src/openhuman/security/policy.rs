@@ -19,6 +19,29 @@ pub enum AutonomyLevel {
     Full,
 }
 
+/// Access level granted to a trusted root outside the workspace.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TrustedAccess {
+    /// Read + list only.
+    #[default]
+    Read,
+    /// Read and write/edit.
+    ReadWrite,
+}
+
+/// A directory outside the workspace the agent is explicitly granted access to.
+/// Takes precedence over `workspace_only` and `forbidden_paths` for its subtree,
+/// except for credential stores (see `SecurityPolicy::is_always_forbidden`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TrustedRoot {
+    /// Absolute path (a leading `~` is expanded to the user's home).
+    pub path: String,
+    /// Whether the agent may write within this root.
+    #[serde(default)]
+    pub access: TrustedAccess,
+}
+
 /// Risk score for shell command execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandRiskLevel {
@@ -97,6 +120,10 @@ pub struct SecurityPolicy {
     pub max_cost_per_day_cents: u32,
     pub require_approval_for_medium_risk: bool,
     pub block_high_risk_commands: bool,
+    /// Directories outside the workspace the agent may access (read or read-write).
+    pub trusted_roots: Vec<TrustedRoot>,
+    /// Whether the agent may install OS packages via the `install_tool` tool.
+    pub allow_tool_install: bool,
     pub tracker: ActionTracker,
 }
 
@@ -147,6 +174,8 @@ impl Default for SecurityPolicy {
             max_cost_per_day_cents: 500,
             require_approval_for_medium_risk: true,
             block_high_risk_commands: true,
+            trusted_roots: Vec::new(),
+            allow_tool_install: false,
             tracker: ActionTracker::new(),
         }
     }
@@ -752,19 +781,31 @@ impl SecurityPolicy {
 
         // Expand tilde for comparison
         let expanded = self.expand_tilde(path);
+        let expanded_path = Path::new(&expanded);
 
-        // Block absolute paths when workspace_only is set
-        if self.workspace_only && Path::new(&expanded).is_absolute() {
+        // Credential stores are never reachable, even via a trusted-root grant.
+        if Self::is_always_forbidden(expanded_path) {
             return false;
         }
 
-        // Block forbidden paths using path-component-aware matching
-        let expanded_path = Path::new(&expanded);
-        for forbidden in &self.forbidden_paths {
-            let forbidden_expanded = self.expand_tilde(forbidden);
-            let forbidden_path = Path::new(&forbidden_expanded);
-            if expanded_path.starts_with(forbidden_path) {
-                return false;
+        // A trusted root grants access to its subtree, taking precedence over
+        // workspace_only and forbidden_paths. Read-vs-write is enforced by the
+        // operation-specific validators (validate_path / validate_parent_path).
+        let in_trusted_root = self.is_within_trusted_root(expanded_path, false);
+
+        // Block absolute paths when workspace_only is set (unless trusted-rooted).
+        if self.workspace_only && expanded_path.is_absolute() && !in_trusted_root {
+            return false;
+        }
+
+        // Block forbidden paths using path-component-aware matching (unless trusted-rooted).
+        if !in_trusted_root {
+            for forbidden in &self.forbidden_paths {
+                let forbidden_expanded = self.expand_tilde(forbidden);
+                let forbidden_path = Path::new(&forbidden_expanded);
+                if expanded_path.starts_with(forbidden_path) {
+                    return false;
+                }
             }
         }
 
@@ -774,11 +815,18 @@ impl SecurityPolicy {
         // path and re-validate `workspace_only` containment + forbidden_paths
         // against the resolved location.
         if let Some(canonical) = self.try_canonicalize_under_workspace(path) {
+            if Self::is_always_forbidden(&canonical) {
+                return false;
+            }
             let workspace_root = self
                 .workspace_dir
                 .canonicalize()
                 .unwrap_or_else(|_| self.workspace_dir.clone());
-            if self.workspace_only && !canonical.starts_with(&workspace_root) {
+            let canonical_in_trusted = self.is_within_trusted_root(&canonical, false);
+            if self.workspace_only
+                && !canonical.starts_with(&workspace_root)
+                && !canonical_in_trusted
+            {
                 log::trace!(
                     "[security:policy] path blocked: symlink escapes workspace (requested={}, resolved={}, workspace={})",
                     path,
@@ -794,7 +842,7 @@ impl SecurityPolicy {
             // to catch escapes *outside* the workspace, which the workspace
             // containment check above already validates.
             let inside_workspace = canonical.starts_with(&workspace_root);
-            if !inside_workspace {
+            if !inside_workspace && !canonical_in_trusted {
                 for forbidden in &self.forbidden_paths {
                     let forbidden_expanded = if let Some(stripped) = forbidden.strip_prefix("~/") {
                         std::env::var("HOME")
@@ -870,7 +918,7 @@ impl SecurityPolicy {
         let resolved = tokio::fs::canonicalize(&full_path)
             .await
             .map_err(|e| format!("Failed to resolve path '{path}': {e}"))?;
-        if !self.is_resolved_path_allowed(&resolved) {
+        if !self.is_resolved_path_allowed_for(&resolved, false) {
             return Err(format!(
                 "Resolved path escapes workspace: {}",
                 resolved.display()
@@ -926,7 +974,7 @@ impl SecurityPolicy {
         let canonical_ancestor = tokio::fs::canonicalize(&existing_ancestor)
             .await
             .map_err(|e| format!("Failed to resolve parent of '{path}': {e}"))?;
-        if !self.is_resolved_path_allowed(&canonical_ancestor) {
+        if !self.is_resolved_path_allowed_for(&canonical_ancestor, true) {
             return Err(format!(
                 "Resolved parent path escapes workspace: {}",
                 canonical_ancestor.display()
@@ -956,17 +1004,54 @@ impl SecurityPolicy {
         Ok(result)
     }
 
+    /// Credential stores that remain blocked even if a `trusted_root` would
+    /// otherwise grant access. A grant on a parent directory must never expose
+    /// SSH/GPG/AWS secrets.
+    fn is_always_forbidden(path: &Path) -> bool {
+        const SENSITIVE: &[&str] = &[".ssh", ".gnupg", ".aws"];
+        path.components().any(|c| {
+            matches!(c, std::path::Component::Normal(name)
+                if name.to_str().is_some_and(|n| SENSITIVE.contains(&n)))
+        })
+    }
+
+    /// True if `path` is within a configured trusted root. When `require_write`
+    /// is set, only `ReadWrite` roots match. Never matches credential stores.
+    pub fn is_within_trusted_root(&self, path: &Path, require_write: bool) -> bool {
+        if Self::is_always_forbidden(path) {
+            return false;
+        }
+        self.trusted_roots.iter().any(|root| {
+            if require_write && root.access != TrustedAccess::ReadWrite {
+                return false;
+            }
+            let root_path = PathBuf::from(self.expand_tilde(&root.path));
+            let canonical_root = root_path
+                .canonicalize()
+                .unwrap_or_else(|_| root_path.clone());
+            path.starts_with(&root_path) || path.starts_with(&canonical_root)
+        })
+    }
+
     /// Validate that a resolved path is still inside the workspace.
     /// Call this AFTER joining `workspace_dir` + relative path and canonicalizing.
     pub fn is_resolved_path_allowed(&self, resolved: &Path) -> bool {
-        // Must be under workspace_dir (prevents symlink escapes).
-        // Prefer canonical workspace root so `/a/../b` style config paths don't
-        // cause false positives or negatives.
+        self.is_resolved_path_allowed_for(resolved, false)
+    }
+
+    /// Operation-aware resolved-path check: allowed when under the workspace, or
+    /// within a trusted root (write roots only when `require_write`). Prefers the
+    /// canonical workspace root so `/a/../b` style config paths don't misfire.
+    pub fn is_resolved_path_allowed_for(&self, resolved: &Path, require_write: bool) -> bool {
+        if Self::is_always_forbidden(resolved) {
+            return false;
+        }
         let workspace_root = self
             .workspace_dir
             .canonicalize()
             .unwrap_or_else(|_| self.workspace_dir.clone());
-        resolved.starts_with(workspace_root)
+        resolved.starts_with(&workspace_root)
+            || self.is_within_trusted_root(resolved, require_write)
     }
 
     /// Check `resolved` against every entry in `forbidden_paths`, resolving relative
@@ -977,6 +1062,17 @@ impl SecurityPolicy {
         resolved: &Path,
         workspace_root: &Path,
     ) -> Result<(), String> {
+        // Credential stores are never reachable, even via a trusted-root grant.
+        if Self::is_always_forbidden(resolved) {
+            return Err(format!(
+                "Resolved path is a protected credential store: {}",
+                resolved.display()
+            ));
+        }
+        // A trusted-root grant takes precedence over forbidden_paths for its subtree.
+        if self.is_within_trusted_root(resolved, false) {
+            return Ok(());
+        }
         for forbidden in &self.forbidden_paths {
             let forbidden_path = PathBuf::from(self.expand_tilde(forbidden));
             let forbidden_resolved = if forbidden_path.is_absolute() {
@@ -1077,6 +1173,8 @@ impl SecurityPolicy {
             max_cost_per_day_cents: autonomy_config.max_cost_per_day_cents,
             require_approval_for_medium_risk: autonomy_config.require_approval_for_medium_risk,
             block_high_risk_commands: autonomy_config.block_high_risk_commands,
+            trusted_roots: autonomy_config.trusted_roots.clone(),
+            allow_tool_install: autonomy_config.allow_tool_install,
             tracker: ActionTracker::new(),
         }
     }

@@ -1495,3 +1495,154 @@ async fn validate_parent_path_expands_tilde_before_workspace_join() {
         "expected workspace-escape error (tilde correctly expanded); got: {err}"
     );
 }
+
+// -- trusted_roots allow-list (Phase 1) ---------------------------
+
+use std::fs;
+use std::path::Path as StdPath;
+use std::path::PathBuf as StdPathBuf;
+
+fn trusted_policy(workspace: StdPathBuf, roots: Vec<TrustedRoot>) -> SecurityPolicy {
+    SecurityPolicy {
+        autonomy: AutonomyLevel::Supervised,
+        workspace_dir: workspace,
+        workspace_only: true,
+        trusted_roots: roots,
+        ..SecurityPolicy::default()
+    }
+}
+
+/// (workspace_dir, outside_dir) under a fresh temp root.
+fn ws_and_outside() -> (tempfile::TempDir, StdPathBuf, StdPathBuf) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace = tmp.path().join("workspace");
+    let outside = tmp.path().join("outside");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    (tmp, workspace, outside)
+}
+
+#[tokio::test]
+async fn trusted_read_root_allows_read_outside_workspace() {
+    let (_tmp, workspace, outside) = ws_and_outside();
+    let file = outside.join("data.txt");
+    fs::write(&file, "hi").unwrap();
+    let policy = trusted_policy(
+        workspace,
+        vec![TrustedRoot {
+            path: outside.to_string_lossy().into_owned(),
+            access: TrustedAccess::Read,
+        }],
+    );
+    let resolved = policy.validate_path(file.to_str().unwrap()).await;
+    assert!(
+        resolved.is_ok(),
+        "read in trusted root should succeed: {resolved:?}"
+    );
+}
+
+#[tokio::test]
+async fn trusted_read_root_blocks_write() {
+    let (_tmp, workspace, outside) = ws_and_outside();
+    let policy = trusted_policy(
+        workspace,
+        vec![TrustedRoot {
+            path: outside.to_string_lossy().into_owned(),
+            access: TrustedAccess::Read,
+        }],
+    );
+    let target = outside.join("new.txt");
+    let err = policy
+        .validate_parent_path(target.to_str().unwrap())
+        .await
+        .expect_err("write into a read-only trusted root must be rejected");
+    assert!(err.contains("escapes workspace"), "got: {err}");
+}
+
+#[tokio::test]
+async fn trusted_readwrite_root_allows_write() {
+    let (_tmp, workspace, outside) = ws_and_outside();
+    let policy = trusted_policy(
+        workspace,
+        vec![TrustedRoot {
+            path: outside.to_string_lossy().into_owned(),
+            access: TrustedAccess::ReadWrite,
+        }],
+    );
+    let target = outside.join("new.txt");
+    let resolved = policy.validate_parent_path(target.to_str().unwrap()).await;
+    assert!(
+        resolved.is_ok(),
+        "write in ReadWrite trusted root should succeed: {resolved:?}"
+    );
+}
+
+#[tokio::test]
+async fn credential_dir_blocked_even_inside_trusted_root() {
+    let (_tmp, workspace, outside) = ws_and_outside();
+    let ssh = outside.join(".ssh");
+    fs::create_dir_all(&ssh).unwrap();
+    let key = ssh.join("id_rsa");
+    fs::write(&key, "SECRET").unwrap();
+    // Grant the entire `outside` tree read+write …
+    let policy = trusted_policy(
+        workspace,
+        vec![TrustedRoot {
+            path: outside.to_string_lossy().into_owned(),
+            access: TrustedAccess::ReadWrite,
+        }],
+    );
+    // … the credential store inside it must still be unreachable.
+    let err = policy
+        .validate_path(key.to_str().unwrap())
+        .await
+        .expect_err("~/.ssh-style dir must stay blocked even inside a trusted root");
+    assert!(
+        err.contains("not allowed") || err.contains("credential"),
+        "got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn path_outside_workspace_and_roots_blocked() {
+    let (_tmp, workspace, outside) = ws_and_outside();
+    let file = outside.join("data.txt");
+    fs::write(&file, "hi").unwrap();
+    // No trusted roots granted — outside the workspace stays blocked.
+    let policy = trusted_policy(workspace, vec![]);
+    let err = policy
+        .validate_path(file.to_str().unwrap())
+        .await
+        .expect_err("ungranted path outside workspace must be blocked");
+    assert!(
+        err.contains("not allowed") || err.contains("escapes"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn is_within_trusted_root_write_requires_readwrite() {
+    let policy = trusted_policy(
+        StdPathBuf::from("/ws"),
+        vec![TrustedRoot {
+            path: "/data".into(),
+            access: TrustedAccess::Read,
+        }],
+    );
+    assert!(policy.is_within_trusted_root(StdPath::new("/data/sub/x"), false));
+    assert!(!policy.is_within_trusted_root(StdPath::new("/data/sub/x"), true));
+    assert!(!policy.is_within_trusted_root(StdPath::new("/elsewhere/x"), false));
+}
+
+#[test]
+fn trusted_root_never_matches_credential_components() {
+    let policy = trusted_policy(
+        StdPathBuf::from("/ws"),
+        vec![TrustedRoot {
+            path: "/home/me".into(),
+            access: TrustedAccess::ReadWrite,
+        }],
+    );
+    assert!(policy.is_within_trusted_root(StdPath::new("/home/me/proj/file"), false));
+    assert!(!policy.is_within_trusted_root(StdPath::new("/home/me/.aws/credentials"), false));
+}
