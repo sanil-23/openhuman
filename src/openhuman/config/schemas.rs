@@ -187,6 +187,22 @@ struct ComposioTriggerSettingsUpdate {
     triage_disabled_toolkits: Option<Vec<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AutonomySettingsUpdate {
+    /// `"readonly" | "supervised" | "full"` (case-insensitive).
+    level: Option<String>,
+    workspace_only: Option<bool>,
+    /// Replaces the shell command allow-list wholesale.
+    allowed_commands: Option<Vec<String>>,
+    /// Replaces the forbidden-paths denylist wholesale.
+    forbidden_paths: Option<Vec<String>>,
+    /// Replaces the trusted-roots allow-list wholesale. Each entry is
+    /// `{ "path": "/abs/dir", "access": "read" | "readwrite" }`.
+    trusted_roots: Option<Vec<crate::openhuman::security::TrustedRoot>>,
+    allow_tool_install: Option<bool>,
+    max_actions_per_hour: Option<u32>,
+}
+
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
     vec![
         schemas("get_config"),
@@ -217,6 +233,8 @@ pub fn all_controller_schemas() -> Vec<ControllerSchema> {
         schemas("update_voice_server_settings"),
         schemas("update_composio_trigger_settings"),
         schemas("get_composio_trigger_settings"),
+        schemas("get_autonomy_settings"),
+        schemas("update_autonomy_settings"),
     ]
 }
 
@@ -333,6 +351,14 @@ pub fn all_registered_controllers() -> Vec<RegisteredController> {
         RegisteredController {
             schema: schemas("get_composio_trigger_settings"),
             handler: handle_get_composio_trigger_settings,
+        },
+        RegisteredController {
+            schema: schemas("get_autonomy_settings"),
+            handler: handle_get_autonomy_settings,
+        },
+        RegisteredController {
+            schema: schemas("update_autonomy_settings"),
+            handler: handle_update_autonomy_settings,
         },
     ]
 }
@@ -509,6 +535,48 @@ pub fn schemas(function: &str) -> ControllerSchema {
             inputs: vec![
                 optional_string("kind", "Runtime kind."),
                 optional_bool("reasoning_enabled", "Enable reasoning mode."),
+            ],
+            outputs: vec![json_output("snapshot", "Updated config snapshot.")],
+        },
+        "get_autonomy_settings" => ControllerSchema {
+            namespace: "config",
+            function: "get_autonomy_settings",
+            description: "Get the agent access-mode settings (autonomy level, workspace confinement, trusted roots, command allow-list, forbidden paths).",
+            inputs: vec![],
+            outputs: vec![json_output("autonomy", "Current [autonomy] config block.")],
+        },
+        "update_autonomy_settings" => ControllerSchema {
+            namespace: "config",
+            function: "update_autonomy_settings",
+            description: "Update the agent access mode: autonomy level, workspace confinement, trusted-roots allow-list, command allow-list, forbidden paths, and OS-install permission. Applies live to active sessions.",
+            inputs: vec![
+                optional_string("level", "Autonomy level: readonly | supervised | full."),
+                optional_bool("workspace_only", "Confine file/path access to the workspace directory."),
+                FieldSchema {
+                    name: "allowed_commands",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::Array(Box::new(TypeSchema::String)))),
+                    comment: "Replace the shell command allow-list (array of base command names).",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "forbidden_paths",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::Array(Box::new(TypeSchema::String)))),
+                    comment: "Replace the forbidden-paths denylist (array of path prefixes).",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "trusted_roots",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::Json)),
+                    comment: "Replace the trusted-roots allow-list: array of {path, access: read|readwrite}. Grants access outside the workspace; credential dirs (~/.ssh, ~/.gnupg, ~/.aws) stay blocked regardless.",
+                    required: false,
+                },
+                optional_bool("allow_tool_install", "Allow the agent to install OS packages via install_tool (intended for Full mode)."),
+                FieldSchema {
+                    name: "max_actions_per_hour",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::U64)),
+                    comment: "Rate limit for side-effecting actions per hour.",
+                    required: false,
+                },
             ],
             outputs: vec![json_output("snapshot", "Updated config snapshot.")],
         },
@@ -1024,6 +1092,26 @@ fn handle_update_runtime_settings(params: Map<String, Value>) -> ControllerFutur
             reasoning_enabled: update.reasoning_enabled,
         };
         to_json(config_rpc::load_and_apply_runtime_settings(patch).await?)
+    })
+}
+
+fn handle_get_autonomy_settings(_params: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { to_json(config_rpc::get_autonomy_settings().await?) })
+}
+
+fn handle_update_autonomy_settings(params: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move {
+        let update = deserialize_params::<AutonomySettingsUpdate>(params)?;
+        let patch = config_rpc::AutonomySettingsPatch {
+            level: update.level,
+            workspace_only: update.workspace_only,
+            allowed_commands: update.allowed_commands,
+            forbidden_paths: update.forbidden_paths,
+            trusted_roots: update.trusted_roots,
+            allow_tool_install: update.allow_tool_install,
+            max_actions_per_hour: update.max_actions_per_hour,
+        };
+        to_json(config_rpc::load_and_apply_autonomy_settings(patch).await?)
     })
 }
 
