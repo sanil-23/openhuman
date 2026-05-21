@@ -70,8 +70,18 @@ impl RuntimeAdapter for NativeRuntime {
         command: &str,
         workspace_dir: &Path,
     ) -> anyhow::Result<tokio::process::Command> {
-        let mut cmd = tokio::process::Command::new("sh");
-        cmd.arg("-lc").arg(command).current_dir(workspace_dir);
+        // On Windows hosts there is no POSIX `sh`; drive PowerShell instead.
+        // `-NoProfile` keeps startup fast and avoids user profile side effects.
+        let mut cmd = if cfg!(windows) {
+            let mut c = tokio::process::Command::new("powershell");
+            c.arg("-NoProfile").arg("-Command").arg(command);
+            c
+        } else {
+            let mut c = tokio::process::Command::new("sh");
+            c.arg("-lc").arg(command);
+            c
+        };
+        cmd.current_dir(workspace_dir);
         Ok(cmd)
     }
 }
