@@ -3,16 +3,27 @@
 //! Single SQL query against `mem_tree_chunks`. Two layers of metrics:
 //!
 //!   * **Lifetime** — `chunks_synced` (total ingested), `chunks_pending`
-//!     (no row in the `mem_tree_chunk_embeddings` sidecar = still in the
-//!     extract+embed queue, not yet appended to the source-tree buffer).
+//!     (not yet *resolved* = still in the extract+embed queue, not yet
+//!     appended to the source-tree buffer).
 //!
-//!     NOTE: "embedded" is keyed off the per-(chunk,model) sidecar table
-//!     `mem_tree_chunk_embeddings` (#1574), NOT the legacy inline
-//!     `mem_tree_chunks.embedding` column. The #1574 §7 migration copied
-//!     every vector into the sidecar and stopped writing the inline
+//!     A chunk is "resolved" (i.e. NOT pending) when ANY of:
+//!       - it has a row in the per-(chunk,model) sidecar
+//!         `mem_tree_chunk_embeddings` (#1574) — embedded under some model;
+//!       - `lifecycle_status = 'dropped'` — the admission gate rejected it,
+//!         so it is intentionally never embedded (terminal, not waiting);
+//!       - it has a `mem_tree_chunk_reembed_skipped` tombstone (#1574 §6) —
+//!         embedding failed terminally (missing body / wrong dim / embed
+//!         error) and will not be retried (terminal, not waiting).
+//!
+//!     NOTE: "embedded" is keyed off the sidecar table, NOT the legacy
+//!     inline `mem_tree_chunks.embedding` column. The #1574 §7 migration
+//!     copied every vector into the sidecar and stopped writing the inline
 //!     column, so it now reads back NULL for every chunk. Keying pending /
 //!     processed off the inline column made this RPC report 100% of chunks
 //!     as pending and `0` processed forever, regardless of real progress.
+//!     Dropped / terminally-skipped chunks have no sidecar row either, so
+//!     without the extra terminal predicates they would read as pending
+//!     forever and could pin a provider's progress bar below 100%.
 //!
 //!   * **Active sync wave** — `batch_total` / `batch_processed`. The
 //!     wave is identified by a *time-cluster anchor*: the earliest
@@ -92,21 +103,22 @@ pub async fn status_list_rpc(config: &Config) -> Result<RpcOutcome<StatusListRes
 /// Split out from [`status_list_rpc`] so it can be unit-tested against a
 /// tempdir-backed connection without the async / spawn_blocking wrapper.
 ///
-/// "Embedded" is decided by the presence of a row in the
-/// `mem_tree_chunk_embeddings` sidecar (any model signature), NOT the legacy
-/// inline `mem_tree_chunks.embedding` column — see the module header.
+/// A chunk is "resolved" (not pending) when it has a sidecar embedding (any
+/// model signature), OR is `dropped`, OR carries a reembed-skip tombstone —
+/// see the module header. Resolution is keyed off the `mem_tree_chunk_embeddings`
+/// sidecar, NOT the legacy inline `mem_tree_chunks.embedding` column.
 fn query_sync_statuses(conn: &Connection, now_ms: i64) -> rusqlite::Result<Vec<MemorySyncStatus>> {
     // Provider parsed from `source_id` prefix (substring before first ':');
     // falls back to `source_kind` when no prefix.
     //
-    // `provider_chunks` projects per-row provider + an `embedded` flag (sidecar
-    // row present). `provider_pending` flags providers that still have at least
-    // one un-embedded chunk — `wave_anchors` is gated on this so a fully-drained
-    // provider gets `batch_total = batch_processed = 0` (the UI then hides the
-    // progress bar instead of rendering a completed one for an idle connection).
-    // `wave_anchors` finds the earliest chunk within WAVE_WINDOW_MS of the most
-    // recent — the wave's start. The outer SELECT joins back to count both
-    // lifetime and in-wave totals.
+    // `provider_chunks` projects per-row provider + a `resolved` flag (embedded
+    // OR dropped OR terminally skipped). `provider_pending` flags providers that
+    // still have at least one unresolved chunk — `wave_anchors` is gated on this
+    // so a fully-drained provider gets `batch_total = batch_processed = 0` (the
+    // UI then hides the progress bar instead of rendering a completed one for an
+    // idle connection). `wave_anchors` finds the earliest chunk within
+    // WAVE_WINDOW_MS of the most recent — the wave's start. The outer SELECT
+    // joins back to count both lifetime and in-wave totals.
     let mut stmt = conn.prepare(
         "WITH provider_chunks AS ( \
             SELECT \
@@ -119,7 +131,12 @@ fn query_sync_statuses(conn: &Connection, now_ms: i64) -> rusqlite::Result<Vec<M
                 CASE WHEN EXISTS ( \
                     SELECT 1 FROM mem_tree_chunk_embeddings e \
                     WHERE e.chunk_id = c.id \
-                ) THEN 1 ELSE 0 END AS embedded, \
+                ) \
+                  OR c.lifecycle_status = 'dropped' \
+                  OR EXISTS ( \
+                    SELECT 1 FROM mem_tree_chunk_reembed_skipped s \
+                    WHERE s.chunk_id = c.id \
+                ) THEN 1 ELSE 0 END AS resolved, \
                 timestamp_ms \
             FROM mem_tree_chunks c \
          ), \
@@ -130,7 +147,7 @@ fn query_sync_statuses(conn: &Connection, now_ms: i64) -> rusqlite::Result<Vec<M
          ), \
          provider_pending AS ( \
             SELECT provider, \
-                   SUM(CASE WHEN embedded = 0 THEN 1 ELSE 0 END) AS pending \
+                   SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END) AS pending \
             FROM provider_chunks \
             GROUP BY provider \
          ), \
@@ -146,13 +163,13 @@ fn query_sync_statuses(conn: &Connection, now_ms: i64) -> rusqlite::Result<Vec<M
          SELECT \
             p.provider, \
             COUNT(*) AS chunks_synced, \
-            SUM(CASE WHEN p.embedded = 0 THEN 1 ELSE 0 END) AS chunks_pending, \
+            SUM(CASE WHEN p.resolved = 0 THEN 1 ELSE 0 END) AS chunks_pending, \
             SUM(CASE WHEN w.anchor IS NOT NULL \
                      AND p.created_at_ms >= w.anchor \
                      THEN 1 ELSE 0 END) AS batch_total, \
             SUM(CASE WHEN w.anchor IS NOT NULL \
                      AND p.created_at_ms >= w.anchor \
-                     AND p.embedded = 1 \
+                     AND p.resolved = 1 \
                      THEN 1 ELSE 0 END) AS batch_processed, \
             MAX(p.timestamp_ms) AS last_chunk_at_ms \
          FROM provider_chunks p \
@@ -323,6 +340,70 @@ mod tests {
             assert_eq!(slack.chunks_pending, 0);
             assert_eq!(slack.batch_total, 0, "no pending chunks ⇒ no active wave");
             assert_eq!(slack.batch_processed, 0);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    /// Terminal-but-unembedded chunks must not read as perpetually pending:
+    /// a `dropped` chunk (admission-rejected) and a `reembed_skipped`
+    /// tombstoned chunk both count as resolved even with no sidecar row, so a
+    /// provider whose only leftovers are terminal drains to 0 pending / no wave.
+    #[test]
+    fn dropped_and_skipped_chunks_count_as_resolved_not_pending() {
+        use crate::openhuman::memory::tree::store::with_connection;
+        use rusqlite::params;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let mut cfg = Config::default();
+        cfg.workspace_dir = tmp.path().to_path_buf();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        with_connection(&cfg, |conn| {
+            let insert = |id: &str, lifecycle: &str, created: i64| {
+                conn.execute(
+                    "INSERT INTO mem_tree_chunks \
+                       (id, source_kind, source_id, owner, timestamp_ms, \
+                        time_range_start_ms, time_range_end_ms, content, \
+                        token_count, seq_in_source, created_at_ms, lifecycle_status) \
+                     VALUES (?1, 'slack', 'slack:eng', 'me@x.com', ?2, ?2, ?2, 'b', 10, 0, ?2, ?3)",
+                    params![id, created, lifecycle],
+                )
+                .unwrap();
+            };
+
+            // d1: gate-dropped (no embedding, never will be).
+            insert("d1", "dropped", now - 4_000);
+            // sk1: pending_extraction but terminally tombstoned (e.g. body missing).
+            insert("sk1", "pending_extraction", now - 3_000);
+            conn.execute(
+                "INSERT INTO mem_tree_chunk_reembed_skipped \
+                   (chunk_id, model_signature, reason, skipped_at_ms) \
+                 VALUES ('sk1', 'sig', 'body read failed', ?1)",
+                params![now - 2_000],
+            )
+            .unwrap();
+            // p1: genuinely still in the queue (no embedding, no terminal marker).
+            insert("p1", "pending_extraction", now - 1_000);
+
+            let statuses = query_sync_statuses(conn, now).unwrap();
+            let slack = statuses
+                .iter()
+                .find(|s| s.provider == "slack")
+                .expect("slack provider row");
+
+            assert_eq!(slack.chunks_synced, 3, "all three ingested");
+            assert_eq!(
+                slack.chunks_pending, 1,
+                "only p1 is genuinely pending; d1 (dropped) and sk1 (skipped) are terminal"
+            );
+            // p1 keeps the wave alive; d1+sk1 are in-window but resolved.
+            assert_eq!(slack.batch_total, 3, "all within the wave window");
+            assert_eq!(
+                slack.batch_processed, 2,
+                "d1 and sk1 count as resolved; p1 does not"
+            );
             Ok(())
         })
         .unwrap();
