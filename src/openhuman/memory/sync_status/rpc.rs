@@ -112,10 +112,13 @@ fn query_sync_statuses(conn: &Connection, now_ms: i64) -> rusqlite::Result<Vec<M
     // falls back to `source_kind` when no prefix.
     //
     // `provider_chunks` projects per-row provider + a `resolved` flag (embedded
-    // OR dropped OR terminally skipped). `provider_pending` flags providers that
-    // still have at least one unresolved chunk — `wave_anchors` is gated on this
-    // so a fully-drained provider gets `batch_total = batch_processed = 0` (the
-    // UI then hides the progress bar instead of rendering a completed one for an
+    // OR dropped OR terminally skipped). `provider_pending` flags providers with
+    // at least one unresolved chunk *inside the wave window* (within
+    // WAVE_WINDOW_MS of the provider's most recent chunk) — `wave_anchors` is
+    // gated on this, so a stale unresolved chunk from an older wave can't
+    // resurrect an "active" wave when the recent chunks are all resolved, and a
+    // fully-drained provider gets `batch_total = batch_processed = 0` (the UI
+    // then hides the progress bar instead of rendering a completed one for an
     // idle connection). `wave_anchors` finds the earliest chunk within
     // WAVE_WINDOW_MS of the most recent — the wave's start. The outer SELECT
     // joins back to count both lifetime and in-wave totals.
@@ -146,10 +149,13 @@ fn query_sync_statuses(conn: &Connection, now_ms: i64) -> rusqlite::Result<Vec<M
             GROUP BY provider \
          ), \
          provider_pending AS ( \
-            SELECT provider, \
-                   SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END) AS pending \
-            FROM provider_chunks \
-            GROUP BY provider \
+            SELECT p.provider, \
+                   SUM(CASE WHEN p.resolved = 0 \
+                             AND p.created_at_ms >= m.max_created - ?1 \
+                            THEN 1 ELSE 0 END) AS pending \
+            FROM provider_chunks p \
+            JOIN provider_max m ON p.provider = m.provider \
+            GROUP BY p.provider \
          ), \
          wave_anchors AS ( \
             SELECT p.provider, MIN(p.created_at_ms) AS anchor \
@@ -404,6 +410,69 @@ mod tests {
                 slack.batch_processed, 2,
                 "d1 and sk1 count as resolved; p1 does not"
             );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    /// The active wave must be gated on an unresolved chunk *inside the window*.
+    /// A stale unresolved chunk from an older wave plus a fully-resolved recent
+    /// chunk must NOT resurrect an active wave (no bogus 100%-complete bar):
+    /// `batch_total = batch_processed = 0`, while lifetime `chunks_pending`
+    /// still reflects the old straggler.
+    #[test]
+    fn stale_out_of_window_pending_does_not_open_a_wave() {
+        use crate::openhuman::memory::tree::store::with_connection;
+        use rusqlite::params;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let mut cfg = Config::default();
+        cfg.workspace_dir = tmp.path().to_path_buf();
+        let now = chrono::Utc::now().timestamp_millis();
+        // WAVE_WINDOW_MS is 10 min; place the straggler well outside it.
+        let old = now - 30 * 60 * 1000;
+
+        with_connection(&cfg, |conn| {
+            let insert = |id: &str, created: i64| {
+                conn.execute(
+                    "INSERT INTO mem_tree_chunks \
+                       (id, source_kind, source_id, owner, timestamp_ms, \
+                        time_range_start_ms, time_range_end_ms, content, \
+                        token_count, seq_in_source, created_at_ms) \
+                     VALUES (?1, 'gmail', 'gmail:acct', 'me@x.com', ?2, ?2, ?2, 'b', 10, 0, ?2)",
+                    params![id, created],
+                )
+                .unwrap();
+            };
+
+            // old straggler: unresolved, 30 min ago (outside the wave window).
+            insert("old1", old);
+            // recent: resolved (embedded), inside the window.
+            insert("new1", now - 1_000);
+            conn.execute(
+                "INSERT INTO mem_tree_chunk_embeddings \
+                   (chunk_id, model_signature, vector, dim, created_at) \
+                 VALUES ('new1', 'sig', X'00000000', 1, 0.0)",
+                [],
+            )
+            .unwrap();
+
+            let statuses = query_sync_statuses(conn, now).unwrap();
+            let gmail = statuses
+                .iter()
+                .find(|s| s.provider == "gmail")
+                .expect("gmail provider row");
+
+            assert_eq!(
+                gmail.chunks_pending, 1,
+                "the old straggler is still pending lifetime-wise"
+            );
+            assert_eq!(
+                gmail.batch_total, 0,
+                "no unresolved chunk inside the window ⇒ no active wave"
+            );
+            assert_eq!(gmail.batch_processed, 0);
             Ok(())
         })
         .unwrap();
