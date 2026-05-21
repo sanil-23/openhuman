@@ -100,6 +100,8 @@ PRs must meet **≥ 80% coverage on changed lines**. Enforced by [`.github/workf
 
 **Rust config** uses a TOML `Config` struct (`src/openhuman/config/schema/types.rs`) with env overrides (`src/openhuman/config/schema/load.rs`).
 
+**Agent access mode** — the `[autonomy]` block (`src/openhuman/config/schema/autonomy.rs`) drives the agent's filesystem/shell reach via `SecurityPolicy` (`src/openhuman/security/policy.rs`). Tiers: `level` (`readonly`/`supervised`/`full`) × `workspace_only` × `trusted_roots` (per-folder `read`/`readwrite` grants outside the workspace, which override `forbidden_paths` for their subtree — credential dirs `~/.ssh`/`~/.gnupg`/`~/.aws` stay blocked unconditionally) × `allow_tool_install` (gates the `install_tool` tool). Edit live via the `config.update_autonomy_settings` RPC or the **Settings → Agent access** panel (`AgentAccessPanel.tsx`); changes swap the process-global policy in `security::live_policy` and apply to new sessions. Enforcement is in Rust (`is_path_string_allowed` / `validate_path` / `validate_parent_path`), never the system prompt.
+
 ---
 
 ## Testing
