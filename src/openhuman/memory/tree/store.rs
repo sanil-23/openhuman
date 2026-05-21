@@ -963,8 +963,8 @@ pub(crate) fn try_cleanup_stale_files(db_path: &std::path::Path) -> bool {
     cleaned
 }
 
-/// Run the full one-time DB initialisation (WAL, schema, migrations) against
-/// an already-open `Connection`. Used by `get_or_init_connection`.
+/// Run the full one-time DB initialisation (journal mode, schema, migrations)
+/// against an already-open `Connection`. Used by `get_or_init_connection`.
 fn init_db(conn: &Connection, config: &Config) -> Result<()> {
     conn.busy_timeout(SQLITE_BUSY_TIMEOUT)
         .context("Failed to configure memory_tree busy timeout")?;
@@ -975,6 +975,11 @@ fn init_db(conn: &Connection, config: &Config) -> Result<()> {
     // on.
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .context("Failed to enable memory_tree foreign_keys pragma")?;
+    // memory_tree runs the TRUNCATE rollback journal (see `apply_schema`), so
+    // crash-safety requires synchronous=FULL — NORMAL is only corruption-safe
+    // under WAL. Set explicitly so a future global default can't weaken it.
+    conn.execute_batch("PRAGMA synchronous = FULL;")
+        .context("Failed to set memory_tree synchronous=FULL")?;
     apply_schema(conn)?;
     // #1574 §7: one-shot, version-gated legacy→sidecar embedding migration.
     migrate_legacy_embeddings_to_sidecar(conn, config)?;
@@ -984,9 +989,27 @@ fn init_db(conn: &Connection, config: &Config) -> Result<()> {
 fn apply_schema(conn: &Connection) -> Result<()> {
     // Note: `init_db` runs the `#1574 §7` legacy→sidecar embedding migration
     // after this returns, so the dim-equal copy step is not duplicated here.
-    if let Err(wal_err) = conn.execute_batch("PRAGMA journal_mode=WAL;") {
+    // memory_tree uses the TRUNCATE rollback journal, NOT WAL. WAL's `-shm`
+    // shared-memory index + `-wal` checkpoint machinery are the root of the
+    // cold-start IOERR_SHMMAP (macOS) / IOERR_TRUNCATE (Windows, AV-held
+    // handles) failures (Sentry TAURI-RUST-EV / TAURI-RUST-X1). All tree
+    // access serialises on the single cached `PMutex<Connection>` (see
+    // `get_or_init_connection`), so WAL's only real benefit — concurrent
+    // readers — is unused here, which makes WAL pure liability. The sibling
+    // tree DBs (cron / vault / redirect_links) already run the default
+    // rollback journal without issue.
+    //
+    // Requesting TRUNCATE on a database a prior release left in WAL mode
+    // checkpoints the `-wal` back into the main file and removes the
+    // `-wal`/`-shm` side-files, so this also migrates existing WAL databases
+    // in place on upgrade.
+    let journal_mode: String = conn
+        .query_row("PRAGMA journal_mode=TRUNCATE", [], |row| row.get(0))
+        .context("Failed to set memory_tree journal_mode=TRUNCATE")?;
+    if !journal_mode.eq_ignore_ascii_case("truncate") {
         log::warn!(
-            "[memory_tree] Failed to enable WAL mode (filesystem may not support it): {wal_err}"
+            "[memory_tree] journal_mode is '{journal_mode}' after requesting TRUNCATE \
+             — a prior WAL connection or a locked -wal may be blocking the switch"
         );
     }
     conn.execute_batch(SCHEMA)
