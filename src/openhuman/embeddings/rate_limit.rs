@@ -53,16 +53,22 @@ static BUCKETS: OnceLock<Mutex<HashMap<String, Arc<TokenBucket>>>> = OnceLock::n
 /// throttling entirely.
 ///
 /// Wired from config load (`config::schema::load::apply_env_overrides`) so the
-/// live budget tracks `memory.embedding_rate_limit_per_min`. Existing buckets
-/// are dropped so the new rate takes effect on the next request — mirroring how
-/// `proxy::set_runtime_proxy_config` clears its client cache on reconfigure.
+/// live budget tracks `memory.embedding_rate_limit_per_min`. When the rate
+/// changes, existing buckets are dropped so the new rate takes effect on the
+/// next request — mirroring how `proxy::set_runtime_proxy_config` clears its
+/// client cache on reconfigure.
 pub fn set_embedding_rate_limit(per_minute: u32) {
-    CONFIGURED_LIMIT.store(per_minute, Ordering::Relaxed);
-    if let Some(registry) = BUCKETS.get() {
-        registry
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
+    let prev = CONFIGURED_LIMIT.swap(per_minute, Ordering::Relaxed);
+    // Only drop buckets when the rate actually changes. Clearing on every call
+    // (e.g. repeated config reloads with an unchanged value) would keep handing
+    // out a fresh burst token and erode the hard-cap pacing guarantee.
+    if prev != per_minute {
+        if let Some(registry) = BUCKETS.get() {
+            registry
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clear();
+        }
     }
     tracing::debug!(
         target: "embeddings::rate_limit",

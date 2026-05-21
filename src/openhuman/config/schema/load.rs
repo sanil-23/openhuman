@@ -1739,7 +1739,7 @@ impl Config {
         // disables throttling. A blank or non-numeric value leaves the
         // configured/default budget untouched. Committed to the process-global
         // limiter in `apply_env_overrides`.
-        if let Ok(val) = std::env::var("OPENHUMAN_MEMORY_EMBED_RATE_LIMIT") {
+        if let Some(val) = env.get("OPENHUMAN_MEMORY_EMBED_RATE_LIMIT") {
             if let Ok(per_min) = val.trim().parse::<u32>() {
                 self.memory.embedding_rate_limit_per_min = per_min;
             }
