@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 
 import AboutPanel from '../components/settings/panels/AboutPanel';
+import AgentAccessPanel from '../components/settings/panels/AgentAccessPanel';
 import AgentChatPanel from '../components/settings/panels/AgentChatPanel';
 import AIPanel from '../components/settings/panels/AIPanel';
 import AppearancePanel from '../components/settings/panels/AppearancePanel';
@@ -349,6 +350,7 @@ const Settings = () => {
         <Route path="notifications" element={wrapSettingsPage(<NotificationsPanel />)} />
         <Route path="mascot" element={wrapSettingsPage(<MascotPanel />)} />
         <Route path="appearance" element={wrapSettingsPage(<AppearancePanel />)} />
+        <Route path="agent-access" element={wrapSettingsPage(<AgentAccessPanel />)} />
         <Route path="tools" element={wrapSettingsPage(<ToolsPanel />)} />
         <Route path="companion" element={wrapSettingsPage(<CompanionPanel />)} />
         {/* Developer Options */}
