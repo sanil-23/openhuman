@@ -246,8 +246,8 @@ class SocketService {
       // room and a per-thread room (see socketio.rs `emit_web_channel_event`);
       // because a reconnect produces a NEW client_id, the new socket must
       // re-subscribe to the thread room to keep receiving the stream.
-      const activeThreadId =
-        store.getState().thread.selectedThreadId ?? store.getState().thread.activeThreadId;
+      const threadState = store.getState().thread;
+      const activeThreadId = threadState?.selectedThreadId ?? threadState?.activeThreadId;
       if (activeThreadId) {
         this.socket?.emit('thread:subscribe', { thread_id: activeThreadId });
       }
