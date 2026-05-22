@@ -219,6 +219,154 @@ fn command_risk_high_for_catastrophic_commands() {
     );
 }
 
+// -- classify_command / gate_decision (fail-closed bucket model) --
+
+#[test]
+fn classify_reads_are_read() {
+    let p = default_policy();
+    for c in [
+        "ls -la",
+        "cat f",
+        "grep x f",
+        "git status",
+        "git log --oneline",
+        "pwd",
+        "wc -l f",
+        "head f",
+        "find . -name '*.rs'",
+        "cargo tree",
+        "npm ls",
+        "dir",
+        "type f.txt",
+        "Get-Content f",
+    ] {
+        assert_eq!(p.classify_command(c), CommandClass::Read, "{c}");
+    }
+}
+
+#[test]
+fn classify_unknown_is_write_fail_closed() {
+    let p = default_policy();
+    // The whole point: a command we don't recognize is NOT treated as read.
+    assert_eq!(p.classify_command("./deploy.sh"), CommandClass::Write);
+    assert_eq!(
+        p.classify_command("some-random-binary --go"),
+        CommandClass::Write
+    );
+    assert_eq!(p.classify_command("git"), CommandClass::Write); // bare git
+}
+
+#[test]
+fn classify_writes_are_write() {
+    let p = default_policy();
+    for c in [
+        "touch f",
+        "mkdir d",
+        "mv a b",
+        "rm -rf build",
+        "git commit -m x",
+        "git push",
+        "npm install",
+        "cargo build",
+        "node script.js",
+        "python3 x.py",
+        "bash -lc 'id'",
+        "Remove-Item x",
+    ] {
+        assert_eq!(p.classify_command(c), CommandClass::Write, "{c}");
+    }
+}
+
+#[test]
+fn classify_network_is_network() {
+    let p = default_policy();
+    for c in [
+        "curl http://x",
+        "wget http://x",
+        "ssh host",
+        "scp a b",
+        "nc -l 1",
+        "Invoke-WebRequest http://x",
+    ] {
+        assert_eq!(p.classify_command(c), CommandClass::Network, "{c}");
+    }
+}
+
+#[test]
+fn classify_destructive_is_destructive() {
+    let p = default_policy();
+    for c in [
+        "sudo rm f",
+        "dd if=/dev/zero of=/dev/sda",
+        "mkfs /dev/sda1",
+        "shutdown -h now",
+        "rm -rf /",
+        "format C:",
+        "diskpart",
+    ] {
+        assert_eq!(p.classify_command(c), CommandClass::Destructive, "{c}");
+    }
+}
+
+#[test]
+fn classify_highest_segment_wins() {
+    let p = default_policy();
+    assert_eq!(
+        p.classify_command("ls | curl http://x"),
+        CommandClass::Network
+    );
+    assert_eq!(
+        p.classify_command("cat f && sudo reboot"),
+        CommandClass::Destructive
+    );
+    assert_eq!(p.classify_command("ls && mkdir d"), CommandClass::Write);
+}
+
+#[test]
+fn classify_redirect_lifts_read_to_write() {
+    let p = default_policy();
+    // `cat` is read, but the redirect writes a file.
+    assert_eq!(p.classify_command("cat f"), CommandClass::Read);
+    assert_eq!(p.classify_command("cat f > out.txt"), CommandClass::Write);
+    assert_eq!(
+        p.classify_command("echo hi | tee out.txt"),
+        CommandClass::Write
+    );
+}
+
+#[test]
+fn gate_decision_readonly_blocks_acts() {
+    let p = readonly_policy();
+    assert_eq!(p.gate_decision(CommandClass::Read), GateDecision::Allow);
+    assert_eq!(p.gate_decision(CommandClass::Write), GateDecision::Block);
+    assert_eq!(p.gate_decision(CommandClass::Network), GateDecision::Block);
+    assert_eq!(p.gate_decision(CommandClass::Destructive), GateDecision::Block);
+}
+
+#[test]
+fn gate_decision_supervised_prompts_every_act() {
+    let p = default_policy(); // Supervised
+    assert_eq!(p.gate_decision(CommandClass::Read), GateDecision::Allow);
+    assert_eq!(p.gate_decision(CommandClass::Write), GateDecision::Prompt);
+    assert_eq!(p.gate_decision(CommandClass::Network), GateDecision::Prompt);
+    assert_eq!(
+        p.gate_decision(CommandClass::Destructive),
+        GateDecision::Prompt
+    );
+}
+
+#[test]
+fn gate_decision_full_runs_write_but_prompts_network_and_destructive() {
+    let p = full_policy();
+    assert_eq!(p.gate_decision(CommandClass::Read), GateDecision::Allow);
+    assert_eq!(p.gate_decision(CommandClass::Write), GateDecision::Allow);
+    assert_eq!(p.gate_decision(CommandClass::Network), GateDecision::Prompt);
+    assert_eq!(
+        p.gate_decision(CommandClass::Destructive),
+        GateDecision::Prompt
+    );
+}
+
 #[test]
 fn command_risk_medium_for_command_executors() {
     // Interpreters / code executors are medium-risk now (not high): a coding

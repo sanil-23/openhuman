@@ -50,6 +50,42 @@ pub enum CommandRiskLevel {
     High,
 }
 
+/// Coarse permission bucket the harness approval gate keys on.
+///
+/// Classification is **fail-closed**: a command that is not provably read-only
+/// (and not a recognized network/destructive command) is treated as at least
+/// [`CommandClass::Write`]. Across multiple shell segments the **highest** class
+/// wins (so `ls | curl …` is `Network`). Variants are ordered low→high so
+/// [`Ord`] / [`Iterator::max`] compose them directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CommandClass {
+    /// Provably read-only / observational (curated safe-read allowlist).
+    Read,
+    /// State-changing but not inherently catastrophic — the fail-closed default
+    /// for anything not recognized as read/network/destructive.
+    Write,
+    /// Reaches the network (curl/wget/ssh/scp/…). Always prompts, every tier.
+    Network,
+    /// Catastrophic / irreversible / privilege-escalating / system-control.
+    /// Always prompts, even in Full.
+    Destructive,
+}
+
+/// What the harness should do with an acting tool call of a given
+/// [`CommandClass`] under the session's [`AutonomyLevel`]. Computed by
+/// [`SecurityPolicy::gate_decision`]; the harness translates `Prompt` into an
+/// `ApprovalGate` round-trip *before* the tool's `execute()` runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateDecision {
+    /// Run without prompting.
+    Allow,
+    /// Require explicit human approval before running.
+    Prompt,
+    /// Refuse outright — no in-tier prompt can authorize it (e.g. any act in
+    /// read-only mode).
+    Block,
+}
+
 /// Classifies whether a tool operation is read-only or side-effecting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolOperation {
@@ -252,6 +288,22 @@ fn is_command_executor(command: &str) -> bool {
                 | "ksh"
                 | "fish"
                 | "env"
+                // JS/TS runtimes (the `node_exec`/`npm_exec` shell equivalents)
+                | "node"
+                | "nodejs"
+                | "deno"
+                | "bun"
+                // Windows / PowerShell arbitrary-code launchers + LOLBins
+                | "iex"
+                | "invoke-expression"
+                | "cmd"
+                | "pwsh"
+                | "powershell"
+                | "wscript"
+                | "cscript"
+                | "mshta"
+                | "rundll32"
+                | "start-process"
         )
 }
 
@@ -463,6 +515,154 @@ fn contains_unquoted_char(command: &str, target: char) -> bool {
     false
 }
 
+/// Provably read-only command bases (cross-platform union). A base **not** in
+/// this set — and not a recognized network/destructive/executor command, nor a
+/// read-only verb of git/npm/cargo — falls through to [`CommandClass::Write`]
+/// (the classifier is fail-closed). Conservative on purpose: anything that can
+/// write a file under a common flag is intentionally omitted (`sort -o`, `tee`).
+const READ_ONLY_BASES: &[&str] = &[
+    // POSIX inspection / read-only coreutils
+    "ls", "cat", "pwd", "echo", "wc", "head", "tail", "date", "grep", "egrep",
+    "fgrep", "rg", "which", "whoami", "id", "hostname", "uname", "printenv",
+    "stat", "file", "du", "df", "tree", "realpath", "readlink", "dirname",
+    "basename", "cmp", "true", "false", "sleep", "seq", "tty", "groups",
+    "locale", "ps", "top", "free", "uptime", "lsblk", "lscpu", "cut",
+    // Windows cmd / PowerShell read verbs + common aliases
+    "dir", "type", "where", "whereis", "get-childitem", "gci", "get-content",
+    "gc", "get-location", "gl", "select-string", "sls", "measure-object",
+    "get-item", "gi", "test-path", "resolve-path", "get-command", "gcm",
+    "get-process",
+];
+
+/// Commands that reach the network. Always-ask in every acting tier.
+const NETWORK_BASES: &[&str] = &[
+    "curl", "wget", "ssh", "scp", "sftp", "rsync", "nc", "ncat", "netcat",
+    "telnet", "ftp", "tftp", "socat",
+    // Windows / PowerShell
+    "invoke-webrequest", "iwr", "invoke-restmethod", "irm", "start-bitstransfer",
+    "bitsadmin",
+];
+
+/// Catastrophic / irreversible / privilege / system-control bases. Always-ask
+/// in every acting tier (Full included). Coarse on the broad Windows verbs
+/// (`reg`/`net`/`sc`) — over-prompting there is the safe default.
+const DESTRUCTIVE_BASES: &[&str] = &[
+    // POSIX privilege / disk / system-control
+    "sudo", "su", "doas", "dd", "mkfs", "fdisk", "sfdisk", "parted", "wipefs",
+    "shred", "shutdown", "reboot", "halt", "poweroff", "init", "telinit",
+    "mount", "umount", "swapoff", "iptables", "ip6tables", "nft", "ufw",
+    "firewall-cmd", "useradd", "userdel", "usermod", "groupadd", "groupdel",
+    "passwd", "chpasswd", "visudo", "modprobe", "insmod", "rmmod",
+    // Windows / PowerShell
+    "format", "diskpart", "bcdedit", "takeown", "cipher", "vssadmin", "reg",
+    "regedit", "runas", "sc", "net", "set-executionpolicy", "stop-computer",
+    "restart-computer", "clear-disk", "format-volume", "remove-partition",
+    "disable-computerrestore",
+];
+
+/// Git subcommands that only read repository state. Anything else — including
+/// `commit`/`push`/`branch`/`config`/unknown/bare `git` — is fail-closed to
+/// `Write`.
+const GIT_READ_VERBS: &[&str] = &[
+    "status", "log", "diff", "show", "remote", "describe", "blame", "ls-files",
+    "ls-tree", "rev-parse", "cat-file", "shortlog", "reflog", "rev-list",
+    "name-rev", "var", "check-ignore", "check-attr", "verify-commit",
+    "count-objects", "fsck", "whatchanged", "grep", "version", "help",
+];
+
+/// npm/pnpm/yarn read-only subcommands. `install`/`run`/`test`/`exec` (which
+/// run arbitrary scripts) and unknown verbs are fail-closed to `Write`.
+const NODE_PKG_READ_VERBS: &[&str] = &[
+    "ls", "list", "view", "info", "outdated", "ping", "whoami", "help", "why",
+    "audit", "doctor",
+];
+
+/// cargo read-only subcommands. `build`/`run`/`test`/`check` compile and may
+/// run build scripts, so they are fail-closed to `Write`.
+const CARGO_READ_VERBS: &[&str] = &[
+    "tree", "metadata", "search", "info", "version", "help",
+];
+
+/// Classify a single already-split shell segment. `base` is the normalized
+/// (lowercased, `.exe`-stripped, basename-only) program name; `args` are the
+/// lowercased remaining words; `joined` is the lowercased segment used for
+/// pattern matching. Fail-closed: an unrecognized base resolves to `Write`.
+fn classify_segment(base: &str, args: &[String], joined: &str) -> CommandClass {
+    // Catastrophic patterns first — they win regardless of the base command.
+    if joined.contains("rm -rf /")
+        || joined.contains("rm -fr /")
+        || joined.contains(":(){:|:&};:")
+    {
+        return CommandClass::Destructive;
+    }
+    if DESTRUCTIVE_BASES.contains(&base) {
+        return CommandClass::Destructive;
+    }
+    if NETWORK_BASES.contains(&base) {
+        return CommandClass::Network;
+    }
+    // Interpreters / code executors run arbitrary code. Fail-closed to Write
+    // (not Destructive) so Full can still run code while Supervised prompts.
+    if is_command_executor(base) {
+        return CommandClass::Write;
+    }
+    // `find` is read-only unless it executes commands or deletes files.
+    if base == "find" {
+        if args.iter().any(|a| {
+            matches!(
+                a.as_str(),
+                "-exec" | "-execdir" | "-ok" | "-okdir" | "-delete"
+            )
+        }) {
+            return CommandClass::Write;
+        }
+        return CommandClass::Read;
+    }
+    // Verb-sensitive VCS / package tools.
+    if base == "git" {
+        return verb_class(args, GIT_READ_VERBS);
+    }
+    if matches!(base, "npm" | "pnpm" | "yarn") {
+        return verb_class(args, NODE_PKG_READ_VERBS);
+    }
+    if base == "cargo" {
+        return verb_class(args, CARGO_READ_VERBS);
+    }
+    if READ_ONLY_BASES.contains(&base) {
+        return CommandClass::Read;
+    }
+    // Fail closed: unknown or known-mutating base → Write.
+    CommandClass::Write
+}
+
+/// `Read` when the first subcommand word is in `read_verbs`, else fail-closed
+/// `Write`. Mirrors the `args.first()` verb check used by `command_risk_level`.
+fn verb_class(args: &[String], read_verbs: &[&str]) -> CommandClass {
+    match args.first().map(String::as_str) {
+        Some(verb) if read_verbs.contains(&verb) => CommandClass::Read,
+        _ => CommandClass::Write,
+    }
+}
+
+/// Structural-safety guard for the harness-gated command flow (Option 2). Even
+/// after a human approves a command, a hidden subshell / command substitution /
+/// output redirect / `tee` / background `&` could smuggle a *different* command
+/// past the approval summary, so these are refused outside Full (which is
+/// trusted to use redirects and pipes). Mirrors the structural checks in
+/// [`SecurityPolicy::is_command_allowed`].
+fn has_unsafe_structure(command: &str) -> bool {
+    command.contains('`')
+        || command.contains("$(")
+        || command.contains("${")
+        || command.contains("<(")
+        || command.contains(">(")
+        || contains_unquoted_char(command, '>')
+        || command
+            .split_whitespace()
+            .any(|w| w == "tee" || w.ends_with("/tee"))
+        || contains_unquoted_single_ampersand(command)
+}
+
 impl SecurityPolicy {
     /// Classify command risk. Any high-risk segment marks the whole command high.
     pub fn command_risk_level(&self, command: &str) -> CommandRiskLevel {
@@ -566,6 +766,92 @@ impl SecurityPolicy {
         } else {
             CommandRiskLevel::Low
         }
+    }
+
+    /// Classify a shell command into a fail-closed [`CommandClass`]. The highest
+    /// class across all `;`/`|`/`&&`/`||`/newline-separated segments wins, and a
+    /// file redirect (`>`/`>>`) or `tee` lifts the class to at least `Write` no
+    /// matter how benign the base looks (`cat x > y` writes `y`).
+    ///
+    /// This is the deterministic floor the harness gate keys on; an LLM-declared
+    /// category may only *raise* it (`gate = max(rust_floor, llm_declared)`),
+    /// never lower it.
+    pub fn classify_command(&self, command: &str) -> CommandClass {
+        let mut class = CommandClass::Read;
+        for segment in split_unquoted_segments(command) {
+            let cmd_part = skip_env_assignments(&segment);
+            let mut words = cmd_part.split_whitespace();
+            let Some(base_raw) = words.next() else {
+                continue;
+            };
+            let base = normalized_command_name(base_raw);
+            let args: Vec<String> = words.map(|w| w.to_ascii_lowercase()).collect();
+            let joined = cmd_part.to_ascii_lowercase();
+            class = class.max(classify_segment(&base, &args, &joined));
+        }
+        // A redirect or `tee` writes a file regardless of the base command.
+        if contains_unquoted_char(command, '>')
+            || command
+                .split_whitespace()
+                .any(|w| w == "tee" || w.ends_with("/tee"))
+        {
+            class = class.max(CommandClass::Write);
+        }
+        class
+    }
+
+    /// The gate decision for an acting tool call of `class` under this policy's
+    /// autonomy tier. The harness turns `Prompt` into an `ApprovalGate`
+    /// round-trip *before* the tool runs; `Block` is refused outright.
+    ///
+    /// Matrix: read-only allows only `Read`; ask-before-edit (`Supervised`)
+    /// prompts on every acting class; full runs `Read`/`Write` silently but
+    /// always prompts on `Network`/`Destructive`.
+    pub fn gate_decision(&self, class: CommandClass) -> GateDecision {
+        match self.autonomy {
+            AutonomyLevel::ReadOnly => match class {
+                CommandClass::Read => GateDecision::Allow,
+                _ => GateDecision::Block,
+            },
+            AutonomyLevel::Supervised => match class {
+                CommandClass::Read => GateDecision::Allow,
+                _ => GateDecision::Prompt,
+            },
+            AutonomyLevel::Full => match class {
+                CommandClass::Read | CommandClass::Write => GateDecision::Allow,
+                CommandClass::Network | CommandClass::Destructive => GateDecision::Prompt,
+            },
+        }
+    }
+
+    /// Defense-in-depth check for the harness-gated command flow (Option 2).
+    ///
+    /// The run / prompt / block decision is made by [`Self::gate_decision`] +
+    /// the process-global `ApprovalGate` (which prompts the human *before*
+    /// `execute()`), so by the time a tool calls this the command is either a
+    /// read or an already-approved act. This enforces what must still hold:
+    ///
+    /// - **Read-only**: only `Read`-class commands run (`Block` otherwise).
+    /// - **Supervised**: no hidden subshell / redirect / `tee` / background that
+    ///   could smuggle a command past the approval the human saw. Full is
+    ///   trusted and skips the structural guard.
+    ///
+    /// Returns the classified [`CommandClass`] on success.
+    pub fn check_gated_command(&self, command: &str) -> Result<CommandClass, String> {
+        let class = self.classify_command(command);
+        if self.gate_decision(class) == GateDecision::Block {
+            return Err(
+                "Security policy: read-only mode — only read commands are permitted".into(),
+            );
+        }
+        if self.autonomy != AutonomyLevel::Full && has_unsafe_structure(command) {
+            return Err(
+                "Command blocked: hidden subshell / redirect / background operators are not \
+                 allowed in this mode (use the file tools to write files)"
+                    .into(),
+            );
+        }
+        Ok(class)
     }
 
     /// Validate full command execution policy (allowlist + risk gate).

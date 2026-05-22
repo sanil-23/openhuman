@@ -35,6 +35,8 @@ pub use policy::AutonomyLevel;
 pub use policy::SecurityPolicy;
 pub use policy::ToolOperation;
 #[allow(unused_imports)]
+pub use policy::{CommandClass, GateDecision};
+#[allow(unused_imports)]
 pub use policy::{TrustedAccess, TrustedRoot};
 #[allow(unused_imports)]
 pub use secrets::SecretStore;
