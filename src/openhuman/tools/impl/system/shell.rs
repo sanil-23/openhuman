@@ -111,6 +111,11 @@ impl Tool for ShellTool {
                 "command": {
                     "type": "string",
                     "description": "The shell command to execute"
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["read", "write", "network", "install", "destructive"],
+                    "description": "Optional self-declared risk category for this command. Advisory and ESCALATE-ONLY: it can raise the approval requirement (e.g. flag a destructive command) but never lowers what the runtime determines."
                 }
             },
             "required": ["command"]
@@ -137,9 +142,17 @@ impl Tool for ShellTool {
     /// and the structural guard are enforced in `run_with_security`.
     fn external_effect_with_args(&self, args: &serde_json::Value) -> bool {
         let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-        self.security
-            .gate_decision(self.security.classify_command(command))
-            == GateDecision::Prompt
+        let mut class = self.security.classify_command(command);
+        // Escalate-only LLM hint: max() so a self-declared category can raise
+        // the requirement (e.g. Write -> Destructive) but never lower it.
+        if let Some(declared) = args
+            .get("category")
+            .and_then(|v| v.as_str())
+            .and_then(SecurityPolicy::parse_declared_class)
+        {
+            class = class.max(declared);
+        }
+        self.security.gate_decision(class) == GateDecision::Prompt
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
@@ -576,6 +589,25 @@ mod tests {
         let full = test_security(AutonomyLevel::Full);
         let full_tool = ShellTool::new(full, test_runtime(), test_audit());
         assert!(!full_tool.external_effect_with_args(&json!({"command": "touch f"})));
+    }
+
+    #[tokio::test]
+    async fn shell_llm_category_escalates_but_never_lowers() {
+        // In Full a Write runs silently…
+        let full = test_security(AutonomyLevel::Full);
+        let tool = ShellTool::new(full, test_runtime(), test_audit());
+        assert!(!tool.external_effect_with_args(&json!({"command": "touch f"})));
+        // …but a self-declared `destructive` escalates it to a prompt.
+        assert!(tool.external_effect_with_args(
+            &json!({"command": "touch f", "category": "destructive"})
+        ));
+        // The hint can never LOWER: declaring a destructive command "read"
+        // still prompts (in any acting tier).
+        let supervised = test_security(AutonomyLevel::Supervised);
+        let stool = ShellTool::new(supervised, test_runtime(), test_audit());
+        assert!(stool.external_effect_with_args(
+            &json!({"command": "sudo reboot", "category": "read"})
+        ));
     }
 
     // ── §5.2 Shell timeout enforcement tests ─────────────────

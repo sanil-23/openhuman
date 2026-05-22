@@ -476,6 +476,39 @@ fn always_forbidden_leaves_gray_area_dirs_to_overridable_forbidden_paths() {
     }
 }
 
+// -- LLM escalate-only category (Phase G) -------------------------
+
+#[test]
+fn parse_declared_class_maps_known_and_rejects_unknown() {
+    assert_eq!(
+        SecurityPolicy::parse_declared_class("destructive"),
+        Some(CommandClass::Destructive)
+    );
+    assert_eq!(
+        SecurityPolicy::parse_declared_class("  WRITE "),
+        Some(CommandClass::Write)
+    );
+    assert_eq!(
+        SecurityPolicy::parse_declared_class("network"),
+        Some(CommandClass::Network)
+    );
+    assert_eq!(
+        SecurityPolicy::parse_declared_class("install"),
+        Some(CommandClass::Install)
+    );
+    assert_eq!(SecurityPolicy::parse_declared_class("bogus"), None);
+    assert_eq!(SecurityPolicy::parse_declared_class(""), None);
+    // Escalate-only contract: max() raises but never lowers.
+    assert_eq!(
+        CommandClass::Write.max(CommandClass::Destructive),
+        CommandClass::Destructive
+    );
+    assert_eq!(
+        CommandClass::Destructive.max(CommandClass::Read),
+        CommandClass::Destructive
+    );
+}
+
 #[test]
 fn command_risk_medium_for_command_executors() {
     // Interpreters / code executors are medium-risk now (not high): a coding

@@ -891,6 +891,22 @@ impl SecurityPolicy {
         Ok(class)
     }
 
+    /// Parse an LLM-declared command category. This is an **escalate-only**
+    /// hint: callers combine it with the deterministic floor via
+    /// `classify_command(cmd).max(declared)`, so the model can *raise* the gate
+    /// (e.g. flag a `Write` as `Destructive` to request confirmation) but can
+    /// never lower what the runtime determined. Unknown / empty → `None`.
+    pub fn parse_declared_class(declared: &str) -> Option<CommandClass> {
+        match declared.trim().to_ascii_lowercase().as_str() {
+            "read" => Some(CommandClass::Read),
+            "write" => Some(CommandClass::Write),
+            "network" => Some(CommandClass::Network),
+            "install" => Some(CommandClass::Install),
+            "destructive" => Some(CommandClass::Destructive),
+            _ => None,
+        }
+    }
+
     /// Validate full command execution policy (allowlist + risk gate).
     pub fn validate_command_execution(
         &self,
