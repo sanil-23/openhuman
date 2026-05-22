@@ -454,10 +454,7 @@ impl Tool for GitOperationsTool {
     /// log/branch) never prompt. In Full, writes run; read-only is blocked in
     /// `execute` via the existing `can_act()` / autonomy check.
     fn external_effect_with_args(&self, args: &serde_json::Value) -> bool {
-        let operation = args
-            .get("operation")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let operation = args.get("operation").and_then(|v| v.as_str()).unwrap_or("");
         self.requires_write_access(operation)
             && self.security.gate_decision(CommandClass::Write) == GateDecision::Prompt
     }

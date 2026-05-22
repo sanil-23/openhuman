@@ -376,7 +376,10 @@ fn gate_decision_readonly_blocks_acts() {
     assert_eq!(p.gate_decision(CommandClass::Read), GateDecision::Allow);
     assert_eq!(p.gate_decision(CommandClass::Write), GateDecision::Block);
     assert_eq!(p.gate_decision(CommandClass::Network), GateDecision::Block);
-    assert_eq!(p.gate_decision(CommandClass::Destructive), GateDecision::Block);
+    assert_eq!(
+        p.gate_decision(CommandClass::Destructive),
+        GateDecision::Block
+    );
 }
 
 #[test]
@@ -435,7 +438,10 @@ fn classify_local_installs_are_write_not_install() {
     // Project-local installs are ordinary writes (run in Full), not the
     // host-modifying Install bucket.
     assert_eq!(p.classify_command("npm install"), CommandClass::Write);
-    assert_eq!(p.classify_command("npm install lodash"), CommandClass::Write);
+    assert_eq!(
+        p.classify_command("npm install lodash"),
+        CommandClass::Write
+    );
     assert_eq!(p.classify_command("cargo add serde"), CommandClass::Write);
 }
 

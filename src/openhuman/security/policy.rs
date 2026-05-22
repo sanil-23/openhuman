@@ -534,24 +534,92 @@ fn contains_unquoted_char(command: &str, target: char) -> bool {
 /// write a file under a common flag is intentionally omitted (`sort -o`, `tee`).
 const READ_ONLY_BASES: &[&str] = &[
     // POSIX inspection / read-only coreutils
-    "ls", "cat", "pwd", "echo", "wc", "head", "tail", "date", "grep", "egrep",
-    "fgrep", "rg", "which", "whoami", "id", "hostname", "uname", "printenv",
-    "stat", "file", "du", "df", "tree", "realpath", "readlink", "dirname",
-    "basename", "cmp", "true", "false", "sleep", "seq", "tty", "groups",
-    "locale", "ps", "top", "free", "uptime", "lsblk", "lscpu", "cut",
+    "ls",
+    "cat",
+    "pwd",
+    "echo",
+    "wc",
+    "head",
+    "tail",
+    "date",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "which",
+    "whoami",
+    "id",
+    "hostname",
+    "uname",
+    "printenv",
+    "stat",
+    "file",
+    "du",
+    "df",
+    "tree",
+    "realpath",
+    "readlink",
+    "dirname",
+    "basename",
+    "cmp",
+    "true",
+    "false",
+    "sleep",
+    "seq",
+    "tty",
+    "groups",
+    "locale",
+    "ps",
+    "top",
+    "free",
+    "uptime",
+    "lsblk",
+    "lscpu",
+    "cut",
     // Windows cmd / PowerShell read verbs + common aliases
-    "dir", "type", "where", "whereis", "get-childitem", "gci", "get-content",
-    "gc", "get-location", "gl", "select-string", "sls", "measure-object",
-    "get-item", "gi", "test-path", "resolve-path", "get-command", "gcm",
+    "dir",
+    "type",
+    "where",
+    "whereis",
+    "get-childitem",
+    "gci",
+    "get-content",
+    "gc",
+    "get-location",
+    "gl",
+    "select-string",
+    "sls",
+    "measure-object",
+    "get-item",
+    "gi",
+    "test-path",
+    "resolve-path",
+    "get-command",
+    "gcm",
     "get-process",
 ];
 
 /// Commands that reach the network. Always-ask in every acting tier.
 const NETWORK_BASES: &[&str] = &[
-    "curl", "wget", "ssh", "scp", "sftp", "rsync", "nc", "ncat", "netcat",
-    "telnet", "ftp", "tftp", "socat",
+    "curl",
+    "wget",
+    "ssh",
+    "scp",
+    "sftp",
+    "rsync",
+    "nc",
+    "ncat",
+    "netcat",
+    "telnet",
+    "ftp",
+    "tftp",
+    "socat",
     // Windows / PowerShell
-    "invoke-webrequest", "iwr", "invoke-restmethod", "irm", "start-bitstransfer",
+    "invoke-webrequest",
+    "iwr",
+    "invoke-restmethod",
+    "irm",
+    "start-bitstransfer",
     "bitsadmin",
 ];
 
@@ -560,15 +628,59 @@ const NETWORK_BASES: &[&str] = &[
 /// (`reg`/`net`/`sc`) — over-prompting there is the safe default.
 const DESTRUCTIVE_BASES: &[&str] = &[
     // POSIX privilege / disk / system-control
-    "sudo", "su", "doas", "dd", "mkfs", "fdisk", "sfdisk", "parted", "wipefs",
-    "shred", "shutdown", "reboot", "halt", "poweroff", "init", "telinit",
-    "mount", "umount", "swapoff", "iptables", "ip6tables", "nft", "ufw",
-    "firewall-cmd", "useradd", "userdel", "usermod", "groupadd", "groupdel",
-    "passwd", "chpasswd", "visudo", "modprobe", "insmod", "rmmod",
+    "sudo",
+    "su",
+    "doas",
+    "dd",
+    "mkfs",
+    "fdisk",
+    "sfdisk",
+    "parted",
+    "wipefs",
+    "shred",
+    "shutdown",
+    "reboot",
+    "halt",
+    "poweroff",
+    "init",
+    "telinit",
+    "mount",
+    "umount",
+    "swapoff",
+    "iptables",
+    "ip6tables",
+    "nft",
+    "ufw",
+    "firewall-cmd",
+    "useradd",
+    "userdel",
+    "usermod",
+    "groupadd",
+    "groupdel",
+    "passwd",
+    "chpasswd",
+    "visudo",
+    "modprobe",
+    "insmod",
+    "rmmod",
     // Windows / PowerShell
-    "format", "diskpart", "bcdedit", "takeown", "cipher", "vssadmin", "reg",
-    "regedit", "runas", "sc", "net", "set-executionpolicy", "stop-computer",
-    "restart-computer", "clear-disk", "format-volume", "remove-partition",
+    "format",
+    "diskpart",
+    "bcdedit",
+    "takeown",
+    "cipher",
+    "vssadmin",
+    "reg",
+    "regedit",
+    "runas",
+    "sc",
+    "net",
+    "set-executionpolicy",
+    "stop-computer",
+    "restart-computer",
+    "clear-disk",
+    "format-volume",
+    "remove-partition",
     "disable-computerrestore",
 ];
 
@@ -576,24 +688,42 @@ const DESTRUCTIVE_BASES: &[&str] = &[
 /// `commit`/`push`/`branch`/`config`/unknown/bare `git` — is fail-closed to
 /// `Write`.
 const GIT_READ_VERBS: &[&str] = &[
-    "status", "log", "diff", "show", "remote", "describe", "blame", "ls-files",
-    "ls-tree", "rev-parse", "cat-file", "shortlog", "reflog", "rev-list",
-    "name-rev", "var", "check-ignore", "check-attr", "verify-commit",
-    "count-objects", "fsck", "whatchanged", "grep", "version", "help",
+    "status",
+    "log",
+    "diff",
+    "show",
+    "remote",
+    "describe",
+    "blame",
+    "ls-files",
+    "ls-tree",
+    "rev-parse",
+    "cat-file",
+    "shortlog",
+    "reflog",
+    "rev-list",
+    "name-rev",
+    "var",
+    "check-ignore",
+    "check-attr",
+    "verify-commit",
+    "count-objects",
+    "fsck",
+    "whatchanged",
+    "grep",
+    "version",
+    "help",
 ];
 
 /// npm/pnpm/yarn read-only subcommands. `install`/`run`/`test`/`exec` (which
 /// run arbitrary scripts) and unknown verbs are fail-closed to `Write`.
 const NODE_PKG_READ_VERBS: &[&str] = &[
-    "ls", "list", "view", "info", "outdated", "ping", "whoami", "help", "why",
-    "audit", "doctor",
+    "ls", "list", "view", "info", "outdated", "ping", "whoami", "help", "why", "audit", "doctor",
 ];
 
 /// cargo read-only subcommands. `build`/`run`/`test`/`check` compile and may
 /// run build scripts, so they are fail-closed to `Write`.
-const CARGO_READ_VERBS: &[&str] = &[
-    "tree", "metadata", "search", "info", "version", "help",
-];
+const CARGO_READ_VERBS: &[&str] = &["tree", "metadata", "search", "info", "version", "help"];
 
 /// Detect a package-manager *install* invocation. These mutate the host /
 /// global environment, so they are the always-ask `Install` bucket (even in
@@ -626,9 +756,7 @@ fn is_install_command(base: &str, args: &[String]) -> bool {
 /// pattern matching. Fail-closed: an unrecognized base resolves to `Write`.
 fn classify_segment(base: &str, args: &[String], joined: &str) -> CommandClass {
     // Catastrophic patterns first — they win regardless of the base command.
-    if joined.contains("rm -rf /")
-        || joined.contains("rm -fr /")
-        || joined.contains(":(){:|:&};:")
+    if joined.contains("rm -rf /") || joined.contains("rm -fr /") || joined.contains(":(){:|:&};:")
     {
         return CommandClass::Destructive;
     }
@@ -1373,7 +1501,10 @@ impl SecurityPolicy {
         // Normalize separators + case BEFORE splitting: a Windows backslash
         // path is a single component on POSIX (and vice-versa), so we segment
         // the normalized string rather than rely on `Path::components()`.
-        let lc_path = path.to_string_lossy().to_ascii_lowercase().replace('\\', "/");
+        let lc_path = path
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .replace('\\', "/");
         let segments: Vec<&str> = lc_path.split('/').filter(|s| !s.is_empty()).collect();
 
         // (a) Credential stores — matched by path segment, location-independent
@@ -1396,12 +1527,19 @@ impl SecurityPolicy {
         // unlike the user-overridable `forbidden_paths`.
         const SYSTEM_PREFIXES: &[&str] = &[
             // POSIX
-            "/etc", "/root", "/boot", "/proc", "/sys",
+            "/etc",
+            "/root",
+            "/boot",
+            "/proc",
+            "/sys",
             // macOS (note: /private is intentionally NOT blocked — macOS temp
             // dirs and /etc canonicalize under /private/var and /private/etc).
             "/system",
             // Windows
-            "c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata",
+            "c:/windows",
+            "c:/program files",
+            "c:/program files (x86)",
+            "c:/programdata",
         ];
         SYSTEM_PREFIXES
             .iter()

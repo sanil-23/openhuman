@@ -517,7 +517,13 @@ mod tests {
             );
         }
         // Anything else is NOT an answer → caller cancels + redirects.
-        for other in ["maybe", "actually do Y instead", "", "yep nope", "sure thing"] {
+        for other in [
+            "maybe",
+            "actually do Y instead",
+            "",
+            "yep nope",
+            "sure thing",
+        ] {
             assert_eq!(super::parse_approval_reply(other), None, "{other}");
         }
     }
@@ -529,7 +535,9 @@ mod tests {
         let gate = Arc::new(gate);
         let g = gate.clone();
         let handle =
-            tokio::spawn(async move { g.intercept("shell", "run ls", serde_json::json!({})).await });
+            tokio::spawn(
+                async move { g.intercept("shell", "run ls", serde_json::json!({})).await },
+            );
         // Give it a moment to park, then confirm no thread mapping exists.
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(gate.pending_for_thread("thread-42").is_none());

@@ -1,8 +1,6 @@
 use crate::openhuman::agent::host_runtime::RuntimeAdapter;
 use crate::openhuman::javascript::NodeBootstrap;
-use crate::openhuman::security::{
-    AuditLogger, CommandExecutionLog, GateDecision, SecurityPolicy,
-};
+use crate::openhuman::security::{AuditLogger, CommandExecutionLog, GateDecision, SecurityPolicy};
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -619,16 +617,15 @@ mod tests {
         let tool = ShellTool::new(full, test_runtime(), test_audit());
         assert!(!tool.external_effect_with_args(&json!({"command": "touch f"})));
         // …but a self-declared `destructive` escalates it to a prompt.
-        assert!(tool.external_effect_with_args(
-            &json!({"command": "touch f", "category": "destructive"})
-        ));
+        assert!(tool
+            .external_effect_with_args(&json!({"command": "touch f", "category": "destructive"})));
         // The hint can never LOWER: declaring a destructive command "read"
         // still prompts (in any acting tier).
         let supervised = test_security(AutonomyLevel::Supervised);
         let stool = ShellTool::new(supervised, test_runtime(), test_audit());
-        assert!(stool.external_effect_with_args(
-            &json!({"command": "sudo reboot", "category": "read"})
-        ));
+        assert!(
+            stool.external_effect_with_args(&json!({"command": "sudo reboot", "category": "read"}))
+        );
     }
 
     // ── §5.2 Shell timeout enforcement tests ─────────────────
