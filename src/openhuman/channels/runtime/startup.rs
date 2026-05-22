@@ -39,7 +39,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-pub async fn start_channels(config: Config) -> Result<()> {
+pub async fn start_channels(mut config: Config) -> Result<()> {
     // Initialize the global event bus singleton and register the tracing
     // subscriber for debug logging of all domain events.
     let bus = event_bus::init_global(DEFAULT_CAPACITY);
@@ -176,6 +176,33 @@ pub async fn start_channels(config: Config) -> Result<()> {
 
     let runtime: Arc<dyn host_runtime::RuntimeAdapter> =
         Arc::from(host_runtime::create_runtime(&config.runtime)?);
+    // Ensure the agent's default projects home (~/OpenHuman/projects) exists and
+    // is a read-write trusted root, so the coding agent creates/edits projects
+    // there freely — distinct from the hidden internal workspace dir. A user who
+    // has already granted it (or any other root) is left untouched.
+    {
+        use crate::openhuman::security::{TrustedAccess, TrustedRoot};
+        let projects_dir = crate::openhuman::config::default_projects_dir();
+        if let Err(e) = tokio::fs::create_dir_all(&projects_dir).await {
+            tracing::warn!(
+                dir = %projects_dir.display(),
+                error = %e,
+                "[startup] could not create default projects dir"
+            );
+        }
+        let projects_path = projects_dir.to_string_lossy().to_string();
+        if !config
+            .autonomy
+            .trusted_roots
+            .iter()
+            .any(|r| r.path == projects_path)
+        {
+            config.autonomy.trusted_roots.push(TrustedRoot {
+                path: projects_path,
+                access: TrustedAccess::ReadWrite,
+            });
+        }
+    }
     // Install as the process-global live policy so runtime autonomy changes
     // (config.update_autonomy_settings) are reflected by `live_policy::current()`
     // and picked up by the next session.

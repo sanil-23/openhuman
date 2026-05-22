@@ -1,7 +1,7 @@
 use crate::openhuman::agent::host_runtime::RuntimeAdapter;
 use crate::openhuman::javascript::NodeBootstrap;
 use crate::openhuman::security::{
-    AuditLogger, CommandClass, CommandExecutionLog, GateDecision, SecurityPolicy,
+    AuditLogger, CommandExecutionLog, GateDecision, SecurityPolicy,
 };
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
 use async_trait::async_trait;
@@ -292,7 +292,7 @@ impl ShellTool {
 mod tests {
     use super::*;
     use crate::openhuman::agent::host_runtime::{NativeRuntime, RuntimeAdapter};
-    use crate::openhuman::security::{AutonomyLevel, SecurityPolicy};
+    use crate::openhuman::security::{AutonomyLevel, CommandClass, SecurityPolicy};
 
     fn test_security(autonomy: AutonomyLevel) -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
