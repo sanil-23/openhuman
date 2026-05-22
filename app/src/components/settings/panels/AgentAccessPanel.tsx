@@ -22,25 +22,27 @@ interface PresetOption {
 const PRESETS: PresetOption[] = [
   {
     id: 'readonly',
-    title: 'Read-Only',
-    description: 'The agent can read and explore but never write, edit, or run commands.',
+    title: 'Read-only',
+    description:
+      'Reads files and runs read-only commands to explore — but never writes, edits, or runs anything that changes state.',
   },
   {
     id: 'workspace',
-    title: 'Workspace',
-    description: 'Read + write inside the workspace only. Nothing outside is reachable.',
+    title: 'Ask before edit',
+    description:
+      'Creates new files freely in the workspace, but asks for your approval before editing an existing file, running a command, reaching the network, or installing anything.',
   },
   {
     id: 'trusted',
-    title: 'Trusted Roots',
+    title: 'Ask before edit + granted folders',
     description:
-      'Workspace access plus the specific folders you grant below. Everything else stays blocked.',
+      'Same as “Ask before edit”, plus the specific folders you grant below. Everything else outside the workspace stays blocked.',
   },
   {
     id: 'full',
-    title: 'Full Access',
+    title: 'Full access',
     description:
-      'Read/write anywhere except credential stores, and may install OS packages. Highest impact.',
+      'Runs commands with your full user account access, unconfined — it can read/write anywhere your user can, except credential and system stores. Destructive commands, network access, and installs still ask for approval.',
   },
 ];
 
@@ -219,6 +221,14 @@ const AgentAccessPanel = () => {
                     Custom configuration (set via Advanced or config.toml).
                   </p>
                 )}
+                {activePreset === 'full' && (
+                  <p className="rounded border border-coral/40 bg-coral/5 p-2 text-xs text-coral">
+                    ⚠ Full access runs commands with your full account access and is{' '}
+                    <strong>not sandboxed</strong>. Only enable it when you trust the agent with
+                    this machine. Credential and system directories stay blocked, and destructive,
+                    network, and install actions still ask for approval.
+                  </p>
+                )}
               </div>
             </section>
 
@@ -228,8 +238,9 @@ const AgentAccessPanel = () => {
                 Granted folders (outside workspace)
               </h2>
               <p className="text-xs text-ink-soft">
-                Each folder is reachable in addition to the workspace. Credential dirs (~/.ssh,
-                ~/.gnupg, ~/.aws) are always blocked, even inside a granted folder.
+                Each folder is reachable in addition to the workspace. Credential stores (~/.ssh,
+                ~/.gnupg, ~/.aws, keychains) and system directories (/etc, /System, C:\Windows, …)
+                are always blocked, even inside a granted folder.
               </p>
               {trustedRoots.length === 0 ? (
                 <p className="text-xs text-ink-soft">No folders granted.</p>
