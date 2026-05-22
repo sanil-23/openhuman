@@ -59,6 +59,20 @@ tokio::task_local! {
     pub static APPROVAL_CHAT_CONTEXT: ApprovalChatContext;
 }
 
+/// Parse a chat reply to a parked approval into a binary decision (v1). Only an
+/// explicit yes/no answer maps to a decision; anything else returns `None` — the
+/// web channel treats `None` as "not an answer", cancels the parked turn, and
+/// dispatches the message as a fresh user turn (so the user can redirect).
+pub fn parse_approval_reply(message: &str) -> Option<ApprovalDecision> {
+    match message.trim().to_ascii_lowercase().as_str() {
+        "yes" | "y" | "ok" | "okay" | "approve" | "approved" | "allow" => {
+            Some(ApprovalDecision::ApproveOnce)
+        }
+        "no" | "n" | "deny" | "denied" => Some(ApprovalDecision::Deny),
+        _ => None,
+    }
+}
+
 static GLOBAL_GATE: OnceLock<Arc<ApprovalGate>> = OnceLock::new();
 
 /// Coordinator for pending approvals.
@@ -484,6 +498,28 @@ mod tests {
 
         // Mapping is cleared once intercept returns.
         assert!(gate.pending_for_thread("thread-42").is_none());
+    }
+
+    #[test]
+    fn parse_approval_reply_maps_yes_no_and_rejects_other() {
+        for y in ["yes", "Y", " OK ", "approve", "Allow", "okay"] {
+            assert_eq!(
+                super::parse_approval_reply(y),
+                Some(ApprovalDecision::ApproveOnce),
+                "{y}"
+            );
+        }
+        for n in ["no", "N", "deny", "Denied"] {
+            assert_eq!(
+                super::parse_approval_reply(n),
+                Some(ApprovalDecision::Deny),
+                "{n}"
+            );
+        }
+        // Anything else is NOT an answer → caller cancels + redirects.
+        for other in ["maybe", "actually do Y instead", "", "yep nope", "sure thing"] {
+            assert_eq!(super::parse_approval_reply(other), None, "{other}");
+        }
     }
 
     #[tokio::test]

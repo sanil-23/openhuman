@@ -2,11 +2,14 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock};
 use tokio::sync::{broadcast, Mutex};
 use uuid::Uuid;
 
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::event_bus::{DomainEvent, EventHandler, SubscriptionHandle};
 use crate::core::socketio::{SubagentProgressDetail, WebChannelEvent};
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
 use crate::openhuman::agent::profiles::{AgentProfile, AgentProfileStore, DEFAULT_PROFILE_ID};
@@ -32,6 +35,68 @@ pub fn subscribe_web_channel_events() -> broadcast::Receiver<WebChannelEvent> {
 
 pub fn publish_web_channel_event(event: WebChannelEvent) {
     let _ = EVENT_BUS.send(event);
+}
+
+static APPROVAL_SURFACE_HANDLE: OnceLock<SubscriptionHandle> = OnceLock::new();
+
+/// Bridge a parked `ApprovalGate` request onto the web channel. When the gate
+/// publishes `ApprovalRequested` carrying a chat thread/client (set via the
+/// per-turn `ApprovalChatContext`), surface the "run X? (yes/no)" question as an
+/// `approval_request` event on that thread so the user can answer in chat.
+/// Idempotent. No-op for non-chat approvals (thread/client id absent).
+pub fn register_approval_surface_subscriber() {
+    if APPROVAL_SURFACE_HANDLE.get().is_some() {
+        return;
+    }
+    match crate::core::event_bus::subscribe_global(Arc::new(ApprovalSurfaceSubscriber)) {
+        Some(handle) => {
+            let _ = APPROVAL_SURFACE_HANDLE.set(handle);
+        }
+        None => {
+            log::warn!(
+                "[web-channel] failed to register approval-surface subscriber — bus not initialized"
+            );
+        }
+    }
+}
+
+struct ApprovalSurfaceSubscriber;
+
+#[async_trait]
+impl EventHandler for ApprovalSurfaceSubscriber {
+    fn name(&self) -> &str {
+        "channels::web::approval_surface"
+    }
+
+    fn domains(&self) -> Option<&[&str]> {
+        Some(&["approval"])
+    }
+
+    async fn handle(&self, event: &DomainEvent) {
+        if let DomainEvent::ApprovalRequested {
+            request_id,
+            tool_name,
+            action_summary,
+            thread_id: Some(thread_id),
+            client_id: Some(client_id),
+            ..
+        } = event
+        {
+            let question = format!(
+                "I'd like to run `{tool_name}` — {action_summary}. Reply **yes** to allow or \
+                 **no** to deny (anything else cancels this and lets you redirect me)."
+            );
+            publish_web_channel_event(WebChannelEvent {
+                event: "approval_request".to_string(),
+                client_id: client_id.clone(),
+                thread_id: thread_id.clone(),
+                request_id: request_id.clone(),
+                tool_name: Some(tool_name.clone()),
+                message: Some(question),
+                ..Default::default()
+            });
+        }
+    }
 }
 
 /// All inputs that the cached `SessionEntry`'s `Agent` was built from,
@@ -514,6 +579,26 @@ pub async fn start_chat(
             prompt_decision.prompt_chars,
         );
         return Err(prompt_guard_user_message(prompt_decision.action).to_string());
+    }
+
+    // Chat-native approval: if this thread has a parked approval and the message
+    // is a yes/no reply, route it to the gate (resuming the parked turn) rather
+    // than starting a new turn — which would cancel the parked approval. Any
+    // other text falls through to the normal path below, which cancels the
+    // in-flight turn and dispatches the message fresh (the intended "redirect").
+    if let Some(gate) = crate::openhuman::approval::ApprovalGate::try_global() {
+        if let Some(request_id) = gate.pending_for_thread(&thread_id) {
+            if let Some(decision) = crate::openhuman::approval::parse_approval_reply(&message) {
+                let _ = gate.decide(&request_id, decision);
+                log::info!(
+                    "[web-channel] routed chat reply to approval gate thread_id={} request_id={} decision={}",
+                    thread_id,
+                    request_id,
+                    decision.as_str()
+                );
+                return Ok(request_id);
+            }
+        }
     }
 
     let map_key = key_for(&thread_id);
