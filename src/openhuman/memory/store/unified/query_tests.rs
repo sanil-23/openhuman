@@ -6,7 +6,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use crate::openhuman::embeddings::NoopEmbedding;
-use crate::openhuman::memory::{NamespaceDocumentInput, UnifiedMemory};
+use crate::openhuman::memory::{Memory, NamespaceDocumentInput, UnifiedMemory};
 
 #[tokio::test]
 async fn graph_duplicate_upsert_aggregates_evidence_count() {
@@ -585,5 +585,92 @@ async fn vector_recall_skips_dimension_mismatch_for_untagged_rows() {
     assert!(
         scores.is_empty(),
         "dimension-mismatched legacy vectors must be skipped, not scored 0"
+    );
+}
+
+// ── recall_relevant_by_vector — Lane B situational-pref relevance gate ─────────
+
+/// Embedder whose vector depends on keywords in the text, so a query can be
+/// genuinely relevant (high cosine) or irrelevant (zero) to a stored pref.
+struct KeywordEmbedder;
+
+#[async_trait]
+impl EmbeddingProvider for KeywordEmbedder {
+    fn name(&self) -> &str {
+        "keyword-stub"
+    }
+    fn model_id(&self) -> &str {
+        "keyword-stub"
+    }
+    fn dimensions(&self) -> usize {
+        2
+    }
+    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Ok(texts
+            .iter()
+            .map(|t| {
+                let lower = t.to_lowercase();
+                vec![
+                    if lower.contains("rust") { 1.0 } else { 0.0 },
+                    if lower.contains("email") { 1.0 } else { 0.0 },
+                ]
+            })
+            .collect())
+    }
+}
+
+fn situational_doc(key: &str, content: &str) -> NamespaceDocumentInput {
+    NamespaceDocumentInput {
+        namespace: "user_pref_situational".to_string(),
+        key: key.to_string(),
+        title: key.to_string(),
+        content: content.to_string(),
+        source_type: "pref".to_string(),
+        priority: "medium".to_string(),
+        tags: vec![],
+        metadata: json!({}),
+        category: "core".to_string(),
+        session_id: None,
+        document_id: None,
+    }
+}
+
+#[tokio::test]
+async fn recall_relevant_by_vector_gates_on_similarity() {
+    let tmp = TempDir::new().unwrap();
+    let memory = UnifiedMemory::new(tmp.path(), Arc::new(KeywordEmbedder), None).unwrap();
+
+    // Two situational prefs that embed onto orthogonal axes.
+    memory
+        .upsert_document(situational_doc(
+            "rust_style",
+            "When writing rust, prefer explicit error handling.",
+        ))
+        .await
+        .unwrap();
+    memory
+        .upsert_document(situational_doc(
+            "email_tone",
+            "Be formal in email to my manager.",
+        ))
+        .await
+        .unwrap();
+
+    // A rust-related message recalls only the rust pref.
+    let hits = memory
+        .recall_relevant_by_vector("user_pref_situational", "help me with my rust code", 5, 0.5)
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1, "only the relevant pref should pass the gate");
+    assert!(hits[0].contains("explicit error handling"));
+
+    // An unrelated message clears the gate to nothing — no block injected.
+    let none = memory
+        .recall_relevant_by_vector("user_pref_situational", "what is the weather today", 5, 0.5)
+        .await
+        .unwrap();
+    assert!(
+        none.is_empty(),
+        "an unrelated message must surface no situational preferences"
     );
 }

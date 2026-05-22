@@ -334,7 +334,7 @@ impl Agent {
         // Gate: `learning.stm_recall_enabled` must be true AND this must
         // be the first turn (STM is snapshot-frozen at session start).
         // Failure is non-fatal — bare `context` passes through untouched.
-        let context = if is_first_turn_for_stm {
+        let mut context = if is_first_turn_for_stm {
             // Load config to check the gate. Use a cached load (cheap).
             let stm_enabled = crate::openhuman::config::rpc::load_config_with_timeout()
                 .await
@@ -387,6 +387,38 @@ impl Agent {
         } else {
             context
         };
+
+        // ── Lane B: situational preferences (every turn) ─────────────────────
+        // Recall topic-scoped preferences semantically relevant to THIS message
+        // (model-aware embeddings, gated by vector similarity) and inject them
+        // under a banner. Runs every turn — unlike the first-turn-gated tree/STM
+        // blocks above — because the query changes per message; it rides the
+        // per-turn context that's prepended to the user message (no KV-cache
+        // cost). An unrelated message clears the similarity gate to nothing, so
+        // no block is injected.
+        {
+            let situational =
+                crate::openhuman::memory::preferences::recall_situational_preferences(
+                    &self.memory,
+                    user_message,
+                )
+                .await;
+            if !situational.is_empty() {
+                log::info!(
+                    "[pref_recall] situational block injected: {} item(s)",
+                    situational.len()
+                );
+                context.push_str("## Relevant preferences for this message\n\n");
+                for pref in &situational {
+                    context.push_str("- ");
+                    context.push_str(pref.trim());
+                    context.push('\n');
+                }
+                context.push('\n');
+            } else {
+                log::debug!("[pref_recall] no situational preference relevant to this message");
+            }
+        }
 
         let enriched = if context.is_empty() {
             log::info!("[agent] no memory context found — using raw user message");

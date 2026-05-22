@@ -49,3 +49,33 @@ pub async fn load_general_preferences(memory: &Arc<dyn Memory>, limit: usize) ->
     }
     out
 }
+
+/// Top-K situational preferences to recall per turn (Lane B).
+pub const SITUATIONAL_RECALL_LIMIT: usize = 5;
+
+/// Minimum query↔preference vector similarity for a situational preference to be
+/// injected. Below this the current message isn't considered relevant to the
+/// preference, so nothing is injected (the "unrelated query → no block"
+/// behaviour). Tunable against live data.
+pub const SITUATIONAL_MIN_SIMILARITY: f64 = 0.35;
+
+/// Recall situational preferences semantically relevant to `query` (Lane B).
+///
+/// Returns only preferences whose vector similarity to the message clears
+/// [`SITUATIONAL_MIN_SIMILARITY`], so an unrelated message yields an empty list
+/// (and no injected block). Uses the model-aware embedding recall, so a stale
+/// embedding-model signature is excluded rather than mis-scored.
+pub async fn recall_situational_preferences(memory: &Arc<dyn Memory>, query: &str) -> Vec<String> {
+    if query.trim().is_empty() {
+        return Vec::new();
+    }
+    memory
+        .recall_relevant_by_vector(
+            USER_PREF_SITUATIONAL_NAMESPACE,
+            query,
+            SITUATIONAL_RECALL_LIMIT,
+            SITUATIONAL_MIN_SIMILARITY,
+        )
+        .await
+        .unwrap_or_default()
+}
