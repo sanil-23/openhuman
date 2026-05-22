@@ -28,12 +28,14 @@ struct HandshakeAuth {
 
 /// Origins the local core trusts at the Socket.IO handshake.
 ///
-/// `tauri://localhost` is the production app webview; `http://localhost:*`
-/// and `http://127.0.0.1:*` cover the Vite dev server (`pnpm dev:app`)
-/// and standalone CLI tooling that opens browser pages against the local
-/// listener. A missing `Origin` header is treated as a native (non-browser)
-/// client and accepted — only the cross-origin browser-page case is the
-/// targeted bad actor here.
+/// `tauri://localhost` is the macOS production app webview; the Windows/CEF
+/// webview presents the custom scheme over HTTP/HTTPS as `tauri.localhost`,
+/// so both `http://tauri.localhost` and `https://tauri.localhost` are trusted.
+/// `http://localhost:*` and `http://127.0.0.1:*` cover the Vite dev server
+/// (`pnpm dev:app`) and standalone CLI tooling that opens browser pages against
+/// the local listener. A missing `Origin` header is treated as a native
+/// (non-browser) client and accepted — only the cross-origin browser-page case
+/// is the targeted bad actor here.
 fn origin_is_allowed(origin: Option<&str>) -> bool {
     let Some(origin) = origin else {
         return true; // native clients (CLI, Tauri shell) — no Origin header
@@ -42,7 +44,10 @@ fn origin_is_allowed(origin: Option<&str>) -> bool {
     if origin.is_empty() || origin == "null" {
         return false;
     }
-    if origin == "tauri://localhost" || origin == "https://tauri.localhost" {
+    if origin == "tauri://localhost"
+        || origin == "https://tauri.localhost"
+        || origin == "http://tauri.localhost"
+    {
         return true;
     }
     // Parse the URL and compare the host EXACTLY against the loopback
@@ -755,6 +760,8 @@ mod tests {
     fn origin_allowlist_accepts_tauri_localhost() {
         assert!(origin_is_allowed(Some("tauri://localhost")));
         assert!(origin_is_allowed(Some("https://tauri.localhost")));
+        // Windows/CEF webview presents the custom scheme over HTTP (#2331 gap).
+        assert!(origin_is_allowed(Some("http://tauri.localhost")));
     }
 
     #[test]
