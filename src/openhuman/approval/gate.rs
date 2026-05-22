@@ -42,6 +42,23 @@ use super::types::{ApprovalDecision, GateOutcome, PendingApproval};
 /// written into the persisted row.
 const DEFAULT_APPROVAL_TTL: Duration = Duration::from_secs(60 * 10);
 
+/// Per-turn chat context for routing a parked approval's yes/no reply back to
+/// the originating thread. The web channel scopes this task-local around the
+/// agent run (`channels::providers::web`); because the `run_turn` handler, the
+/// tool loop, and `intercept` all run inline (`.await`) within that spawned
+/// task, it propagates down to `intercept` with no signature plumbing. Absent
+/// for non-chat callers (CLI, sub-agents) — their approvals are simply not
+/// chat-routable.
+#[derive(Clone, Debug)]
+pub struct ApprovalChatContext {
+    pub thread_id: String,
+    pub client_id: String,
+}
+
+tokio::task_local! {
+    pub static APPROVAL_CHAT_CONTEXT: ApprovalChatContext;
+}
+
 static GLOBAL_GATE: OnceLock<Arc<ApprovalGate>> = OnceLock::new();
 
 /// Coordinator for pending approvals.
@@ -51,6 +68,11 @@ pub struct ApprovalGate {
     ttl: Duration,
     waiters: Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>,
     always_allowlist: Mutex<HashSet<String>>,
+    /// thread_id → request_id for the approval currently parked on that chat
+    /// thread, so the web channel can route a yes/no reply to `approval_decide`.
+    /// In-memory only (session-scoped — a parked approval doesn't survive a
+    /// restart, and the oneshot waiter is in-memory anyway).
+    thread_to_request: Mutex<HashMap<String, String>>,
 }
 
 impl ApprovalGate {
@@ -87,6 +109,7 @@ impl ApprovalGate {
             ttl,
             waiters: Mutex::new(HashMap::new()),
             always_allowlist: Mutex::new(HashSet::new()),
+            thread_to_request: Mutex::new(HashMap::new()),
         }
     }
 
@@ -111,6 +134,12 @@ impl ApprovalGate {
             }
         }
 
+        // Chat context (thread/client id) for routing the yes/no reply — set by
+        // the web channel around the agent run; absent for non-chat callers.
+        let chat_ctx = APPROVAL_CHAT_CONTEXT.try_with(|c| c.clone()).ok();
+        let chat_thread_id = chat_ctx.as_ref().map(|c| c.thread_id.clone());
+        let chat_client_id = chat_ctx.as_ref().map(|c| c.client_id.clone());
+
         let request_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
         let expires_at = Some(now + chrono::Duration::from_std(self.ttl).unwrap_or_default());
@@ -134,9 +163,17 @@ impl ApprovalGate {
             let mut waiters = self.waiters.lock();
             waiters.insert(request_id.clone(), tx);
         }
+        // Record the thread → request mapping so an inbound chat reply on this
+        // thread can be routed to `approval_decide` (see web channel ingress).
+        if let Some(thread_id) = chat_thread_id.as_ref() {
+            self.thread_to_request
+                .lock()
+                .insert(thread_id.clone(), request_id.clone());
+        }
 
         if let Err(err) = store::insert_pending(&self.config, &pending) {
             self.evict_waiter(&request_id);
+            self.clear_thread(&chat_thread_id);
             tracing::error!(
                 error = %err,
                 tool = tool_name,
@@ -155,6 +192,8 @@ impl ApprovalGate {
             action_summary: action_summary.to_string(),
             args_redacted,
             session_id: self.session_id.clone(),
+            thread_id: chat_thread_id.clone(),
+            client_id: chat_client_id.clone(),
         });
 
         tracing::info!(
@@ -163,7 +202,7 @@ impl ApprovalGate {
             "[approval::gate] tool call parked, waiting for decision"
         );
 
-        match tokio::time::timeout(self.ttl, rx).await {
+        let outcome = match tokio::time::timeout(self.ttl, rx).await {
             Ok(Ok(decision)) => {
                 tracing::info!(
                     request_id = %request_id,
@@ -210,7 +249,11 @@ impl ApprovalGate {
                     ),
                 }
             }
-        }
+        };
+        // The thread routing mapping is only needed while parked; clear it on
+        // every exit (decision, channel drop, or timeout).
+        self.clear_thread(&chat_thread_id);
+        outcome
     }
 
     /// Apply a user decision. Returns the now-decided
@@ -267,6 +310,19 @@ impl ApprovalGate {
     fn evict_waiter(&self, request_id: &str) {
         let mut waiters = self.waiters.lock();
         waiters.remove(request_id);
+    }
+
+    /// The request_id of the approval currently parked on `thread_id`, if any.
+    /// Used by the web channel to route an inbound yes/no reply to a decision.
+    pub fn pending_for_thread(&self, thread_id: &str) -> Option<String> {
+        self.thread_to_request.lock().get(thread_id).cloned()
+    }
+
+    /// Drop the thread → request mapping (best-effort; no-op when absent).
+    fn clear_thread(&self, thread_id: &Option<String>) {
+        if let Some(t) = thread_id {
+            self.thread_to_request.lock().remove(t);
+        }
     }
 }
 
@@ -391,5 +447,57 @@ mod tests {
             .decide("does-not-exist", ApprovalDecision::ApproveOnce)
             .unwrap();
         assert!(decided.is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_for_thread_tracks_request_under_chat_context_and_clears() {
+        let (gate, _dir) = test_gate();
+        let gate = Arc::new(gate);
+
+        // Run intercept inside a scoped chat context (as the web channel does).
+        let g = gate.clone();
+        let ctx = ApprovalChatContext {
+            thread_id: "thread-42".into(),
+            client_id: "client-1".into(),
+        };
+        let handle = tokio::spawn(async move {
+            APPROVAL_CHAT_CONTEXT
+                .scope(ctx, g.intercept("shell", "run ls", serde_json::json!({})))
+                .await
+        });
+
+        // While parked, the thread → request mapping is queryable.
+        let mut tries = 0;
+        let request_id = loop {
+            if let Some(r) = gate.pending_for_thread("thread-42") {
+                break r;
+            }
+            tries += 1;
+            assert!(tries < 50, "thread mapping never appeared");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+
+        // Decide via the mapped request_id (as the chat ingress router will).
+        gate.decide(&request_id, ApprovalDecision::ApproveOnce)
+            .unwrap();
+        assert!(matches!(handle.await.unwrap(), GateOutcome::Allow));
+
+        // Mapping is cleared once intercept returns.
+        assert!(gate.pending_for_thread("thread-42").is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_for_thread_is_none_without_chat_context() {
+        // Non-chat callers (CLI/sub-agent) park without a context → not routable.
+        let (gate, _dir) = test_gate();
+        let gate = Arc::new(gate);
+        let g = gate.clone();
+        let handle =
+            tokio::spawn(async move { g.intercept("shell", "run ls", serde_json::json!({})).await });
+        // Give it a moment to park, then confirm no thread mapping exists.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(gate.pending_for_thread("thread-42").is_none());
+        // Let it time out (test TTL is 500ms) so the task finishes.
+        let _ = handle.await.unwrap();
     }
 }

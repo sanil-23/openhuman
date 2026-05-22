@@ -556,17 +556,30 @@ pub async fn start_chat(
 
     let user_message = message.clone();
     let handle = tokio::spawn(async move {
-        let result = run_chat_task(
-            &client_id_task,
-            &thread_id_task,
-            &request_id_task,
-            &user_message,
-            model_override,
-            temperature,
-            profile_id,
-            locale,
-        )
-        .await;
+        // Scope the per-turn approval chat context so a parked `ApprovalGate`
+        // request (raised deep in the tool loop, which runs inline in this same
+        // task) carries the thread/client id — letting a yes/no chat reply be
+        // routed back to `approval_decide`. No sub-task is spawned between here
+        // and `intercept`, so the task-local propagates.
+        let approval_ctx = crate::openhuman::approval::ApprovalChatContext {
+            thread_id: thread_id_task.clone(),
+            client_id: client_id_task.clone(),
+        };
+        let result = crate::openhuman::approval::APPROVAL_CHAT_CONTEXT
+            .scope(
+                approval_ctx,
+                run_chat_task(
+                    &client_id_task,
+                    &thread_id_task,
+                    &request_id_task,
+                    &user_message,
+                    model_override,
+                    temperature,
+                    profile_id,
+                    locale,
+                ),
+            )
+            .await;
 
         match result {
             Ok(chat_result) => {
