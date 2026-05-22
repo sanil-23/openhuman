@@ -78,4 +78,42 @@ pub async fn recall_situational_preferences(memory: &Arc<dyn Memory>, query: &st
         )
         .await
         .unwrap_or_default()
+        .into_iter()
+        .map(|(_topic, value)| value)
+        .collect()
+}
+
+/// Minimum similarity for an existing preference to be flagged as a possible
+/// contradiction of a newly-saved one. Higher than the Lane-B recall floor — we
+/// only surface genuinely-close matches as contradiction candidates. Tunable.
+pub const CONTRADICTION_SIMILARITY: f64 = 0.6;
+
+/// Find existing preferences (across both lanes) semantically close to `value`,
+/// excluding `exclude_topic` (the just-saved one). Returns `(topic, value)`
+/// pairs so the chat agent — which captured the preference in the first place —
+/// can resolve a contradiction itself: overwrite the conflicting topic or remove
+/// it. No separate model call; the conversation affirms it.
+pub async fn recall_related_preferences(
+    memory: &Arc<dyn Memory>,
+    value: &str,
+    exclude_topic: &str,
+    limit: usize,
+) -> Vec<(String, String)> {
+    if value.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for ns in [USER_PREF_GENERAL_NAMESPACE, USER_PREF_SITUATIONAL_NAMESPACE] {
+        if let Ok(hits) = memory
+            .recall_relevant_by_vector(ns, value, limit, CONTRADICTION_SIMILARITY)
+            .await
+        {
+            for (topic, val) in hits {
+                if topic != exclude_topic {
+                    out.push((topic, val));
+                }
+            }
+        }
+    }
+    out
 }

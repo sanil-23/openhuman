@@ -176,3 +176,98 @@ async fn recategorising_moves_pref_between_namespaces() {
         "the general-scope copy must be cleared when re-categorised"
     );
 }
+
+// ── Contradiction surfacing (chat-affirmed) ──────────────────────────────────
+
+use async_trait::async_trait;
+
+/// Keyword-sensitive embedder so prefs about the same theme embed close together
+/// (high cosine) and unrelated ones don't.
+struct KwEmbedder;
+
+#[async_trait]
+impl crate::openhuman::embeddings::EmbeddingProvider for KwEmbedder {
+    fn name(&self) -> &str {
+        "kw"
+    }
+    fn model_id(&self) -> &str {
+        "kw"
+    }
+    fn dimensions(&self) -> usize {
+        2
+    }
+    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Ok(texts
+            .iter()
+            .map(|t| {
+                let l = t.to_lowercase();
+                vec![
+                    if l.contains("terse") || l.contains("verbose") || l.contains("detail") {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    if l.contains("rust") { 1.0 } else { 0.0 },
+                ]
+            })
+            .collect())
+    }
+}
+
+fn kw_mem() -> (TempDir, Arc<dyn Memory>) {
+    let tmp = TempDir::new().unwrap();
+    let mem = UnifiedMemory::new(tmp.path(), Arc::new(KwEmbedder), None).unwrap();
+    (tmp, Arc::new(mem))
+}
+
+#[tokio::test]
+async fn save_surfaces_related_preference_for_contradiction_check() {
+    let (_tmp, mem) = kw_mem();
+    let tool = SavePreferenceTool::new(mem.clone(), test_security());
+
+    tool.execute(json!({"topic": "verbosity", "value": "always be terse", "category": "general"}))
+        .await
+        .unwrap();
+
+    // A semantically-related pref under a different topic.
+    let r = tool
+        .execute(json!({
+            "topic": "explanation_style",
+            "value": "give detailed verbose explanations",
+            "category": "general"
+        }))
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    assert!(
+        r.output().contains("verbosity") && r.output().contains("always be terse"),
+        "expected the related pref to be surfaced for a contradiction check, got: {}",
+        r.output()
+    );
+}
+
+#[tokio::test]
+async fn save_unrelated_preference_surfaces_nothing() {
+    let (_tmp, mem) = kw_mem();
+    let tool = SavePreferenceTool::new(mem.clone(), test_security());
+
+    tool.execute(json!({"topic": "verbosity", "value": "always be terse", "category": "general"}))
+        .await
+        .unwrap();
+
+    // An unrelated pref (rust) — no contradiction note.
+    let r = tool
+        .execute(json!({
+            "topic": "rust_edition",
+            "value": "use rust 2021 edition",
+            "category": "situational"
+        }))
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    assert!(
+        !r.output().contains("check for contradictions"),
+        "an unrelated pref should surface no related prefs, got: {}",
+        r.output()
+    );
+}

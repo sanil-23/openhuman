@@ -662,7 +662,8 @@ async fn recall_relevant_by_vector_gates_on_similarity() {
         .await
         .unwrap();
     assert_eq!(hits.len(), 1, "only the relevant pref should pass the gate");
-    assert!(hits[0].contains("explicit error handling"));
+    assert_eq!(hits[0].0, "rust_style");
+    assert!(hits[0].1.contains("explicit error handling"));
 
     // An unrelated message clears the gate to nothing — no block injected.
     let none = memory

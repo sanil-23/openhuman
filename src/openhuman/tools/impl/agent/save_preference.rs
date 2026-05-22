@@ -244,10 +244,35 @@ impl Tool for SavePreferenceTool {
                     topic,
                     category.as_str()
                 );
-                Ok(ToolResult::success(format!(
-                    "Saved {} preference: {topic} = {value}",
-                    category.as_str()
-                )))
+                // Surface semantically-related existing preferences so the chat
+                // agent (which captured this preference) can spot and resolve a
+                // contradiction itself — no separate model call.
+                let related = crate::openhuman::memory::preferences::recall_related_preferences(
+                    &self.memory,
+                    value,
+                    topic,
+                    4,
+                )
+                .await;
+                let mut msg = format!("Saved {} preference: {topic} = {value}", category.as_str());
+                if !related.is_empty() {
+                    tracing::info!(
+                        "[tool][save_preference] {} related preference(s) surfaced for contradiction check",
+                        related.len()
+                    );
+                    msg.push_str(
+                        "\n\nExisting preferences related to this one — check for contradictions:",
+                    );
+                    for (other_topic, other_value) in &related {
+                        msg.push_str(&format!("\n- {other_topic}: {other_value}"));
+                    }
+                    msg.push_str(
+                        "\n\nIf any of these conflicts with what was just saved, resolve it now: \
+                         overwrite that topic with save_preference, or remove it with memory_forget. \
+                         Otherwise leave them as-is.",
+                    );
+                }
+                Ok(ToolResult::success(msg))
             }
             Err(e) => {
                 tracing::error!(

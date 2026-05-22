@@ -262,7 +262,7 @@ impl Memory for UnifiedMemory {
         query: &str,
         limit: usize,
         min_vector_similarity: f64,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> anyhow::Result<Vec<(String, String)>> {
         let hits = self
             .query_namespace_hits(namespace, query, limit as u32)
             .await
@@ -270,8 +270,8 @@ impl Memory for UnifiedMemory {
         Ok(hits
             .into_iter()
             .filter(|h| h.score_breakdown.vector_similarity >= min_vector_similarity)
-            .map(|h| h.content)
-            .filter(|c| !c.trim().is_empty())
+            .filter(|h| !h.content.trim().is_empty())
+            .map(|h| (h.key, h.content))
             .collect())
     }
 
