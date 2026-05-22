@@ -792,7 +792,7 @@ async fn execute_tool_call_applies_inline_result_budget() {
 // flag combinations:
 //  1. both flags off   → empty context
 //  2. explicit_preferences_enabled=true, learning_enabled=false
-//     → only pinned user_profile entries returned, no inference data
+//     → only general user_pref entries returned, no inference data
 //  3. learning_enabled=true  → full path (existing tests cover this; we only
 //     verify that explicit entries are included as well)
 //
@@ -860,24 +860,26 @@ async fn fetch_learned_context_returns_empty_when_both_flags_off() {
 }
 
 #[tokio::test]
-async fn fetch_learned_context_returns_pinned_prefs_when_explicit_flag_on_learning_off() {
+async fn fetch_learned_context_returns_general_prefs_when_explicit_flag_on_learning_off() {
     let tmp = tempfile::TempDir::new().unwrap();
     let mem = make_real_memory(tmp.path());
 
-    // Store two pinned preferences via the same key format RememberPreferenceTool uses.
+    // Store two general preferences in the two-lane store (where save_preference
+    // writes them). The explicit path now reads `user_pref_general`, not the
+    // legacy `user_profile` pinned namespace.
     mem.store(
-        "user_profile",
-        "pinned/tooling/package_manager",
-        "[pinned] (class=tooling) package_manager: pnpm",
+        crate::openhuman::memory::preferences::USER_PREF_GENERAL_NAMESPACE,
+        "package_manager",
+        "Use pnpm for package management.",
         crate::openhuman::memory::MemoryCategory::Core,
         None,
     )
     .await
     .unwrap();
     mem.store(
-        "user_profile",
-        "pinned/style/verbosity",
-        "[pinned] (class=style) verbosity: terse",
+        crate::openhuman::memory::preferences::USER_PREF_GENERAL_NAMESPACE,
+        "verbosity",
+        "Keep replies terse.",
         crate::openhuman::memory::MemoryCategory::Core,
         None,
     )
@@ -896,20 +898,17 @@ async fn fetch_learned_context_returns_pinned_prefs_when_explicit_flag_on_learni
     assert_eq!(
         learned.user_profile.len(),
         2,
-        "explicit flag on, learning off: expected 2 pinned preferences, got: {:?}",
+        "explicit flag on, learning off: expected 2 general preferences, got: {:?}",
         learned.user_profile
     );
     assert!(
-        learned
-            .user_profile
-            .iter()
-            .any(|s| s.contains("package_manager")),
-        "package_manager preference must appear in user_profile: {:?}",
+        learned.user_profile.iter().any(|s| s.contains("pnpm")),
+        "package_manager preference value must appear in user_profile: {:?}",
         learned.user_profile
     );
     assert!(
-        learned.user_profile.iter().any(|s| s.contains("verbosity")),
-        "verbosity preference must appear in user_profile: {:?}",
+        learned.user_profile.iter().any(|s| s.contains("terse")),
+        "verbosity preference value must appear in user_profile: {:?}",
         learned.user_profile
     );
     // Inference-derived data must remain empty — the stack was NOT engaged.

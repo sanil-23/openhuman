@@ -1571,15 +1571,16 @@ impl Agent {
             .await
             .unwrap_or_default();
 
-        let profile_entries = self
-            .memory
-            .list(
-                Some("user_profile"),
-                Some(&MemoryCategory::Custom("user_profile".into())),
-                None,
-            )
-            .await
-            .unwrap_or_default();
+        // Standing preferences come from the explicit two-lane store (Lane A),
+        // not the inferred `user_profile` facets — those are demoted: no longer
+        // injected as ground truth. A high-confidence inferred facet should be
+        // *proposed* to the user (and pinned via `save_preference` on
+        // confirmation), not silently treated as a standing preference.
+        let general = crate::openhuman::memory::preferences::load_general_preferences(
+            &self.memory,
+            crate::openhuman::memory::preferences::STANDING_PREFS_LIMIT,
+        )
+        .await;
 
         // Explicit user reflections — privileged memory class. Pulled
         // separately from observations/patterns so the prompt assembly
@@ -1625,11 +1626,7 @@ impl Agent {
                 .take(3)
                 .map(|e| sanitize_learned_entry(&e.content))
                 .collect(),
-            user_profile: profile_entries
-                .iter()
-                .take(20)
-                .map(|e| sanitize_learned_entry(&e.content))
-                .collect(),
+            user_profile: general,
             // Cap reflections at 10 to keep the privileged section
             // bounded — the issue requires reflections improve context
             // rather than flood it. Newest first.
