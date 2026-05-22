@@ -194,19 +194,35 @@ fn command_risk_medium_for_mutating_commands() {
 }
 
 #[test]
-fn command_risk_high_for_dangerous_commands() {
-    let p = SecurityPolicy {
-        allowed_commands: vec!["rm".into()],
-        ..SecurityPolicy::default()
-    };
+fn command_risk_high_for_catastrophic_commands() {
+    let p = default_policy();
+    // Only catastrophic / irreversible / privilege / system-control are High.
+    assert_eq!(p.command_risk_level("rm -rf /"), CommandRiskLevel::High);
     assert_eq!(
-        p.command_risk_level("rm -rf /tmp/test"),
+        p.command_risk_level("dd if=/dev/zero of=/dev/sda"),
         CommandRiskLevel::High
+    );
+    assert_eq!(
+        p.command_risk_level("mkfs /dev/sda1"),
+        CommandRiskLevel::High
+    );
+    assert_eq!(
+        p.command_risk_level("shutdown -h now"),
+        CommandRiskLevel::High
+    );
+    assert_eq!(p.command_risk_level("sudo rm file"), CommandRiskLevel::High);
+    // An ordinary recursive delete of a relative path is NO LONGER high-risk
+    // (only the `rm -rf /…` absolute pattern is) — it's medium now.
+    assert_eq!(
+        p.command_risk_level("rm -rf build"),
+        CommandRiskLevel::Medium
     );
 }
 
 #[test]
-fn command_risk_high_for_command_executors() {
+fn command_risk_medium_for_command_executors() {
+    // Interpreters / code executors are medium-risk now (not high): a coding
+    // agent must be able to run them — prompted in Supervised, allowed in Full.
     let p = default_policy();
     for command in [
         "xargs rm",
@@ -223,8 +239,8 @@ fn command_risk_high_for_command_executors() {
     ] {
         assert_eq!(
             p.command_risk_level(command),
-            CommandRiskLevel::High,
-            "{command} should be high risk"
+            CommandRiskLevel::Medium,
+            "{command} should be medium risk"
         );
     }
 }
@@ -308,10 +324,10 @@ fn validate_command_does_not_panic_on_multibyte_char_at_log_truncation_boundary(
         "command should be blocked, but did not panic"
     );
 
-    // And the high-risk-blocked path: allowlist passes (curl is allowed), then
-    // risk gate fires (curl is a high-risk command), exercising the truncating
+    // And the high-risk-blocked path: allowlist passes (dd is allowed), then
+    // risk gate fires (dd is a high-risk command), exercising the truncating
     // warn! site at the block_high_risk_commands branch.
-    let prefix = "curl https://example.com/";
+    let prefix = "dd if=/dev/zero of=/dev/";
     let filler = "a".repeat(80 - prefix.len() - 1);
     let high_risk_cmd = format!("{prefix}{filler}魔");
     assert!(
@@ -319,7 +335,7 @@ fn validate_command_does_not_panic_on_multibyte_char_at_log_truncation_boundary(
         "fixture must straddle byte 80 with a multi-byte char"
     );
     let high_risk_policy = SecurityPolicy {
-        allowed_commands: vec!["curl".into()],
+        allowed_commands: vec!["dd".into()],
         ..SecurityPolicy::default()
     };
     let blocked = high_risk_policy.validate_command_execution(&high_risk_cmd, true);

@@ -480,40 +480,33 @@ impl SecurityPolicy {
             let args: Vec<String> = words.map(|w| w.to_ascii_lowercase()).collect();
             let joined_segment = cmd_part.to_ascii_lowercase();
 
-            // High-risk commands
-            if is_command_executor(base.as_str())
-                || matches!(
-                    base.as_str(),
-                    "rm" | "mkfs"
-                        | "dd"
-                        | "shutdown"
-                        | "reboot"
-                        | "halt"
-                        | "poweroff"
-                        | "sudo"
-                        | "su"
-                        | "chown"
-                        | "chmod"
-                        | "useradd"
-                        | "userdel"
-                        | "usermod"
-                        | "passwd"
-                        | "mount"
-                        | "umount"
-                        | "iptables"
-                        | "ufw"
-                        | "firewall-cmd"
-                        | "curl"
-                        | "wget"
-                        | "nc"
-                        | "ncat"
-                        | "netcat"
-                        | "scp"
-                        | "ssh"
-                        | "ftp"
-                        | "telnet"
-                )
-            {
+            // High-risk = catastrophic / irreversible / privilege-escalating /
+            // system-control commands ONLY. Interpreters (python/bash/…),
+            // network tools (curl/wget/ssh/…), and ordinary rm/chmod/chown are
+            // deliberately NOT high-risk: they are routine for a coding agent and
+            // are treated as medium-risk below (prompted in Supervised, run in
+            // Full). This keeps "Full access" actually able to run code while
+            // still guarding the few irreversible / system-destroying commands.
+            if matches!(
+                base.as_str(),
+                "mkfs"
+                    | "dd"
+                    | "shutdown"
+                    | "reboot"
+                    | "halt"
+                    | "poweroff"
+                    | "sudo"
+                    | "su"
+                    | "mount"
+                    | "umount"
+                    | "iptables"
+                    | "ufw"
+                    | "firewall-cmd"
+                    | "useradd"
+                    | "userdel"
+                    | "usermod"
+                    | "passwd"
+            ) {
                 return CommandRiskLevel::High;
             }
 
@@ -555,9 +548,15 @@ impl SecurityPolicy {
                         "add" | "remove" | "install" | "clean" | "publish"
                     )
                 }),
-                "touch" | "mkdir" | "mv" | "cp" | "ln" => true,
+                "touch" | "mkdir" | "mv" | "cp" | "ln" | "rm" | "chmod" | "chown" | "curl"
+                | "wget" | "nc" | "ncat" | "netcat" | "scp" | "ssh" | "ftp" | "telnet" => true,
                 _ => false,
             };
+
+            // Interpreters / code executors run arbitrary code — medium-risk
+            // (that is the job of a coding agent): prompted in Supervised,
+            // allowed in Full. They are no longer classified high-risk.
+            let medium = medium || is_command_executor(base.as_str());
 
             saw_medium |= medium;
         }
