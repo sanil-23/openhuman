@@ -103,14 +103,25 @@ pub async fn recall_related_preferences(
         return Vec::new();
     }
     let mut out = Vec::new();
+    // `limit` is a global cap across *both* lanes, not per-namespace — spend a
+    // shared budget so the total surfaced for one contradiction check can never
+    // exceed what the caller asked for.
+    let mut remaining = limit;
     for ns in [USER_PREF_GENERAL_NAMESPACE, USER_PREF_SITUATIONAL_NAMESPACE] {
+        if remaining == 0 {
+            break;
+        }
         if let Ok(hits) = memory
-            .recall_relevant_by_vector(ns, value, limit, CONTRADICTION_SIMILARITY)
+            .recall_relevant_by_vector(ns, value, remaining, CONTRADICTION_SIMILARITY)
             .await
         {
             for (topic, val) in hits {
                 if topic != exclude_topic {
                     out.push((topic, val));
+                    remaining = remaining.saturating_sub(1);
+                    if remaining == 0 {
+                        break;
+                    }
                 }
             }
         }

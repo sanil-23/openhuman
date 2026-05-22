@@ -23,7 +23,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::openhuman::memory::{Memory, MemoryCategory};
+use crate::openhuman::memory::{safety, Memory, MemoryCategory};
 use crate::openhuman::security::policy::ToolOperation;
 use crate::openhuman::security::SecurityPolicy;
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
@@ -211,18 +211,23 @@ impl Tool for SavePreferenceTool {
         if value.is_empty() {
             return Ok(ToolResult::error("value cannot be empty".to_string()));
         }
+        // Same secret guard `memory_store` applies — a credential pasted as a
+        // "preference" would otherwise be stored verbatim and later surfaced or
+        // injected. Reject before any write.
+        if safety::has_likely_secret(value) {
+            tracing::warn!(
+                "[tool][save_preference] rejected secret-like value topic={} value_chars={}",
+                topic,
+                value.len()
+            );
+            return Ok(ToolResult::error(
+                "Refusing to store content that looks like a secret. Remove credentials or \
+                 tokens and try again."
+                    .to_string(),
+            ));
+        }
 
         let namespace = category.namespace();
-
-        // A topic lives in exactly one scope — clear any prior copy in the other
-        // namespace so a re-categorised preference doesn't linger in both lanes.
-        if let Err(e) = self.memory.forget(category.other_namespace(), topic).await {
-            tracing::debug!(
-                "[tool][save_preference] clearing other-scope copy failed (non-fatal) ns={} topic={}: {e}",
-                category.other_namespace(),
-                topic
-            );
-        }
 
         tracing::debug!(
             "[tool][save_preference] storing namespace={} topic={} category={} value_len={}",
@@ -244,6 +249,18 @@ impl Tool for SavePreferenceTool {
                     topic,
                     category.as_str()
                 );
+                // A topic lives in exactly one scope. Now that the new write has
+                // succeeded, clear any prior copy in the other namespace so a
+                // re-categorised preference doesn't linger in both lanes. Done
+                // *after* the store (not before) so a store failure can never
+                // leave the user with neither copy.
+                if let Err(e) = self.memory.forget(category.other_namespace(), topic).await {
+                    tracing::debug!(
+                        "[tool][save_preference] clearing other-scope copy failed (non-fatal) ns={} topic={}: {e}",
+                        category.other_namespace(),
+                        topic
+                    );
+                }
                 // Surface semantically-related existing preferences so the chat
                 // agent (which captured this preference) can spot and resolve a
                 // contradiction itself — no separate model call.

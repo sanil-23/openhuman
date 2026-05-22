@@ -123,6 +123,27 @@ async fn empty_value_returns_error() {
     assert!(r.is_error);
 }
 
+#[tokio::test]
+async fn secret_like_value_is_rejected_before_write() {
+    let (_tmp, mem) = test_mem();
+    let tool = SavePreferenceTool::new(mem.clone(), test_security());
+    let r = tool
+        .execute(json!({
+            "topic": "api",
+            "value": "api_key=sk-123456789012345678901234567890",
+            "category": "general",
+        }))
+        .await
+        .unwrap();
+    assert!(r.is_error);
+    assert!(r.output().contains("looks like a secret"));
+    // Nothing persisted in either lane.
+    assert!(keys_in(&mem, USER_PREF_GENERAL_NAMESPACE).await.is_empty());
+    assert!(keys_in(&mem, USER_PREF_SITUATIONAL_NAMESPACE)
+        .await
+        .is_empty());
+}
+
 // ── Storage behaviour ─────────────────────────────────────────────────────────
 
 #[tokio::test]
