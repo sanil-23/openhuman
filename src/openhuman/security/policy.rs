@@ -651,6 +651,18 @@ impl SecurityPolicy {
             return false;
         }
 
+        // Full access bypasses the command allowlist AND the structural guards
+        // (redirects, pipes, subshells, background) — a Full-access agent is
+        // trusted to run any command, including the `mkdir`/`node`/`python`/
+        // redirect-using commands a coding workflow needs. The remaining safety
+        // net is `validate_command_execution`'s high-risk handling (still gated
+        // by `block_high_risk_commands`), plus path-level `forbidden_paths` and
+        // any configured sandbox. The allowlist + structural guards below stay
+        // in force for Supervised, which runs only curated commands.
+        if self.autonomy == AutonomyLevel::Full {
+            return true;
+        }
+
         // Block subshell/expansion operators — these allow hiding arbitrary
         // commands inside an allowed command (e.g. `echo $(rm -rf /)`)
         if command.contains('`')
