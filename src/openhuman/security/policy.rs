@@ -1338,15 +1338,51 @@ impl SecurityPolicy {
         Ok(result)
     }
 
-    /// Credential stores that remain blocked even if a `trusted_root` would
-    /// otherwise grant access. A grant on a parent directory must never expose
-    /// SSH/GPG/AWS secrets.
+    /// Paths that remain blocked even when a `trusted_root` grant would
+    /// otherwise reach them — credential stores and core OS directories. A
+    /// grant on a parent must never expose SSH/GPG/AWS/keychain secrets, nor
+    /// open `/etc`, `C:\Windows`, `/System`, etc. Matching is **case-insensitive**
+    /// (Windows/macOS filesystems are), so `.SSH` / `C:\WINDOWS` cannot slip
+    /// through. Gray-area dirs (`/usr`, `/opt`, `/var`, `~/Library`) stay in the
+    /// user-overridable `forbidden_paths` instead, so a grant can still reach
+    /// e.g. `/usr/local/...`.
     fn is_always_forbidden(path: &Path) -> bool {
-        const SENSITIVE: &[&str] = &[".ssh", ".gnupg", ".aws"];
-        path.components().any(|c| {
-            matches!(c, std::path::Component::Normal(name)
-                if name.to_str().is_some_and(|n| SENSITIVE.contains(&n)))
-        })
+        // Normalize separators + case BEFORE splitting: a Windows backslash
+        // path is a single component on POSIX (and vice-versa), so we segment
+        // the normalized string rather than rely on `Path::components()`.
+        let lc_path = path.to_string_lossy().to_ascii_lowercase().replace('\\', "/");
+        let segments: Vec<&str> = lc_path.split('/').filter(|s| !s.is_empty()).collect();
+
+        // (a) Credential stores — matched by path segment, location-independent
+        // (catches e.g. `C:\Users\x\.ssh` and `~/Library/Keychains`).
+        const SENSITIVE_COMPONENTS: &[&str] =
+            &[".ssh", ".gnupg", ".aws", ".azure", ".kube", "keychains"];
+        if segments.iter().any(|s| SENSITIVE_COMPONENTS.contains(s)) {
+            return true;
+        }
+        // Windows DPAPI / credential stores live under `…\Microsoft\{Protect,
+        // Credentials,Crypto,Vault}` — match the pair so the generic second
+        // name can't false-positive an unrelated project directory.
+        if segments.windows(2).any(|w| {
+            w[0] == "microsoft" && matches!(w[1], "protect" | "credentials" | "crypto" | "vault")
+        }) {
+            return true;
+        }
+
+        // (b) Core OS directories — matched by absolute prefix. Unconditional,
+        // unlike the user-overridable `forbidden_paths`.
+        const SYSTEM_PREFIXES: &[&str] = &[
+            // POSIX
+            "/etc", "/root", "/boot", "/proc", "/sys",
+            // macOS (note: /private is intentionally NOT blocked — macOS temp
+            // dirs and /etc canonicalize under /private/var and /private/etc).
+            "/system",
+            // Windows
+            "c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata",
+        ];
+        SYSTEM_PREFIXES
+            .iter()
+            .any(|p| lc_path == *p || lc_path.starts_with(&format!("{p}/")))
     }
 
     /// True if `path` is within a configured trusted root. When `require_write`

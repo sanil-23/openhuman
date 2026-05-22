@@ -419,6 +419,63 @@ fn gate_decision_install_always_asks_even_in_full() {
     );
 }
 
+// -- cross-platform always-forbidden hardening (Phase E) ----------
+
+#[test]
+fn always_forbidden_blocks_credential_stores_case_insensitively() {
+    use std::path::Path;
+    for p in [
+        "/home/u/.ssh/id_rsa",
+        "/home/u/.SSH/id_rsa", // case-insensitive
+        "C:\\Users\\u\\.ssh\\id_rsa",
+        "/home/u/.gnupg/x",
+        "/home/u/.aws/credentials",
+        "/home/u/.azure/x",
+        "/home/u/.kube/config",
+        "/Users/u/Library/Keychains/login.keychain",
+        "C:\\Users\\u\\AppData\\Roaming\\Microsoft\\Protect\\x",
+        "C:\\Users\\u\\AppData\\Local\\Microsoft\\Credentials\\x",
+    ] {
+        assert!(SecurityPolicy::is_always_forbidden(Path::new(p)), "{p}");
+    }
+}
+
+#[test]
+fn always_forbidden_blocks_core_os_dirs_cross_platform() {
+    use std::path::Path;
+    for p in [
+        "/etc/passwd",
+        "/root/.bashrc",
+        "/boot/x",
+        "/proc/1",
+        "/sys/x",
+        "/System/Library/x",
+        "C:\\Windows\\System32\\config",
+        "C:\\WINDOWS\\x", // case-insensitive
+        "C:\\Program Files\\App\\x",
+        "C:\\ProgramData\\secret",
+    ] {
+        assert!(SecurityPolicy::is_always_forbidden(Path::new(p)), "{p}");
+    }
+}
+
+#[test]
+fn always_forbidden_leaves_gray_area_dirs_to_overridable_forbidden_paths() {
+    use std::path::Path;
+    // NOT unconditional — a trusted_root grant may reach these (e.g.
+    // /usr/local, /opt, ~/Library, project dirs).
+    for p in [
+        "/usr/local/bin/tool",
+        "/opt/app/x",
+        "/var/data/x",
+        "/Users/u/Library/Application Support/x",
+        "/home/u/projects/myrepo/src/main.rs",
+        "C:\\Users\\u\\projects\\app\\src",
+    ] {
+        assert!(!SecurityPolicy::is_always_forbidden(Path::new(p)), "{p}");
+    }
+}
+
 #[test]
 fn command_risk_medium_for_command_executors() {
     // Interpreters / code executors are medium-risk now (not high): a coding
