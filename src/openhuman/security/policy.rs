@@ -66,6 +66,11 @@ pub enum CommandClass {
     Write,
     /// Reaches the network (curl/wget/ssh/scp/…). Always prompts, every tier.
     Network,
+    /// Installs an OS / language package (system package manager, or a *global*
+    /// npm/pnpm/yarn/cargo/pip install). Always-ask in every acting tier,
+    /// including Full — mirrors the dedicated `install_tool` gate so shell
+    /// installs can't slip past it. Project-local installs are ordinary `Write`.
+    Install,
     /// Catastrophic / irreversible / privilege-escalating / system-control.
     /// Always prompts, even in Full.
     Destructive,
@@ -583,6 +588,31 @@ const CARGO_READ_VERBS: &[&str] = &[
     "tree", "metadata", "search", "info", "version", "help",
 ];
 
+/// Detect a package-manager *install* invocation. These mutate the host /
+/// global environment, so they are the always-ask `Install` bucket (even in
+/// Full) — the same gate the dedicated `install_tool` enforces, applied to the
+/// shell escape hatch. Project-local installs (`npm install` without `-g`,
+/// `cargo add`) are ordinary `Write`s and are deliberately NOT matched here.
+/// `args` are already lowercased by the caller.
+fn is_install_command(base: &str, args: &[String]) -> bool {
+    let has = |needle: &str| args.iter().any(|a| a == needle);
+    let first_is = |verb: &str| args.first().map(String::as_str) == Some(verb);
+    match base {
+        // System package managers.
+        "apt" | "apt-get" | "dnf" | "yum" | "zypper" => has("install"),
+        "pacman" => args.iter().any(|a| a.starts_with("-s")), // -S / -Sy / -Syu (lowercased)
+        "apk" => has("add"),
+        "brew" | "snap" | "flatpak" | "winget" | "choco" | "scoop" => has("install"),
+        // Language package managers — host/global-modifying installs only.
+        "pip" | "pip3" | "pipx" | "gem" | "go" | "cargo" => first_is("install"),
+        "npm" | "pnpm" => {
+            (has("install") || has("i") || has("add")) && (has("-g") || has("--global"))
+        }
+        "yarn" => has("global"),
+        _ => false,
+    }
+}
+
 /// Classify a single already-split shell segment. `base` is the normalized
 /// (lowercased, `.exe`-stripped, basename-only) program name; `args` are the
 /// lowercased remaining words; `joined` is the lowercased segment used for
@@ -600,6 +630,11 @@ fn classify_segment(base: &str, args: &[String], joined: &str) -> CommandClass {
     }
     if NETWORK_BASES.contains(&base) {
         return CommandClass::Network;
+    }
+    // Package installs mutate the host → always-ask Install bucket (closes the
+    // shell escape hatch around `install_tool`).
+    if is_install_command(base, args) {
+        return CommandClass::Install;
     }
     // Interpreters / code executors run arbitrary code. Fail-closed to Write
     // (not Destructive) so Full can still run code while Supervised prompts.
@@ -819,7 +854,9 @@ impl SecurityPolicy {
             },
             AutonomyLevel::Full => match class {
                 CommandClass::Read | CommandClass::Write => GateDecision::Allow,
-                CommandClass::Network | CommandClass::Destructive => GateDecision::Prompt,
+                CommandClass::Network | CommandClass::Install | CommandClass::Destructive => {
+                    GateDecision::Prompt
+                }
             },
         }
     }

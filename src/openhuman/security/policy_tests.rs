@@ -367,6 +367,58 @@ fn gate_decision_full_runs_write_but_prompts_network_and_destructive() {
     );
 }
 
+// -- install chokepoint (Phase C) ---------------------------------
+
+#[test]
+fn classify_installs_are_install_bucket() {
+    let p = default_policy();
+    for c in [
+        "apt install jq",
+        "apt-get install -y curl",
+        "brew install ripgrep",
+        "pacman -S vim",
+        "apk add bash",
+        "dnf install nginx",
+        "pip install requests",
+        "pip3 install x",
+        "pipx install black",
+        "gem install rails",
+        "cargo install ripgrep",
+        "go install ./cmd/x",
+        "npm install -g typescript",
+        "pnpm add -g eslint",
+        "yarn global add prettier",
+    ] {
+        assert_eq!(p.classify_command(c), CommandClass::Install, "{c}");
+    }
+}
+
+#[test]
+fn classify_local_installs_are_write_not_install() {
+    let p = default_policy();
+    // Project-local installs are ordinary writes (run in Full), not the
+    // host-modifying Install bucket.
+    assert_eq!(p.classify_command("npm install"), CommandClass::Write);
+    assert_eq!(p.classify_command("npm install lodash"), CommandClass::Write);
+    assert_eq!(p.classify_command("cargo add serde"), CommandClass::Write);
+}
+
+#[test]
+fn gate_decision_install_always_asks_even_in_full() {
+    assert_eq!(
+        full_policy().gate_decision(CommandClass::Install),
+        GateDecision::Prompt
+    );
+    assert_eq!(
+        default_policy().gate_decision(CommandClass::Install),
+        GateDecision::Prompt
+    );
+    assert_eq!(
+        readonly_policy().gate_decision(CommandClass::Install),
+        GateDecision::Block
+    );
+}
+
 #[test]
 fn command_risk_medium_for_command_executors() {
     // Interpreters / code executors are medium-risk now (not high): a coding
