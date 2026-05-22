@@ -956,3 +956,29 @@ async fn fetch_learned_context_explicit_flag_off_learning_off_returns_empty_even
         learned.user_profile
     );
 }
+
+#[tokio::test]
+async fn fetch_learned_context_loads_general_prefs_when_learning_enabled() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mem = make_real_memory(tmp.path());
+    mem.store(
+        crate::openhuman::memory::preferences::USER_PREF_GENERAL_NAMESPACE,
+        "tone",
+        "Be concise and direct.",
+        crate::openhuman::memory::MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // learning_enabled=true → full path, which now also sources standing prefs
+    // from the explicit user_pref_general store (inferred facets are demoted, so
+    // they are no longer injected as ground truth).
+    let agent = make_agent_with_memory(mem, tmp.path().to_path_buf(), true, true);
+    let learned = agent.fetch_learned_context().await;
+    assert!(
+        learned.user_profile.iter().any(|s| s.contains("concise")),
+        "learning path must inject explicit general prefs into user_profile: {:?}",
+        learned.user_profile
+    );
+}
