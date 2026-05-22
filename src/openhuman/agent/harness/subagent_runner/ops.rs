@@ -839,6 +839,35 @@ async fn run_typed_mode(
         allowed_names.insert(tool.name().to_string());
     }
 
+    // Dedup by tool name before the specs reach the provider. `allowed_names`
+    // is a set (already unique), but `filtered_specs` is a Vec assembled from
+    // `parent.all_tool_specs` indices + dynamic tools, so a delegation tool
+    // shadowing a same-named skill/integration tool (common for the wide-set
+    // `tools_agent`) leaves two specs with the same name. Strict providers then
+    // reject the request with `400 "Tool names must be unique."` The main-agent
+    // path dedups via `session::builder::dedup_visible_tool_specs`; this separate
+    // sub-agent assembly must do the same.
+    {
+        let mut seen: HashSet<String> = HashSet::with_capacity(filtered_specs.len());
+        let mut dropped: Vec<String> = Vec::new();
+        filtered_specs.retain(|spec| {
+            if seen.insert(spec.name.clone()) {
+                true
+            } else {
+                dropped.push(spec.name.clone());
+                false
+            }
+        });
+        if !dropped.is_empty() {
+            tracing::warn!(
+                agent_id = %definition.id,
+                "[subagent_runner] dropped {} duplicate tool spec(s) before sending to provider: {:?}",
+                dropped.len(),
+                dropped
+            );
+        }
+    }
+
     tracing::debug!(
         agent_id = %definition.id,
         model = %model,
