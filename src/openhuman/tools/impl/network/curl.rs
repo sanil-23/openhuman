@@ -7,7 +7,7 @@
 //! about.
 
 use super::url_guard::{normalize_allowed_domains, validate_url_with_dns_check};
-use crate::openhuman::security::SecurityPolicy;
+use crate::openhuman::security::{CommandClass, GateDecision, SecurityPolicy};
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -143,6 +143,13 @@ impl Tool for CurlTool {
             },
             "required": ["url"]
         })
+    }
+
+    /// Downloading from the network is the always-ask `Network` bucket — it
+    /// prompts the human in both ask-before-edit and Full; read-only is blocked
+    /// in `execute`.
+    fn external_effect_with_args(&self, _args: &serde_json::Value) -> bool {
+        self.security.gate_decision(CommandClass::Network) == GateDecision::Prompt
     }
 
     fn permission_level(&self) -> PermissionLevel {

@@ -1,5 +1,5 @@
-use crate::openhuman::security::SecurityPolicy;
-use crate::openhuman::tools::traits::{Tool, ToolResult};
+use crate::openhuman::security::{CommandClass, GateDecision, SecurityPolicy};
+use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -40,6 +40,30 @@ impl Tool for FileWriteTool {
             },
             "required": ["path", "content"]
         })
+    }
+
+    fn permission_level(&self) -> PermissionLevel {
+        PermissionLevel::Write
+    }
+
+    /// "Ask before edit": modifying an **existing** file routes through the
+    /// human approval gate in ask-before-edit mode; creating a **new** file is
+    /// free. In Full neither prompts; in read-only `execute` blocks via
+    /// `can_act()`. The existence probe is best-effort (relative to the
+    /// workspace); when the path can't be resolved we fail safe and prompt.
+    fn external_effect_with_args(&self, args: &serde_json::Value) -> bool {
+        if self.security.gate_decision(CommandClass::Write) != GateDecision::Prompt {
+            return false; // Full (allow) or read-only (blocked in execute)
+        }
+        let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
+            return true; // unknown path → prompt (fail safe)
+        };
+        let target = if std::path::Path::new(path).is_absolute() {
+            std::path::PathBuf::from(path)
+        } else {
+            self.security.workspace_dir.join(path)
+        };
+        target.exists() // exists = edit → prompt; new = create → free
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {

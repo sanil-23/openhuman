@@ -6,7 +6,7 @@
 //! exactly once in the file (so the model can't accidentally edit
 //! every match). Set `replace_all` to override.
 
-use crate::openhuman::security::SecurityPolicy;
+use crate::openhuman::security::{CommandClass, GateDecision, SecurityPolicy};
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -54,6 +54,13 @@ impl Tool for EditFileTool {
 
     fn permission_level(&self) -> PermissionLevel {
         PermissionLevel::Write
+    }
+
+    /// `edit` always modifies an **existing** file → in ask-before-edit it
+    /// routes through the human approval gate; in Full it runs; read-only is
+    /// blocked in `execute`.
+    fn external_effect_with_args(&self, _args: &serde_json::Value) -> bool {
+        self.security.gate_decision(CommandClass::Write) == GateDecision::Prompt
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
