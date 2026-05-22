@@ -112,10 +112,15 @@ fn readonly_blocks_all_commands() {
 }
 
 #[test]
-fn full_autonomy_still_uses_allowlist() {
+fn full_autonomy_bypasses_allowlist_but_validate_blocks_high_risk() {
     let p = full_policy();
+    // Full bypasses the allowlist: any base command passes is_command_allowed,
+    // including ones not in allowed_commands.
     assert!(p.is_command_allowed("ls"));
-    assert!(!p.is_command_allowed("rm -rf /"));
+    assert!(p.is_command_allowed("rm -rf /"));
+    // …but validate_command_execution still rejects high-risk commands while
+    // block_high_risk_commands is true (the default).
+    assert!(p.validate_command_execution("rm -rf /", false).is_err());
 }
 
 #[test]
@@ -1645,4 +1650,38 @@ fn trusted_root_never_matches_credential_components() {
     );
     assert!(policy.is_within_trusted_root(StdPath::new("/home/me/proj/file"), false));
     assert!(!policy.is_within_trusted_root(StdPath::new("/home/me/.aws/credentials"), false));
+}
+
+// -- Full access bypasses the command allowlist (access modes) ---------------
+
+#[test]
+fn full_access_bypasses_command_allowlist() {
+    let p = full_policy();
+    // `mkdir` is NOT in the default allowed_commands, but Full bypasses the allowlist.
+    assert!(p.is_command_allowed("mkdir -p foo/bar"));
+    // Redirects / pipes / subshells that Supervised blocks are allowed under Full.
+    assert!(p.is_command_allowed("ls -la 2>/dev/null || echo none"));
+    assert!(p.is_command_allowed("echo hi > out.txt"));
+    assert!(p.is_command_allowed("python3 build.py && node serve.js"));
+}
+
+#[test]
+fn supervised_still_enforces_command_allowlist() {
+    let p = default_policy(); // Supervised
+    assert!(!p.is_command_allowed("mkdir -p foo/bar")); // not allow-listed
+    assert!(!p.is_command_allowed("ls 2>/dev/null")); // redirect blocked
+    assert!(p.is_command_allowed("ls -la")); // allow-listed, no redirect
+}
+
+#[test]
+fn full_access_still_blocks_high_risk_when_configured() {
+    // Full bypasses the allowlist in is_command_allowed, but validate_command_execution
+    // still blocks high-risk commands while block_high_risk_commands is true.
+    let p = full_policy();
+    assert!(p.is_command_allowed("rm -rf /"));
+    let result = p.validate_command_execution("rm -rf /", false);
+    assert!(
+        result.is_err(),
+        "high-risk command must still be blocked in Full when block_high_risk_commands=true"
+    );
 }
