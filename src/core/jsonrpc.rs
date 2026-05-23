@@ -1674,6 +1674,13 @@ pub async fn bootstrap_core_runtime(embedded_core: bool) {
             "[runtime] approval gate installed (OPENHUMAN_APPROVAL_GATE=1, session_id={session_id}) — \
              external-effect tool calls will block until approval_decide"
         );
+        // Bridge ApprovalRequested → `approval_request` web socket event. This MUST
+        // be registered here on the always-run serve boot, not only inside
+        // `start_channels` — that path is skipped when no messaging integrations
+        // (Telegram/Discord/…) are configured, which is the common web-chat-only
+        // case. Without this, the gate parks and publishes but nothing reaches the
+        // frontend → every prompt dies at the TTL. Idempotent (Once-guarded).
+        crate::openhuman::channels::providers::web::register_approval_surface_subscriber();
     } else {
         log::debug!(
             "[runtime] approval gate disabled (OPENHUMAN_APPROVAL_GATE unset) — \

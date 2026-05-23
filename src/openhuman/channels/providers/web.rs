@@ -51,6 +51,9 @@ pub fn register_approval_surface_subscriber() {
     match crate::core::event_bus::subscribe_global(Arc::new(ApprovalSurfaceSubscriber)) {
         Some(handle) => {
             let _ = APPROVAL_SURFACE_HANDLE.set(handle);
+            log::info!(
+                "[web-channel] approval-surface subscriber registered (domain=approval) — will bridge ApprovalRequested → approval_request socket event"
+            );
         }
         None => {
             log::warn!(
@@ -77,24 +80,38 @@ impl EventHandler for ApprovalSurfaceSubscriber {
             request_id,
             tool_name,
             action_summary,
-            thread_id: Some(thread_id),
-            client_id: Some(client_id),
+            thread_id,
+            client_id,
             ..
         } = event
         {
-            let question = format!(
-                "I'd like to run `{tool_name}` — {action_summary}. Reply **yes** to allow or \
-                 **no** to deny (anything else cancels this and lets you redirect me)."
-            );
-            publish_web_channel_event(WebChannelEvent {
-                event: "approval_request".to_string(),
-                client_id: client_id.clone(),
-                thread_id: thread_id.clone(),
-                request_id: request_id.clone(),
-                tool_name: Some(tool_name.clone()),
-                message: Some(question),
-                ..Default::default()
-            });
+            match (thread_id, client_id) {
+                (Some(thread_id), Some(client_id)) => {
+                    let question = format!(
+                        "I'd like to run `{tool_name}` — {action_summary}. Reply **yes** to allow \
+                         or **no** to deny (anything else cancels this and lets you redirect me)."
+                    );
+                    log::info!(
+                        "[web-channel] approval-surface emitting approval_request request_id={request_id} thread_id={thread_id} client_id={client_id} tool={tool_name}"
+                    );
+                    publish_web_channel_event(WebChannelEvent {
+                        event: "approval_request".to_string(),
+                        client_id: client_id.clone(),
+                        thread_id: thread_id.clone(),
+                        request_id: request_id.clone(),
+                        tool_name: Some(tool_name.clone()),
+                        message: Some(question),
+                        ..Default::default()
+                    });
+                }
+                _ => {
+                    log::warn!(
+                        "[web-channel] approval-surface received ApprovalRequested request_id={request_id} tool={tool_name} but thread_id/client_id absent (thread={}, client={}) — NOT surfacing",
+                        thread_id.is_some(),
+                        client_id.is_some()
+                    );
+                }
+            }
         }
     }
 }

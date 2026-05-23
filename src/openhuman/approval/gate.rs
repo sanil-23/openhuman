@@ -214,6 +214,13 @@ impl ApprovalGate {
             };
         }
 
+        tracing::info!(
+            request_id = %request_id,
+            tool = tool_name,
+            thread_id = chat_thread_id.as_deref().unwrap_or("<none>"),
+            client_id = chat_client_id.as_deref().unwrap_or("<none>"),
+            "[approval::gate] publishing ApprovalRequested (surface fires only if thread_id+client_id are both set)"
+        );
         publish_global(DomainEvent::ApprovalRequested {
             request_id: request_id.clone(),
             tool_name: tool_name.to_string(),
