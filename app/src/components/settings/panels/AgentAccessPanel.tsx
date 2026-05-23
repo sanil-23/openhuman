@@ -11,7 +11,7 @@ import {
 import SettingsHeader from '../components/SettingsHeader';
 import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
 
-type Preset = 'readonly' | 'workspace' | 'trusted' | 'full' | 'custom';
+type Preset = 'readonly' | 'supervised' | 'full' | 'custom';
 
 interface PresetOption {
   id: Exclude<Preset, 'custom'>;
@@ -27,16 +27,10 @@ const PRESETS: PresetOption[] = [
       'Reads files and runs read-only commands to explore — but never writes, edits, or runs anything that changes state.',
   },
   {
-    id: 'workspace',
+    id: 'supervised',
     title: 'Ask before edit',
     description:
-      'Creates new files freely in the workspace, but asks for your approval before editing an existing file, running a command, reaching the network, or installing anything.',
-  },
-  {
-    id: 'trusted',
-    title: 'Ask before edit + granted folders',
-    description:
-      'Same as “Ask before edit”, plus the specific folders you grant below. Everything else outside the workspace stays blocked.',
+      'Creates new files freely in the workspace, but asks for your approval before editing an existing file, running a command, reaching the network, or installing anything. Grant extra folders below to widen its reach.',
   },
   {
     id: 'full',
@@ -46,17 +40,15 @@ const PRESETS: PresetOption[] = [
   },
 ];
 
-const derivePreset = (
-  level: AutonomyLevel,
-  workspaceOnly: boolean,
-  allowToolInstall: boolean,
-  trustedRoots: TrustedRoot[]
-): Preset => {
+// Map the saved autonomy state onto one of the three tiers (else "custom" for
+// Advanced combos). Keyed on level + workspace_only ONLY — trusted_roots and
+// allow_tool_install are orthogonal sub-knobs (granted folders / install gate),
+// so they must not change which tier shows as selected. (Folding the old
+// workspace-vs-trusted split fixed the radio not highlighting on click.)
+const derivePreset = (level: AutonomyLevel, workspaceOnly: boolean): Preset => {
+  if (level === 'readonly' && workspaceOnly) return 'readonly';
+  if (level === 'supervised' && workspaceOnly) return 'supervised';
   if (level === 'full' && !workspaceOnly) return 'full';
-  if (level === 'readonly' && workspaceOnly && !allowToolInstall) return 'readonly';
-  if (level === 'supervised' && workspaceOnly && !allowToolInstall) {
-    return trustedRoots.length > 0 ? 'trusted' : 'workspace';
-  }
   return 'custom';
 };
 
@@ -104,7 +96,7 @@ const AgentAccessPanel = () => {
     };
   }, []);
 
-  const activePreset = derivePreset(level, workspaceOnly, allowToolInstall, trustedRoots);
+  const activePreset = derivePreset(level, workspaceOnly);
 
   const applyPreset = (preset: Exclude<Preset, 'custom'>) => {
     setSavedNote(null);
@@ -114,16 +106,10 @@ const AgentAccessPanel = () => {
         setWorkspaceOnly(true);
         setAllowToolInstall(false);
         break;
-      case 'workspace':
+      case 'supervised':
         setLevel('supervised');
         setWorkspaceOnly(true);
         setAllowToolInstall(false);
-        break;
-      case 'trusted':
-        setLevel('supervised');
-        setWorkspaceOnly(true);
-        setAllowToolInstall(false);
-        setShowAdvanced(true);
         break;
       case 'full':
         setLevel('full');
@@ -209,7 +195,7 @@ const AgentAccessPanel = () => {
                         }`}
                       />
                       <span className="font-medium text-ink">{p.title}</span>
-                      {p.id === 'workspace' && (
+                      {p.id === 'supervised' && (
                         <span className="text-xs text-ink-soft">(default)</span>
                       )}
                     </div>
