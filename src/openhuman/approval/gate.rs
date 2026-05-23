@@ -154,6 +154,20 @@ impl ApprovalGate {
         let chat_thread_id = chat_ctx.as_ref().map(|c| c.thread_id.clone());
         let chat_client_id = chat_ctx.as_ref().map(|c| c.client_id.clone());
 
+        // The gate is interactive: it only engages when there's a live chat turn
+        // to surface the prompt to and a human to answer it. Background / triage
+        // / cron turns carry no `ApprovalChatContext` — they are pre-authorized
+        // autonomous automation, and gating them would park with nobody to
+        // answer (→ TTL timeout → deny), stalling the automation. So with no
+        // chat context, allow the call straight through.
+        if chat_ctx.is_none() {
+            tracing::debug!(
+                tool = tool_name,
+                "[approval::gate] no chat context (non-interactive turn) — not gating"
+            );
+            return GateOutcome::Allow;
+        }
+
         let request_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
         let expires_at = Some(now + chrono::Duration::from_std(self.ttl).unwrap_or_default());
@@ -356,6 +370,15 @@ mod tests {
         (gate, dir)
     }
 
+    /// A chat context — the gate only parks within a live chat turn now, so
+    /// tests that exercise parking must run intercept inside this scope.
+    fn chat_ctx() -> ApprovalChatContext {
+        ApprovalChatContext {
+            thread_id: "t-test".into(),
+            client_id: "c-test".into(),
+        }
+    }
+
     #[tokio::test]
     async fn approve_once_returns_allow() {
         let (gate, _dir) = test_gate();
@@ -363,7 +386,11 @@ mod tests {
 
         let g = gate.clone();
         let handle = tokio::spawn(async move {
-            g.intercept("composio", "send slack", serde_json::json!({}))
+            APPROVAL_CHAT_CONTEXT
+                .scope(
+                    chat_ctx(),
+                    g.intercept("composio", "send slack", serde_json::json!({})),
+                )
                 .await
         });
 
@@ -393,7 +420,11 @@ mod tests {
 
         let g = gate.clone();
         let handle = tokio::spawn(async move {
-            g.intercept("pushover", "send push", serde_json::json!({}))
+            APPROVAL_CHAT_CONTEXT
+                .scope(
+                    chat_ctx(),
+                    g.intercept("pushover", "send push", serde_json::json!({})),
+                )
                 .await
         });
 
@@ -421,7 +452,11 @@ mod tests {
 
         let g = gate.clone();
         let first = tokio::spawn(async move {
-            g.intercept("composio", "first", serde_json::json!({}))
+            APPROVAL_CHAT_CONTEXT
+                .scope(
+                    chat_ctx(),
+                    g.intercept("composio", "first", serde_json::json!({})),
+                )
                 .await
         });
         let pending = loop {
@@ -445,8 +480,11 @@ mod tests {
     async fn timeout_returns_deny() {
         let (gate, _dir) = test_gate(); // TTL = 500ms
         let gate = Arc::new(gate);
-        let outcome = gate
-            .intercept("composio", "timed out", serde_json::json!({}))
+        let outcome = APPROVAL_CHAT_CONTEXT
+            .scope(
+                chat_ctx(),
+                gate.intercept("composio", "timed out", serde_json::json!({})),
+            )
             .await;
         match outcome {
             GateOutcome::Deny { reason } => assert!(reason.contains("timed out")),
@@ -529,19 +567,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_for_thread_is_none_without_chat_context() {
-        // Non-chat callers (CLI/sub-agent) park without a context → not routable.
+    async fn no_chat_context_is_allowed_not_gated() {
+        // The gate is interactive: a non-chat caller (background / triage / cron,
+        // no ApprovalChatContext) is allowed straight through — never parked —
+        // so autonomous turns don't stall on an approval no one can answer.
         let (gate, _dir) = test_gate();
-        let gate = Arc::new(gate);
-        let g = gate.clone();
-        let handle =
-            tokio::spawn(
-                async move { g.intercept("shell", "run ls", serde_json::json!({})).await },
-            );
-        // Give it a moment to park, then confirm no thread mapping exists.
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        let outcome = gate
+            .intercept("shell", "run ls", serde_json::json!({}))
+            .await;
+        assert!(matches!(outcome, GateOutcome::Allow));
         assert!(gate.pending_for_thread("thread-42").is_none());
-        // Let it time out (test TTL is 500ms) so the task finishes.
-        let _ = handle.await.unwrap();
     }
 }
