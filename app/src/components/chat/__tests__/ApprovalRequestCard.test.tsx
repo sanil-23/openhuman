@@ -1,0 +1,88 @@
+import { configureStore } from '@reduxjs/toolkit';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Provider } from 'react-redux';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { callCoreRpc } from '../../../services/coreRpcClient';
+import chatRuntimeReducer, {
+  type PendingApproval,
+  setPendingApprovalForThread,
+} from '../../../store/chatRuntimeSlice';
+import ApprovalRequestCard from '../ApprovalRequestCard';
+
+vi.mock('../../../services/coreRpcClient', () => ({ callCoreRpc: vi.fn() }));
+
+const THREAD = 't1';
+const approval: PendingApproval = {
+  requestId: 'req-approval-1',
+  toolName: 'shell',
+  message: 'Run `npm test` in the project',
+};
+
+function renderCard() {
+  const store = configureStore({ reducer: { chatRuntime: chatRuntimeReducer } });
+  store.dispatch(setPendingApprovalForThread({ threadId: THREAD, approval }));
+  const utils = render(
+    <Provider store={store}>
+      <ApprovalRequestCard threadId={THREAD} approval={approval} />
+    </Provider>
+  );
+  return { store, ...utils };
+}
+
+describe('ApprovalRequestCard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders the action summary and tool name', () => {
+    renderCard();
+    expect(screen.getByText('Approval needed')).toBeInTheDocument();
+    expect(screen.getByText('Run `npm test` in the project')).toBeInTheDocument();
+    expect(screen.getByText('shell')).toBeInTheDocument();
+  });
+
+  it('Approve routes approve_once to approval_decide and clears the pending state', async () => {
+    vi.mocked(callCoreRpc).mockResolvedValueOnce({});
+    const { store } = renderCard();
+
+    fireEvent.click(screen.getByText('Approve'));
+
+    expect(callCoreRpc).toHaveBeenCalledWith({
+      method: 'openhuman.approval_decide',
+      params: { request_id: 'req-approval-1', decision: 'approve_once' },
+    });
+    await waitFor(() => {
+      expect(store.getState().chatRuntime.pendingApprovalByThread[THREAD]).toBeUndefined();
+    });
+  });
+
+  it('Deny routes deny to approval_decide', async () => {
+    vi.mocked(callCoreRpc).mockResolvedValueOnce({});
+    const { store } = renderCard();
+
+    fireEvent.click(screen.getByText('Deny'));
+
+    expect(callCoreRpc).toHaveBeenCalledWith({
+      method: 'openhuman.approval_decide',
+      params: { request_id: 'req-approval-1', decision: 'deny' },
+    });
+    await waitFor(() => {
+      expect(store.getState().chatRuntime.pendingApprovalByThread[THREAD]).toBeUndefined();
+    });
+  });
+
+  it('keeps the prompt and shows an error when the decide RPC fails', async () => {
+    vi.mocked(callCoreRpc).mockRejectedValueOnce(new Error('gate not installed'));
+    const { store } = renderCard();
+
+    fireEvent.click(screen.getByText('Approve'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/gate not installed/)).toBeInTheDocument();
+    });
+    // Decision failed → approval stays parked, buttons remain actionable.
+    expect(store.getState().chatRuntime.pendingApprovalByThread[THREAD]).toEqual(approval);
+    expect(screen.getByText('Approve')).toBeInTheDocument();
+  });
+});

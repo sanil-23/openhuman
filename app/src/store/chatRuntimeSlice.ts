@@ -118,6 +118,17 @@ export interface SessionTokenUsage {
 }
 
 /**
+ * A `Prompt`-class tool call parked on the ApprovalGate, awaiting the user's
+ * decision. Surfaced from the `approval_request` socket event; cleared when the
+ * user answers (`openhuman.approval_decide`) or the turn ends / is cancelled.
+ */
+export interface PendingApproval {
+  requestId: string;
+  toolName: string;
+  message: string;
+}
+
+/**
  * Per-thread UI state for an in-flight agent turn (socket events while the user
  * may navigate away from Conversations). The thread slice keeps `activeThreadId`
  * in sync for cross-thread guards; it is cleared from `ChatRuntimeProvider` on
@@ -129,6 +140,7 @@ interface ChatRuntimeState {
   toolTimelineByThread: Record<string, ToolTimelineEntry[]>;
   taskBoardByThread: Record<string, TaskBoard>;
   inferenceTurnLifecycleByThread: Record<string, InferenceTurnLifecycle>;
+  pendingApprovalByThread: Record<string, PendingApproval>;
   sessionTokenUsage: SessionTokenUsage;
 }
 
@@ -138,6 +150,7 @@ const initialState: ChatRuntimeState = {
   toolTimelineByThread: {},
   taskBoardByThread: {},
   inferenceTurnLifecycleByThread: {},
+  pendingApprovalByThread: {},
   sessionTokenUsage: { inputTokens: 0, outputTokens: 0, turns: 0, lastUpdated: 0 },
 };
 
@@ -221,6 +234,15 @@ const chatRuntimeSlice = createSlice({
     clearTaskBoardForThread: (state, action: PayloadAction<{ threadId: string }>) => {
       delete state.taskBoardByThread[action.payload.threadId];
     },
+    setPendingApprovalForThread: (
+      state,
+      action: PayloadAction<{ threadId: string; approval: PendingApproval }>
+    ) => {
+      state.pendingApprovalByThread[action.payload.threadId] = action.payload.approval;
+    },
+    clearPendingApprovalForThread: (state, action: PayloadAction<{ threadId: string }>) => {
+      delete state.pendingApprovalByThread[action.payload.threadId];
+    },
     beginInferenceTurn: (state, action: PayloadAction<{ threadId: string }>) => {
       state.inferenceTurnLifecycleByThread[action.payload.threadId] = 'started';
     },
@@ -238,6 +260,7 @@ const chatRuntimeSlice = createSlice({
       delete state.toolTimelineByThread[action.payload.threadId];
       delete state.taskBoardByThread[action.payload.threadId];
       delete state.inferenceTurnLifecycleByThread[action.payload.threadId];
+      delete state.pendingApprovalByThread[action.payload.threadId];
     },
     clearAllChatRuntime: state => {
       state.inferenceStatusByThread = {};
@@ -245,6 +268,7 @@ const chatRuntimeSlice = createSlice({
       state.toolTimelineByThread = {};
       state.taskBoardByThread = {};
       state.inferenceTurnLifecycleByThread = {};
+      state.pendingApprovalByThread = {};
     },
     recordChatTurnUsage: (
       state,
@@ -326,6 +350,8 @@ export const {
   clearToolTimelineForThread,
   setTaskBoardForThread,
   clearTaskBoardForThread,
+  setPendingApprovalForThread,
+  clearPendingApprovalForThread,
   beginInferenceTurn,
   markInferenceTurnStreaming,
   endInferenceTurn,
