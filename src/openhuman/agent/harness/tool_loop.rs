@@ -28,6 +28,30 @@ const STREAM_CHUNK_MIN_CHARS: usize = 80;
 /// Used as a safe fallback when `max_tool_iterations` is unset or configured as zero.
 pub(crate) const DEFAULT_MAX_TOOL_ITERATIONS: usize = 10;
 
+/// Repeated-failure circuit breaker. The plain iteration cap lets an agent grind
+/// the same dead-end (e.g. re-running `pip install` when there is no pip) until
+/// `max_iterations`, then return an opaque `MaxIterationsExceeded` that the caller
+/// just re-spawns — losing the failure context. These thresholds let the loop bail
+/// EARLY with a root-cause summary instead.
+///
+/// If the SAME `(tool, args)` call fails this many times, the agent is repeating a
+/// known-failed action verbatim — stop.
+const REPEAT_FAILURE_THRESHOLD: u32 = 3;
+/// If this many tool calls fail back-to-back with no success in between (even with
+/// varied args), the agent is making no progress — stop.
+const NO_PROGRESS_FAILURE_THRESHOLD: u32 = 6;
+
+/// Clamp the last-error text embedded in a circuit-breaker halt summary so a huge
+/// tool error (already capped at 1MB upstream) can't blow up the agent's result.
+fn truncate_for_halt(s: &str) -> String {
+    const MAX: usize = 600;
+    if s.chars().count() <= MAX {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(MAX).collect();
+    format!("{head}\n… [truncated]")
+}
+
 /// Execute a single turn of the agent loop: send messages, parse tool calls,
 /// execute tools, and loop until the LLM produces a final text response.
 /// When `silent` is true, suppresses stdout (for channel use).
@@ -173,6 +197,14 @@ pub(crate) async fn run_tool_call_loop(
     }
 
     let stop_hooks = current_stop_hooks();
+    // Repeated-failure circuit breaker state (see thresholds above). Keyed by
+    // `(tool, args)` so an agent that re-issues the identical failing call — or
+    // just keeps failing with no success — is halted with a root cause rather
+    // than grinding to `max_iterations`.
+    let mut failure_sig_counts: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+    let mut consecutive_failures: u32 = 0;
+    let mut halt_reason: Option<String> = None;
     for iteration in 0..max_iterations {
         if let Some(ref sink) = on_progress {
             if let Err(e) = sink
@@ -709,7 +741,7 @@ pub(crate) async fn run_tool_call_loop(
                 }
             }
 
-            let result = if let Some(tool) = tool_opt {
+            let (result, call_succeeded) = if let Some(tool) = tool_opt {
                 let tool_deadline =
                     crate::openhuman::tool_timeout::tool_execution_timeout_duration();
                 let timeout_secs = crate::openhuman::tool_timeout::tool_execution_timeout_secs();
@@ -882,7 +914,7 @@ pub(crate) async fn run_tool_call_loop(
                         log::warn!("[agent_loop] progress sink closed while emitting ToolCallCompleted: {e}");
                     }
                 }
-                result_text
+                (result_text, success)
             } else {
                 tracing::warn!(
                     iteration,
@@ -891,7 +923,7 @@ pub(crate) async fn run_tool_call_loop(
                 );
                 let msg = format!("Unknown tool: {}", call.name);
                 emit_failed_completion(&msg).await;
-                msg
+                (msg, false)
             };
 
             individual_results.push(result.clone());
@@ -900,6 +932,50 @@ pub(crate) async fn run_tool_call_loop(
                 "<tool_result name=\"{}\">\n{}\n</tool_result>",
                 call.name, result
             );
+
+            // Repeated-failure circuit breaker. Track per-call-signature and
+            // consecutive failures so a known-failed action that the model keeps
+            // re-issuing (or a run that simply never makes progress) halts with a
+            // root cause instead of grinding to `max_iterations`.
+            if call_succeeded {
+                consecutive_failures = 0;
+            } else {
+                consecutive_failures += 1;
+                let sig = format!("{}|{}", call.name, call.arguments);
+                let sig_count = failure_sig_counts.entry(sig).or_insert(0);
+                *sig_count += 1;
+                if *sig_count >= REPEAT_FAILURE_THRESHOLD {
+                    tracing::warn!(
+                        iteration,
+                        tool = call.name.as_str(),
+                        repeats = *sig_count,
+                        "[agent_loop] repeated identical tool failure — halting to avoid a loop"
+                    );
+                    halt_reason = Some(format!(
+                        "Stopping: the `{}` call was retried {} times with identical arguments and \
+                         kept failing — repeating it will not help. Last error:\n{}\n\nThis looks \
+                         unrecoverable in the current environment (e.g. a missing tool/dependency \
+                         that cannot be installed here). Report this back instead of retrying.",
+                        call.name,
+                        *sig_count,
+                        truncate_for_halt(&result),
+                    ));
+                } else if consecutive_failures >= NO_PROGRESS_FAILURE_THRESHOLD {
+                    tracing::warn!(
+                        iteration,
+                        consecutive = consecutive_failures,
+                        "[agent_loop] no successful tool call in many attempts — halting"
+                    );
+                    halt_reason = Some(format!(
+                        "Stopping: {} tool calls in a row failed with no progress. Last error \
+                         (from `{}`):\n{}\n\nDifferent commands are all failing — the goal looks \
+                         unreachable in this environment. Report this back instead of retrying.",
+                        consecutive_failures,
+                        call.name,
+                        truncate_for_halt(&result),
+                    ));
+                }
+            }
         }
 
         // Add assistant message with tool calls + tool results to history.
@@ -917,6 +993,14 @@ pub(crate) async fn run_tool_call_loop(
                 });
                 history.push(ChatMessage::tool(tool_msg.to_string()));
             }
+        }
+
+        // Circuit breaker tripped this iteration: return the root-cause summary
+        // as the agent's result instead of looping to `max_iterations`. The
+        // tool results are already in `history` above, so the caller still has
+        // full context if it wants it.
+        if let Some(reason) = halt_reason.take() {
+            return Ok(reason);
         }
     }
 
