@@ -98,25 +98,46 @@ const AgentAccessPanel = () => {
 
   const activePreset = derivePreset(level, workspaceOnly);
 
-  const applyPreset = (preset: Exclude<Preset, 'custom'>) => {
+  // Auto-apply: every change persists immediately (no separate Save button to
+  // miss — that was reported as "no save option"). We pass explicit `next`
+  // values rather than reading state, because setState is async and the state
+  // hasn't updated yet at call time.
+  const persist = async (next: {
+    level: AutonomyLevel;
+    workspaceOnly: boolean;
+    trustedRoots: TrustedRoot[];
+    allowToolInstall: boolean;
+  }) => {
+    if (!isTauri()) return;
+    setError(null);
     setSavedNote(null);
-    switch (preset) {
-      case 'readonly':
-        setLevel('readonly');
-        setWorkspaceOnly(true);
-        setAllowToolInstall(false);
-        break;
-      case 'supervised':
-        setLevel('supervised');
-        setWorkspaceOnly(true);
-        setAllowToolInstall(false);
-        break;
-      case 'full':
-        setLevel('full');
-        setWorkspaceOnly(false);
-        setAllowToolInstall(true);
-        break;
+    setIsSaving(true);
+    try {
+      await openhumanUpdateAutonomySettings({
+        level: next.level,
+        workspace_only: next.workspaceOnly,
+        trusted_roots: next.trustedRoots,
+        allow_tool_install: next.allowToolInstall,
+      });
+      setSavedNote('Saved — applies on your next message.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save access settings');
+    } finally {
+      setIsSaving(false);
     }
+  };
+
+  const applyPreset = (preset: Exclude<Preset, 'custom'>) => {
+    const next =
+      preset === 'readonly'
+        ? { level: 'readonly' as AutonomyLevel, workspaceOnly: true, allowToolInstall: false }
+        : preset === 'supervised'
+          ? { level: 'supervised' as AutonomyLevel, workspaceOnly: true, allowToolInstall: false }
+          : { level: 'full' as AutonomyLevel, workspaceOnly: false, allowToolInstall: true };
+    setLevel(next.level);
+    setWorkspaceOnly(next.workspaceOnly);
+    setAllowToolInstall(next.allowToolInstall);
+    void persist({ ...next, trustedRoots });
   };
 
   const addRoot = () => {
@@ -126,33 +147,17 @@ const AgentAccessPanel = () => {
       setNewRootPath('');
       return;
     }
-    setTrustedRoots([...trustedRoots, { path, access: newRootAccess }]);
+    const nextRoots = [...trustedRoots, { path, access: newRootAccess }];
+    setTrustedRoots(nextRoots);
     setNewRootPath('');
     setNewRootAccess('read');
+    void persist({ level, workspaceOnly, trustedRoots: nextRoots, allowToolInstall });
   };
 
   const removeRoot = (path: string) => {
-    setTrustedRoots(trustedRoots.filter(r => r.path !== path));
-  };
-
-  const save = async () => {
-    if (!isTauri()) return;
-    setError(null);
-    setSavedNote(null);
-    setIsSaving(true);
-    try {
-      await openhumanUpdateAutonomySettings({
-        level,
-        workspace_only: workspaceOnly,
-        trusted_roots: trustedRoots,
-        allow_tool_install: allowToolInstall,
-      });
-      setSavedNote('Saved. New conversations use the updated access mode.');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save access settings');
-    } finally {
-      setIsSaving(false);
-    }
+    const nextRoots = trustedRoots.filter(r => r.path !== path);
+    setTrustedRoots(nextRoots);
+    void persist({ level, workspaceOnly, trustedRoots: nextRoots, allowToolInstall });
   };
 
   return (
@@ -290,7 +295,15 @@ const AgentAccessPanel = () => {
                     <input
                       type="checkbox"
                       checked={workspaceOnly}
-                      onChange={e => setWorkspaceOnly(e.target.checked)}
+                      onChange={e => {
+                        setWorkspaceOnly(e.target.checked);
+                        void persist({
+                          level,
+                          workspaceOnly: e.target.checked,
+                          trustedRoots,
+                          allowToolInstall,
+                        });
+                      }}
                     />
                   </label>
                   <label className="flex items-center justify-between text-sm">
@@ -298,14 +311,26 @@ const AgentAccessPanel = () => {
                     <input
                       type="checkbox"
                       checked={allowToolInstall}
-                      onChange={e => setAllowToolInstall(e.target.checked)}
+                      onChange={e => {
+                        setAllowToolInstall(e.target.checked);
+                        void persist({
+                          level,
+                          workspaceOnly,
+                          trustedRoots,
+                          allowToolInstall: e.target.checked,
+                        });
+                      }}
                     />
                   </label>
                   <label className="flex items-center justify-between text-sm">
                     <span className="text-ink">Autonomy level</span>
                     <select
                       value={level}
-                      onChange={e => setLevel(e.target.value as AutonomyLevel)}
+                      onChange={e => {
+                        const lvl = e.target.value as AutonomyLevel;
+                        setLevel(lvl);
+                        void persist({ level: lvl, workspaceOnly, trustedRoots, allowToolInstall });
+                      }}
                       className="rounded border border-line px-2 py-1 text-xs">
                       <option value="readonly">read-only</option>
                       <option value="supervised">supervised</option>
@@ -316,16 +341,18 @@ const AgentAccessPanel = () => {
               )}
             </section>
 
-            {error && <p className="text-sm text-coral">{error}</p>}
-            {savedNote && <p className="text-sm text-sage">{savedNote}</p>}
-
-            <button
-              type="button"
-              onClick={save}
-              disabled={isSaving || !isTauri()}
-              className="rounded-lg bg-ocean px-4 py-2 text-sm text-white hover:bg-ocean/90 disabled:opacity-50">
-              {isSaving ? 'Saving…' : 'Save access mode'}
-            </button>
+            {/* Auto-save status — changes persist on selection; no manual save. */}
+            <div className="min-h-[1.25rem] text-sm" aria-live="polite">
+              {error ? (
+                <span className="text-coral">{error}</span>
+              ) : isSaving ? (
+                <span className="text-ink-soft">Saving…</span>
+              ) : savedNote ? (
+                <span className="text-sage">✓ {savedNote}</span>
+              ) : (
+                <span className="text-ink-soft">Changes apply on your next message.</span>
+              )}
+            </div>
           </>
         )}
       </div>
