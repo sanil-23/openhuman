@@ -765,6 +765,14 @@ fn emit_web_channel_event(io: &SocketIo, event: WebChannelEvent) {
 }
 
 fn event_alias(name: &str) -> Option<String> {
+    // High-frequency streaming deltas are emitted once per token; the legacy
+    // colon-name alias would double every frame on the wire (visible as
+    // "double streaming" of thinking/text tokens) for no benefit — no client
+    // subscribes to the colon variants of these. Suppress the alias for them.
+    // Lower-frequency discrete events keep the compat alias.
+    if name.ends_with("_delta") || name.ends_with(":delta") {
+        return None;
+    }
     if name.contains('_') {
         return Some(name.replace('_', ":"));
     }
@@ -804,6 +812,18 @@ mod tests {
         assert_eq!(event_alias("chat_done").as_deref(), Some("chat:done"));
         assert_eq!(event_alias("chat:error").as_deref(), Some("chat_error"));
         assert_eq!(event_alias("ready"), None);
+    }
+
+    #[test]
+    fn event_alias_suppressed_for_streaming_deltas() {
+        // Streaming deltas must NOT be aliased — doubling every token frame is
+        // the "double thinking-token streaming" bug. Discrete events still alias.
+        assert_eq!(event_alias("thinking_delta"), None);
+        assert_eq!(event_alias("text_delta"), None);
+        assert_eq!(event_alias("tool_args_delta"), None);
+        assert_eq!(event_alias("subagent_tool_args_delta"), None);
+        // Sanity: a non-delta event in the same family still aliases.
+        assert_eq!(event_alias("tool_call").as_deref(), Some("tool:call"));
     }
 
     #[test]
