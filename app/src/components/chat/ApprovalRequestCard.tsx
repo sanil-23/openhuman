@@ -63,6 +63,11 @@ export const ApprovalRequestCard: React.FC<Props> = ({ threadId, approval }) => 
           <p className="mt-1 text-ink-soft break-words">
             {approval.message || t('chat.approval.fallback')}
           </p>
+          {approval.command && (
+            <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-ink/5 px-2 py-1.5 font-mono text-xs text-ink">
+              {approval.command}
+            </pre>
+          )}
           <p className="mt-1 text-xs text-ink-soft">
             {t('chat.approval.tool')}{' '}
             <span className="font-mono text-ink">{approval.toolName}</span>
@@ -87,7 +92,6 @@ export const ApprovalRequestCard: React.FC<Props> = ({ threadId, approval }) => 
               disabled={deciding !== null}>
               {deciding === 'deny' ? t('chat.approval.deciding') : t('chat.approval.deny')}
             </Button>
-            <span className="ml-1 text-xs text-ink-soft">{t('chat.approval.hint')}</span>
           </div>
         </div>
       </div>

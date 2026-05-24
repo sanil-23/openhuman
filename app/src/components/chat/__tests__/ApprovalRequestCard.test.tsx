@@ -16,7 +16,8 @@ const THREAD = 't1';
 const approval: PendingApproval = {
   requestId: 'req-approval-1',
   toolName: 'shell',
-  message: 'Run `npm test` in the project',
+  message: 'Run `shell` — shell (18 bytes of arguments)',
+  command: 'pip show yfinance',
 };
 
 function renderCard() {
@@ -35,11 +36,18 @@ describe('ApprovalRequestCard', () => {
     vi.clearAllMocks();
   });
 
-  it('renders the action summary and tool name', () => {
+  it('renders the action summary, exact command, and tool name', () => {
     renderCard();
     expect(screen.getByText('Approval needed')).toBeInTheDocument();
-    expect(screen.getByText('Run `npm test` in the project')).toBeInTheDocument();
+    expect(screen.getByText('Run `shell` — shell (18 bytes of arguments)')).toBeInTheDocument();
+    // The exact command being requested is shown verbatim.
+    expect(screen.getByText('pip show yfinance')).toBeInTheDocument();
     expect(screen.getByText('shell')).toBeInTheDocument();
+  });
+
+  it('does not nudge the user to reply yes/no (buttons are the input path)', () => {
+    renderCard();
+    expect(screen.queryByText(/reply.*yes/i)).not.toBeInTheDocument();
   });
 
   it('Approve routes approve_once to approval_decide and clears the pending state', async () => {

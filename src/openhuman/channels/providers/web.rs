@@ -80,6 +80,7 @@ impl EventHandler for ApprovalSurfaceSubscriber {
             request_id,
             tool_name,
             action_summary,
+            args_redacted,
             thread_id,
             client_id,
             ..
@@ -87,10 +88,10 @@ impl EventHandler for ApprovalSurfaceSubscriber {
         {
             match (thread_id, client_id) {
                 (Some(thread_id), Some(client_id)) => {
-                    let question = format!(
-                        "I'd like to run `{tool_name}` — {action_summary}. Reply **yes** to allow \
-                         or **no** to deny (anything else cancels this and lets you redirect me)."
-                    );
+                    // Short, neutral description — the card renders the exact
+                    // command/args (from `args` below) and has Approve/Deny
+                    // buttons, so no "reply yes/no" instruction here.
+                    let question = format!("Run `{tool_name}` — {action_summary}");
                     log::info!(
                         "[web-channel] approval-surface emitting approval_request request_id={request_id} thread_id={thread_id} client_id={client_id} tool={tool_name}"
                     );
@@ -101,6 +102,9 @@ impl EventHandler for ApprovalSurfaceSubscriber {
                         request_id: request_id.clone(),
                         tool_name: Some(tool_name.clone()),
                         message: Some(question),
+                        // The exact (redacted) command/args being requested, so
+                        // the card can show precisely what will run.
+                        args: Some(args_redacted.clone()),
                         ..Default::default()
                     });
                 }

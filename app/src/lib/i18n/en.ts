@@ -1356,7 +1356,6 @@ const en: TranslationMap = {
   'chat.approval.deny': 'Deny',
   'chat.approval.error': 'Could not record your decision — try again.',
   'chat.approval.fallback': 'The agent wants to run an action that needs your approval.',
-  'chat.approval.hint': 'or reply yes / no',
   'chat.approval.title': 'Approval needed',
   'chat.approval.tool': 'Tool:',
   'chat.unsubscribeApproval.approve': 'Approve & Unsubscribe',

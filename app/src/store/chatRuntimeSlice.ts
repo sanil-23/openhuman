@@ -126,6 +126,11 @@ export interface PendingApproval {
   requestId: string;
   toolName: string;
   message: string;
+  /**
+   * The exact command/target being requested (shell command, file path, URL),
+   * extracted from the event's redacted args for display. Empty if unavailable.
+   */
+  command?: string;
 }
 
 /**

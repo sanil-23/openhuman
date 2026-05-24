@@ -128,6 +128,12 @@ export interface ChatApprovalRequestEvent {
   tool_name: string;
   /** Human-readable summary of the action awaiting approval. */
   message: string;
+  /**
+   * Redacted args of the gated call — e.g. `{ command }` for shell,
+   * `{ path }` for file writes, `{ url }` for network. The card renders the
+   * exact command/target from this so the user sees precisely what will run.
+   */
+  args?: Record<string, unknown>;
 }
 
 /** Emitted when the agent turn begins (before the first LLM call). */

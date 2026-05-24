@@ -720,6 +720,16 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
           request: event.request_id,
           tool: event.tool_name,
         });
+        // Pull the exact command/target out of the redacted args for display:
+        // shell → command, file write/edit → path, network → url.
+        const a = event.args ?? {};
+        const firstString = (v: unknown): string | undefined =>
+          typeof v === 'string' && v.length > 0 ? v : undefined;
+        const command =
+          firstString(a.command) ??
+          firstString(a.path) ??
+          firstString(a.url) ??
+          firstString(a.target);
         dispatch(
           setPendingApprovalForThread({
             threadId: event.thread_id,
@@ -727,6 +737,7 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
               requestId: event.request_id,
               toolName: event.tool_name,
               message: event.message,
+              command,
             },
           })
         );
