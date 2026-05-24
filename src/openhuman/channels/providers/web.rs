@@ -155,11 +155,31 @@ struct SessionCacheFingerprint {
     /// against the updated provider rather than silently reusing the
     /// stale instance.
     provider_binding: String,
+    /// Signature of the autonomy/access config (`[autonomy]`) at build time.
+    /// The cached `Agent` holds tools that each captured a `SecurityPolicy`
+    /// snapshot at construction, so a change to the agent-access tier
+    /// (`config.update_autonomy_settings` → Settings → Agent access) must
+    /// invalidate the cache — otherwise the next turn silently reuses tools
+    /// gated by the OLD policy and the setting appears to do nothing. Derived
+    /// from the on-disk autonomy block (read fresh each turn), so it flips the
+    /// moment a new tier is saved.
+    autonomy_signature: String,
 }
 
 struct SessionEntry {
     agent: Agent,
     fingerprint: SessionCacheFingerprint,
+}
+
+/// Deterministic signature of the autonomy/access config for the session cache
+/// fingerprint. Serializing the whole `[autonomy]` block (serde emits fields in
+/// stable declaration order) captures every knob that feeds `SecurityPolicy` —
+/// `level`, `workspace_only`, `trusted_roots`, `allow_tool_install`,
+/// `allowed_commands`, … — so saving any agent-access change flips the
+/// signature and forces a rebuild. On the practically-impossible serialize
+/// error we return an empty string, which just means "treat as changed".
+fn autonomy_signature(config: &Config) -> String {
+    serde_json::to_string(&config.autonomy).unwrap_or_default()
 }
 
 /// Decide which agent definition this turn should run with.
@@ -940,6 +960,7 @@ async fn run_chat_task(
             provider_role,
             &config,
         ),
+        autonomy_signature: autonomy_signature(&config),
     };
 
     let prior = {
