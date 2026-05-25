@@ -209,6 +209,15 @@ impl AuthProfilesStore {
             "[auth] AuthProfilesStore::new state_dir={} user_id={user_id} use_keychain={use_keychain}",
             state_dir.display()
         );
+        if !use_keychain {
+            // Surface the consequence of a failed keychain probe at info: auth
+            // secrets will be read/written via the encrypted JSON fallback, not
+            // the OS keychain. This is the state change that drove the
+            // "logged out / no backend session token" confusion.
+            log::info!(
+                "[auth] keychain unavailable (is_available=false) — using encrypted JSON for auth profiles user_id={user_id}"
+            );
+        }
         Self {
             path: state_dir.join(PROFILES_FILENAME),
             lock_path: state_dir.join(LOCK_FILENAME),
@@ -237,8 +246,13 @@ impl AuthProfilesStore {
         });
         let payload = serde_json::to_string(&secrets)
             .context("Failed to serialize auth secrets for keychain")?;
-        crate::openhuman::keyring::set(&self.user_id, &key, &payload)
-            .map_err(|e| anyhow::anyhow!("Keychain set failed for profile {}: {e}", profile.id))?;
+        crate::openhuman::keyring::set(&self.user_id, &key, &payload).map_err(|e| {
+            anyhow::anyhow!(
+                "Keychain set failed for profile {}: {e} | detail={}",
+                profile.id,
+                e.diagnostic()
+            )
+        })?;
         log::debug!(
             "[auth] keychain_store_secrets stored profile_id={} user_id={}",
             profile.id,
@@ -263,8 +277,9 @@ impl AuthProfilesStore {
             }
             Err(e) => {
                 log::warn!(
-                    "[auth] keychain_load_secrets error profile_id={profile_id} user_id={}: {e}",
-                    self.user_id
+                    "[auth] keychain_load_secrets error profile_id={profile_id} user_id={}: {e} | detail={}",
+                    self.user_id,
+                    e.diagnostic()
                 );
                 return Ok(None);
             }
@@ -284,8 +299,9 @@ impl AuthProfilesStore {
         let key = self.keychain_key_for_profile(profile_id);
         if let Err(e) = crate::openhuman::keyring::delete(&self.user_id, &key) {
             log::warn!(
-                "[auth] keychain_delete_secrets error profile_id={profile_id} user_id={}: {e}",
-                self.user_id
+                "[auth] keychain_delete_secrets error profile_id={profile_id} user_id={}: {e} | detail={}",
+                self.user_id,
+                e.diagnostic()
             );
         } else {
             log::debug!(
