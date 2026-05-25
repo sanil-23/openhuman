@@ -22,6 +22,7 @@ import coreModeReducer from './coreModeSlice';
 import localeReducer from './localeSlice';
 import mascotReducer from './mascotSlice';
 import notificationReducer from './notificationSlice';
+import personaReducer from './personaSlice';
 import providerSurfacesReducer from './providerSurfaceSlice';
 import socketReducer from './socketSlice';
 import themeReducer from './themeSlice';
@@ -83,7 +84,11 @@ const persistedLocaleReducer = persistReducer(localePersistConfig, localeReducer
 // Theme preference is pre-login and applies to the whole desktop app
 // (light/dark/system). Persist via plain localStorage so it survives user
 // switches like coreMode does.
-const themePersistConfig = { key: 'theme', storage: localStorageAdapter, whitelist: ['mode'] };
+const themePersistConfig = {
+  key: 'theme',
+  storage: localStorageAdapter,
+  whitelist: ['mode', 'tabBarLabels'],
+};
 const persistedThemeReducer = persistReducer(themePersistConfig, themeReducer);
 
 const channelConnectionsPersistConfig = {
@@ -128,13 +133,21 @@ const persistedNotificationReducer = persistReducer(notificationPersistConfig, n
 const threadPersistConfig = { key: 'thread', storage, whitelist: ['selectedThreadId'] };
 const persistedThreadReducer = persistReducer(threadPersistConfig, threadReducer);
 
-// Mascot appearance + voice — color and voiceId preferences are per-user
-// so they travel with the account on logout/login rather than leaking
-// across users. `voiceId` is the user's chosen ElevenLabs voice for
-// reply speech (issue #1762); `null` falls back to the build-time
-// default in `app/src/utils/config.ts::MASCOT_VOICE_ID`.
-const mascotPersistConfig = { key: 'mascot', storage, whitelist: ['color', 'voiceId'] };
+// Persist only previously persisted mascot appearance fields plus the custom
+// GIF override added by this feature; leave existing non-persisted mascot
+// fields as runtime state to avoid changing refresh behavior.
+const mascotPersistConfig = {
+  key: 'mascot',
+  storage,
+  whitelist: ['color', 'voiceId', 'customMascotGifUrl'],
+};
 const persistedMascotReducer = persistReducer(mascotPersistConfig, mascotReducer);
+
+// Persona Pack v1 (issue #2345): persist the cosmetic display name + description
+// per user, mirroring how mascot appearance is stored. SOUL.md lives on disk and
+// is round-tripped over RPC, so it is intentionally not in this slice.
+const personaPersistConfig = { key: 'persona', storage, whitelist: ['displayName', 'description'] };
+const persistedPersonaReducer = persistReducer(personaPersistConfig, personaReducer);
 
 export const store = configureStore({
   reducer: {
@@ -151,6 +164,7 @@ export const store = configureStore({
     coreMode: persistedCoreModeReducer,
     locale: persistedLocaleReducer,
     mascot: persistedMascotReducer,
+    persona: persistedPersonaReducer,
     theme: persistedThemeReducer,
   },
   middleware: getDefaultMiddleware => {

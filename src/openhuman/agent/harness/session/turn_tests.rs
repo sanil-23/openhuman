@@ -3,7 +3,10 @@ use crate::core::event_bus::{global, init_global, DomainEvent};
 use crate::openhuman::agent::dispatcher::XmlToolDispatcher;
 use crate::openhuman::agent::hooks::{PostTurnHook, TurnContext};
 use crate::openhuman::agent::memory_loader::MemoryLoader;
-use crate::openhuman::agent::tool_policy::{ToolPolicy, ToolPolicyDecision, ToolPolicyRequest};
+use crate::openhuman::agent::tool_policy::{
+    GeneratedToolRuntimeContext, GeneratedToolRuntimeRisk, ToolPolicy, ToolPolicyDecision,
+    ToolPolicyRequest,
+};
 use crate::openhuman::inference::provider::{ChatRequest, ChatResponse, Provider};
 use crate::openhuman::memory::Memory;
 use crate::openhuman::tools::ToolResult;
@@ -200,6 +203,64 @@ impl Tool for CountingWriteTool {
     }
 }
 
+struct GeneratedContextTool {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Tool for GeneratedContextTool {
+    fn name(&self) -> &str {
+        "generated_send"
+    }
+
+    fn description(&self) -> &str {
+        "generated send"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type":"object"})
+    }
+
+    async fn execute(&self, _args: serde_json::Value) -> Result<ToolResult> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(ToolResult::success("generated-output"))
+    }
+
+    fn generated_runtime_context(
+        &self,
+        _args: &serde_json::Value,
+    ) -> Option<GeneratedToolRuntimeContext> {
+        Some(GeneratedToolRuntimeContext {
+            provider_id: "mail.runtime".to_string(),
+            capability_id: "email.send".to_string(),
+            risk: GeneratedToolRuntimeRisk::ExternalWrite,
+            source_digest: Some("sha256:abc".to_string()),
+            approval_id: Some("approval-1".to_string()),
+        })
+    }
+}
+
+struct RequireGeneratedContextPolicy;
+
+#[async_trait]
+impl ToolPolicy for RequireGeneratedContextPolicy {
+    fn name(&self) -> &str {
+        "require_generated_context"
+    }
+
+    async fn check(&self, request: &ToolPolicyRequest) -> ToolPolicyDecision {
+        let context = request
+            .generated_tool
+            .as_ref()
+            .expect("generated tool context should be threaded");
+        assert_eq!(context.provider_id, "mail.runtime");
+        assert_eq!(context.capability_id, "email.send");
+        assert_eq!(context.risk, GeneratedToolRuntimeRisk::ExternalWrite);
+        assert_eq!(context.approval_id.as_deref(), Some("approval-1"));
+        ToolPolicyDecision::require_approval("generated context requires approval")
+    }
+}
+
 struct RecordingHook {
     calls: Arc<AsyncMutex<Vec<TurnContext>>>,
     notify: Arc<Notify>,
@@ -226,8 +287,9 @@ fn make_agent(visible_tool_names: Option<HashSet<String>>) -> Agent {
         backend: "none".into(),
         ..crate::openhuman::config::MemoryConfig::default()
     };
-    let mem: Arc<dyn Memory> =
-        Arc::from(crate::openhuman::memory::create_memory(&memory_cfg, &workspace_path).unwrap());
+    let mem: Arc<dyn Memory> = Arc::from(
+        crate::openhuman::memory_store::create_memory(&memory_cfg, &workspace_path).unwrap(),
+    );
 
     let mut builder = Agent::builder()
         .provider(Box::new(DummyProvider))
@@ -263,8 +325,9 @@ fn make_agent_with_builder(
         backend: "none".into(),
         ..crate::openhuman::config::MemoryConfig::default()
     };
-    let mem: Arc<dyn Memory> =
-        Arc::from(crate::openhuman::memory::create_memory(&memory_cfg, &workspace_path).unwrap());
+    let mem: Arc<dyn Memory> = Arc::from(
+        crate::openhuman::memory_store::create_memory(&memory_cfg, &workspace_path).unwrap(),
+    );
 
     Agent::builder()
         .provider_arc(provider)
@@ -560,8 +623,9 @@ async fn execute_tool_call_denies_by_policy_before_tool_runs() {
         backend: "none".into(),
         ..crate::openhuman::config::MemoryConfig::default()
     };
-    let mem: Arc<dyn Memory> =
-        Arc::from(crate::openhuman::memory::create_memory(&memory_cfg, &workspace_path).unwrap());
+    let mem: Arc<dyn Memory> = Arc::from(
+        crate::openhuman::memory_store::create_memory(&memory_cfg, &workspace_path).unwrap(),
+    );
     let calls = Arc::new(AtomicUsize::new(0));
 
     let agent = Agent::builder()
@@ -588,6 +652,49 @@ async fn execute_tool_call_denies_by_policy_before_tool_runs() {
     assert!(result.output.contains("locked by test policy"));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(record.name, "counting");
+    assert!(!record.success);
+}
+
+#[tokio::test]
+async fn execute_tool_call_threads_generated_tool_context_into_policy() {
+    let workspace = tempfile::TempDir::new().expect("temp workspace");
+    let workspace_path = workspace.path().to_path_buf();
+    std::mem::forget(workspace);
+    let memory_cfg = crate::openhuman::config::MemoryConfig {
+        backend: "none".into(),
+        ..crate::openhuman::config::MemoryConfig::default()
+    };
+    let mem: Arc<dyn Memory> = Arc::from(
+        crate::openhuman::memory_store::create_memory(&memory_cfg, &workspace_path).unwrap(),
+    );
+    let calls = Arc::new(AtomicUsize::new(0));
+
+    let agent = Agent::builder()
+        .provider(Box::new(DummyProvider))
+        .tools(vec![Box::new(GeneratedContextTool {
+            calls: Arc::clone(&calls),
+        })])
+        .memory(mem)
+        .tool_dispatcher(Box::new(XmlToolDispatcher))
+        .workspace_dir(workspace_path)
+        .event_context("turn-test-session", "turn-test-channel")
+        .tool_policy(Arc::new(RequireGeneratedContextPolicy))
+        .build()
+        .unwrap();
+    let call = ParsedToolCall {
+        name: "generated_send".into(),
+        arguments: serde_json::json!({ "value": 1 }),
+        tool_call_id: Some("policy-generated-1".into()),
+    };
+
+    let (result, record) = agent.execute_tool_call(&call, 0).await;
+    assert!(!result.success);
+    assert!(result.output.contains("requires approval by policy"));
+    assert!(result
+        .output
+        .contains("generated context requires approval"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(record.name, "generated_send");
     assert!(!record.success);
 }
 
@@ -792,7 +899,7 @@ async fn execute_tool_call_applies_inline_result_budget() {
 // flag combinations:
 //  1. both flags off   → empty context
 //  2. explicit_preferences_enabled=true, learning_enabled=false
-//     → only pinned user_profile entries returned, no inference data
+//     → only general user_pref entries returned, no inference data
 //  3. learning_enabled=true  → full path (existing tests cover this; we only
 //     verify that explicit entries are included as well)
 //
@@ -820,7 +927,7 @@ fn make_agent_with_memory(
 
 fn make_real_memory(workspace: &std::path::Path) -> Arc<dyn Memory> {
     use crate::openhuman::embeddings::NoopEmbedding;
-    use crate::openhuman::memory::UnifiedMemory;
+    use crate::openhuman::memory_store::UnifiedMemory;
     Arc::new(UnifiedMemory::new(workspace, Arc::new(NoopEmbedding), None).unwrap())
 }
 
@@ -860,24 +967,26 @@ async fn fetch_learned_context_returns_empty_when_both_flags_off() {
 }
 
 #[tokio::test]
-async fn fetch_learned_context_returns_pinned_prefs_when_explicit_flag_on_learning_off() {
+async fn fetch_learned_context_returns_general_prefs_when_explicit_flag_on_learning_off() {
     let tmp = tempfile::TempDir::new().unwrap();
     let mem = make_real_memory(tmp.path());
 
-    // Store two pinned preferences via the same key format RememberPreferenceTool uses.
+    // Store two general preferences in the two-lane store (where save_preference
+    // writes them). The explicit path now reads `user_pref_general`, not the
+    // legacy `user_profile` pinned namespace.
     mem.store(
-        "user_profile",
-        "pinned/tooling/package_manager",
-        "[pinned] (class=tooling) package_manager: pnpm",
+        crate::openhuman::memory::preferences::USER_PREF_GENERAL_NAMESPACE,
+        "package_manager",
+        "Use pnpm for package management.",
         crate::openhuman::memory::MemoryCategory::Core,
         None,
     )
     .await
     .unwrap();
     mem.store(
-        "user_profile",
-        "pinned/style/verbosity",
-        "[pinned] (class=style) verbosity: terse",
+        crate::openhuman::memory::preferences::USER_PREF_GENERAL_NAMESPACE,
+        "verbosity",
+        "Keep replies terse.",
         crate::openhuman::memory::MemoryCategory::Core,
         None,
     )
@@ -896,20 +1005,17 @@ async fn fetch_learned_context_returns_pinned_prefs_when_explicit_flag_on_learni
     assert_eq!(
         learned.user_profile.len(),
         2,
-        "explicit flag on, learning off: expected 2 pinned preferences, got: {:?}",
+        "explicit flag on, learning off: expected 2 general preferences, got: {:?}",
         learned.user_profile
     );
     assert!(
-        learned
-            .user_profile
-            .iter()
-            .any(|s| s.contains("package_manager")),
-        "package_manager preference must appear in user_profile: {:?}",
+        learned.user_profile.iter().any(|s| s.contains("pnpm")),
+        "package_manager preference value must appear in user_profile: {:?}",
         learned.user_profile
     );
     assert!(
-        learned.user_profile.iter().any(|s| s.contains("verbosity")),
-        "verbosity preference must appear in user_profile: {:?}",
+        learned.user_profile.iter().any(|s| s.contains("terse")),
+        "verbosity preference value must appear in user_profile: {:?}",
         learned.user_profile
     );
     // Inference-derived data must remain empty — the stack was NOT engaged.
@@ -954,6 +1060,32 @@ async fn fetch_learned_context_explicit_flag_off_learning_off_returns_empty_even
     assert!(
         learned.user_profile.is_empty(),
         "both flags off: user_profile must be empty even when prefs exist, got: {:?}",
+        learned.user_profile
+    );
+}
+
+#[tokio::test]
+async fn fetch_learned_context_loads_general_prefs_when_learning_enabled() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mem = make_real_memory(tmp.path());
+    mem.store(
+        crate::openhuman::memory::preferences::USER_PREF_GENERAL_NAMESPACE,
+        "tone",
+        "Be concise and direct.",
+        crate::openhuman::memory::MemoryCategory::Core,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // learning_enabled=true → full path, which now also sources standing prefs
+    // from the explicit user_pref_general store (inferred facets are demoted, so
+    // they are no longer injected as ground truth).
+    let agent = make_agent_with_memory(mem, tmp.path().to_path_buf(), true, true);
+    let learned = agent.fetch_learned_context().await;
+    assert!(
+        learned.user_profile.iter().any(|s| s.contains("concise")),
+        "learning path must inject explicit general prefs into user_profile: {:?}",
         learned.user_profile
     );
 }

@@ -287,6 +287,7 @@ const de2: TranslationMap = {
   'chat.deleteThread': 'Thread löschen',
   'chat.deleteThreadConfirm': 'Bist du sicher, dass du „{title}“ löschen möchtest?',
   'chat.untitledThread': 'Thread ohne Titel',
+  'chat.editThreadTitle': 'Edit thread title',
   'chat.hideSidebar': 'Seitenleiste ausblenden',
   'chat.showSidebar': 'Seitenleiste anzeigen',
   'chat.newThreadShortcut': 'Neuer Thread (/new)',
@@ -434,6 +435,7 @@ const de2: TranslationMap = {
   'devOptions.menuComposioTriggers': 'Integrationsauslöser',
   'devOptions.menuComposioTriggersDesc':
     'Konfiguriere KI-Triage-Einstellungen für Composio-Integrationsauslöser',
+  'mic.deviceSelector': 'Mikrofongerät',
 };
 
 export default de2;

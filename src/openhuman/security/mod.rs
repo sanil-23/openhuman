@@ -15,6 +15,8 @@ pub mod secrets;
 pub mod traits;
 
 #[allow(unused_imports)]
+pub use crate::openhuman::keyring::SecretStore;
+#[allow(unused_imports)]
 pub use audit::{
     get_or_create_workspace_audit_logger, AuditEvent, AuditEventType, AuditLogger,
     CommandExecutionLog,
@@ -39,8 +41,6 @@ pub use policy::{CommandClass, GateDecision};
 #[allow(unused_imports)]
 pub use policy::{TrustedAccess, TrustedRoot};
 pub use policy::{POLICY_BLOCKED_MARKER, POLICY_DENIED_MARKER};
-#[allow(unused_imports)]
-pub use secrets::SecretStore;
 #[allow(unused_imports)]
 pub use traits::{NoopSandbox, Sandbox};
 

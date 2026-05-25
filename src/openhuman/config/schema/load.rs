@@ -392,12 +392,12 @@ async fn resolve_config_dirs_ignoring_env(
 }
 
 fn decrypt_optional_secret(
-    store: &crate::openhuman::security::SecretStore,
+    store: &crate::openhuman::keyring::SecretStore,
     value: &mut Option<String>,
     field_name: &str,
 ) -> Result<()> {
     if let Some(raw) = value.clone() {
-        if crate::openhuman::security::SecretStore::is_encrypted(&raw) {
+        if crate::openhuman::keyring::SecretStore::is_encrypted(&raw) {
             *value = Some(
                 store
                     .decrypt(&raw)
@@ -409,12 +409,12 @@ fn decrypt_optional_secret(
 }
 
 fn encrypt_optional_secret(
-    store: &crate::openhuman::security::SecretStore,
+    store: &crate::openhuman::keyring::SecretStore,
     value: &mut Option<String>,
     field_name: &str,
 ) -> Result<()> {
     if let Some(raw) = value.clone() {
-        if !crate::openhuman::security::SecretStore::is_encrypted(&raw) {
+        if !crate::openhuman::keyring::SecretStore::is_encrypted(&raw) {
             *value = Some(
                 store
                     .encrypt(&raw)
@@ -434,9 +434,21 @@ fn decrypt_config_secrets(config: &mut Config, openhuman_dir: &Path) -> Result<(
     if !config.secrets.encrypt {
         return Ok(());
     }
-    let store = crate::openhuman::security::SecretStore::new(openhuman_dir, true);
+    let store = crate::openhuman::keyring::SecretStore::new(openhuman_dir, true);
 
     decrypt_optional_secret(&store, &mut config.api_key, "api_key")?;
+
+    // Search engines: BYO API keys for Parallel and Brave.
+    decrypt_optional_secret(
+        &store,
+        &mut config.search.parallel.api_key,
+        "search.parallel.api_key",
+    )?;
+    decrypt_optional_secret(
+        &store,
+        &mut config.search.brave.api_key,
+        "search.brave.api_key",
+    )?;
 
     // Channels: decrypt every optional secret field.
     //
@@ -531,9 +543,20 @@ fn encrypt_config_secrets(config: &mut Config) -> Result<()> {
         .config_path
         .parent()
         .context("Config path must have a parent directory")?;
-    let store = crate::openhuman::security::SecretStore::new(parent_dir, true);
+    let store = crate::openhuman::keyring::SecretStore::new(parent_dir, true);
 
     encrypt_optional_secret(&store, &mut config.api_key, "api_key")?;
+
+    encrypt_optional_secret(
+        &store,
+        &mut config.search.parallel.api_key,
+        "search.parallel.api_key",
+    )?;
+    encrypt_optional_secret(
+        &store,
+        &mut config.search.brave.api_key,
+        "search.brave.api_key",
+    )?;
 
     let ch = &mut config.channels_config;
     if let Some(ref mut tg) = ch.telegram {
@@ -1358,6 +1381,13 @@ impl Config {
             }
         }
 
+        if let Some(language) = env.get("OPENHUMAN_OUTPUT_LANGUAGE") {
+            let language = language.trim();
+            if !language.is_empty() {
+                self.output_language = Some(language.to_string());
+            }
+        }
+
         if let Some(flag) = env.get_any(&["OPENHUMAN_REASONING_ENABLED", "REASONING_ENABLED"]) {
             let normalized = flag.trim().to_ascii_lowercase();
             match normalized.as_str() {
@@ -1426,6 +1456,39 @@ impl Config {
             if let Ok(timeout_secs) = timeout_secs.parse::<u64>() {
                 if timeout_secs > 0 {
                     self.searxng.timeout_secs = timeout_secs;
+                }
+            }
+        }
+
+        // Unified search engine selector. `OPENHUMAN_SEARCH_ENGINE` picks
+        // the active engine; per-engine API keys auto-route to BYO once set.
+        if let Some(engine) = env.get_any(&["OPENHUMAN_SEARCH_ENGINE", "SEARCH_ENGINE"]) {
+            let engine = engine.trim().to_ascii_lowercase();
+            if !engine.is_empty() {
+                self.search.engine = engine;
+            }
+        }
+        if let Some(key) = env.get_any(&["OPENHUMAN_PARALLEL_API_KEY", "PARALLEL_API_KEY"]) {
+            if !key.trim().is_empty() {
+                self.search.parallel.api_key = Some(key);
+            }
+        }
+        if let Some(key) = env.get_any(&["OPENHUMAN_BRAVE_API_KEY", "BRAVE_API_KEY"]) {
+            if !key.trim().is_empty() {
+                self.search.brave.api_key = Some(key);
+            }
+        }
+        if let Some(max) = env.get_any(&["OPENHUMAN_SEARCH_MAX_RESULTS", "SEARCH_MAX_RESULTS"]) {
+            if let Ok(n) = max.parse::<usize>() {
+                if (1..=20).contains(&n) {
+                    self.search.max_results = n;
+                }
+            }
+        }
+        if let Some(t) = env.get_any(&["OPENHUMAN_SEARCH_TIMEOUT_SECS", "SEARCH_TIMEOUT_SECS"]) {
+            if let Ok(n) = t.parse::<u64>() {
+                if n > 0 {
+                    self.search.timeout_secs = n;
                 }
             }
         }

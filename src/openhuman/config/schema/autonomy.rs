@@ -46,7 +46,10 @@ fn default_true() -> bool {
 }
 
 fn default_max_actions_per_hour() -> u32 {
-    20
+    // Effectively unlimited. The rate-limiter check is `count <= max`, so any
+    // ceiling above realistic per-hour traffic is functionally infinite;
+    // u32::MAX lets the field stay a plain `u32` without a sentinel option.
+    u32::MAX
 }
 
 fn default_max_cost_per_day_cents() -> u32 {
@@ -67,6 +70,7 @@ fn default_allowed_commands() -> Vec<String> {
         "wc".into(),
         "head".into(),
         "tail".into(),
+        "date".into(),
         "dir".into(),
         "type".into(),
         "where".into(),

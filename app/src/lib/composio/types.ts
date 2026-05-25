@@ -9,6 +9,17 @@ export interface ComposioToolkitsResponse {
   toolkits: string[];
 }
 
+/**
+ * Sorted list of toolkit slugs that ship a curated agent-ready
+ * catalog on the core side. Used by the Skills grid to label
+ * connected-but-uncurated toolkits as preview / coming soon so
+ * users don't trigger the max-iterations failure documented in
+ * issue #2283.
+ */
+export interface ComposioAgentReadyToolkitsResponse {
+  toolkits: string[];
+}
+
 export interface ComposioConnection {
   id: string;
   toolkit: string;
@@ -36,6 +47,7 @@ export interface ComposioAuthorizeResponse {
 
 export interface ComposioDeleteResponse {
   deleted: boolean;
+  memory_chunks_deleted?: number;
 }
 
 export interface ComposioToolFunction {

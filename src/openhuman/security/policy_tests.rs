@@ -129,6 +129,17 @@ fn config_default_policy_includes_windows_read_equivalents() {
 }
 
 #[test]
+fn config_default_policy_allows_prompt_date_command() {
+    let cfg = crate::openhuman::config::AutonomyConfig::default();
+    let p = SecurityPolicy::from_config(&cfg, std::path::Path::new("."));
+
+    assert!(
+        p.is_command_allowed("date"),
+        "agent instructions use `shell date`, so the default runtime policy must allow it"
+    );
+}
+
+#[test]
 fn blocked_commands_basic() {
     let p = default_policy();
     assert!(!p.is_command_allowed("rm -rf /"));
@@ -741,7 +752,15 @@ fn empty_path_allowed() {
 
 #[test]
 fn dotfile_in_workspace_allowed() {
-    let p = default_policy();
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    std::fs::write(workspace.path().join(".gitignore"), "target/\n").expect("write .gitignore");
+    std::fs::write(workspace.path().join(".env"), "LOCAL_ONLY=1\n").expect("write .env");
+    let p = SecurityPolicy {
+        workspace_dir: workspace.path().to_path_buf(),
+        workspace_only: true,
+        forbidden_paths: vec![],
+        ..SecurityPolicy::default()
+    };
     assert!(p.is_path_string_allowed(".gitignore"));
     assert!(p.is_path_string_allowed(".env"));
 }
