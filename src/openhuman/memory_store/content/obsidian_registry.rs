@@ -27,9 +27,11 @@ pub struct VaultRegistration {
     /// `true` when some registered Obsidian vault's path equals or is an
     /// ancestor of the content root.
     pub registered: bool,
-    /// `true` when at least one `obsidian.json` was found and parsed. Lets the
-    /// UI distinguish "Obsidian is set up, vault just not added yet" from
-    /// "couldn't find Obsidian at all" (offer install vs. offer add-as-vault).
+    /// `true` when at least one candidate `obsidian.json` was found/read (even
+    /// if parsing it later fails — see the parse-error branch, which still
+    /// counts the file as found). Lets the UI distinguish "Obsidian is set up,
+    /// vault just not added yet" from "couldn't find Obsidian at all" (offer
+    /// install vs. offer add-as-vault).
     pub config_found: bool,
 }
 
