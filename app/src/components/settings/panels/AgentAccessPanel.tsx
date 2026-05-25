@@ -11,10 +11,13 @@ import {
 import SettingsHeader from '../components/SettingsHeader';
 import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
 
-type Preset = 'readonly' | 'supervised' | 'full' | 'custom';
+// The install tool is always available (installs still go through the approval
+// gate), so this is fixed rather than a UI knob. The access *tier* and the
+// "confine to workspace" toggle are the user-facing controls.
+const ALLOW_TOOL_INSTALL = true;
 
 interface PresetOption {
-  id: Exclude<Preset, 'custom'>;
+  id: AutonomyLevel;
   title: string;
   description: string;
 }
@@ -30,37 +33,23 @@ const PRESETS: PresetOption[] = [
     id: 'supervised',
     title: 'Ask before edit',
     description:
-      'Creates new files freely in the workspace, but asks for your approval before editing an existing file, running a command, reaching the network, or installing anything. Grant extra folders below to widen its reach.',
+      'Creates new files freely, but asks for your approval before editing an existing file, running a command, reaching the network, or installing anything.',
   },
   {
     id: 'full',
     title: 'Full access',
     description:
-      'Runs commands with your full user account access, unconfined — it can read/write anywhere your user can, except credential and system stores. Destructive commands, network access, and installs still ask for approval.',
+      'Runs commands with your full user account access — it can read/write anywhere allowed, except credential and system stores. Destructive commands, network access, and installs still ask for approval.',
   },
 ];
-
-// Map the saved autonomy state onto one of the three tiers (else "custom" for
-// Advanced combos). Keyed on level + workspace_only ONLY — trusted_roots and
-// allow_tool_install are orthogonal sub-knobs (granted folders / install gate),
-// so they must not change which tier shows as selected. (Folding the old
-// workspace-vs-trusted split fixed the radio not highlighting on click.)
-const derivePreset = (level: AutonomyLevel, workspaceOnly: boolean): Preset => {
-  if (level === 'readonly' && workspaceOnly) return 'readonly';
-  if (level === 'supervised' && workspaceOnly) return 'supervised';
-  if (level === 'full' && !workspaceOnly) return 'full';
-  return 'custom';
-};
 
 const AgentAccessPanel = () => {
   const { navigateBack, breadcrumbs } = useSettingsNavigation();
 
   const [level, setLevel] = useState<AutonomyLevel>('supervised');
-  const [workspaceOnly, setWorkspaceOnly] = useState(true);
+  const [workspaceOnly, setWorkspaceOnly] = useState(false);
   const [trustedRoots, setTrustedRoots] = useState<TrustedRoot[]>([]);
-  const [allowToolInstall, setAllowToolInstall] = useState(false);
 
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [newRootPath, setNewRootPath] = useState('');
   const [newRootAccess, setNewRootAccess] = useState<TrustedAccess>('read');
 
@@ -79,11 +68,9 @@ const AgentAccessPanel = () => {
       try {
         const resp = await openhumanGetAutonomySettings();
         if (cancelled) return;
-        const a = resp.result;
-        setLevel(a.level);
-        setWorkspaceOnly(a.workspace_only);
-        setTrustedRoots(a.trusted_roots ?? []);
-        setAllowToolInstall(a.allow_tool_install);
+        setLevel(resp.result.level);
+        setWorkspaceOnly(resp.result.workspace_only);
+        setTrustedRoots(resp.result.trusted_roots ?? []);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load access settings');
       } finally {
@@ -96,17 +83,13 @@ const AgentAccessPanel = () => {
     };
   }, []);
 
-  const activePreset = derivePreset(level, workspaceOnly);
-
-  // Auto-apply: every change persists immediately (no separate Save button to
-  // miss — that was reported as "no save option"). We pass explicit `next`
-  // values rather than reading state, because setState is async and the state
-  // hasn't updated yet at call time.
+  // Auto-apply: every change persists immediately (no separate Save button).
+  // `allow_tool_install` is fixed; tier, workspace_only and granted folders
+  // vary. Pass explicit `next` values (setState is async).
   const persist = async (next: {
     level: AutonomyLevel;
     workspaceOnly: boolean;
     trustedRoots: TrustedRoot[];
-    allowToolInstall: boolean;
   }) => {
     if (!isTauri()) return;
     setError(null);
@@ -117,7 +100,7 @@ const AgentAccessPanel = () => {
         level: next.level,
         workspace_only: next.workspaceOnly,
         trusted_roots: next.trustedRoots,
-        allow_tool_install: next.allowToolInstall,
+        allow_tool_install: ALLOW_TOOL_INSTALL,
       });
       setSavedNote('Saved — applies on your next message.');
     } catch (e) {
@@ -127,17 +110,14 @@ const AgentAccessPanel = () => {
     }
   };
 
-  const applyPreset = (preset: Exclude<Preset, 'custom'>) => {
-    const next =
-      preset === 'readonly'
-        ? { level: 'readonly' as AutonomyLevel, workspaceOnly: true, allowToolInstall: false }
-        : preset === 'supervised'
-          ? { level: 'supervised' as AutonomyLevel, workspaceOnly: true, allowToolInstall: false }
-          : { level: 'full' as AutonomyLevel, workspaceOnly: false, allowToolInstall: true };
-    setLevel(next.level);
-    setWorkspaceOnly(next.workspaceOnly);
-    setAllowToolInstall(next.allowToolInstall);
-    void persist({ ...next, trustedRoots });
+  const selectTier = (next: AutonomyLevel) => {
+    setLevel(next);
+    void persist({ level: next, workspaceOnly, trustedRoots });
+  };
+
+  const toggleWorkspaceOnly = (next: boolean) => {
+    setWorkspaceOnly(next);
+    void persist({ level, workspaceOnly: next, trustedRoots });
   };
 
   const addRoot = () => {
@@ -151,13 +131,13 @@ const AgentAccessPanel = () => {
     setTrustedRoots(nextRoots);
     setNewRootPath('');
     setNewRootAccess('read');
-    void persist({ level, workspaceOnly, trustedRoots: nextRoots, allowToolInstall });
+    void persist({ level, workspaceOnly, trustedRoots: nextRoots });
   };
 
   const removeRoot = (path: string) => {
     const nextRoots = trustedRoots.filter(r => r.path !== path);
     setTrustedRoots(nextRoots);
-    void persist({ level, workspaceOnly, trustedRoots: nextRoots, allowToolInstall });
+    void persist({ level, workspaceOnly, trustedRoots: nextRoots });
   };
 
   return (
@@ -187,16 +167,16 @@ const AgentAccessPanel = () => {
                   <button
                     key={p.id}
                     type="button"
-                    onClick={() => applyPreset(p.id)}
+                    onClick={() => selectTier(p.id)}
                     className={`text-left rounded-lg border p-3 transition ${
-                      activePreset === p.id
+                      level === p.id
                         ? 'border-ocean bg-ocean/5'
                         : 'border-line hover:border-ocean/50'
                     }`}>
                     <div className="flex items-center gap-2">
                       <span
                         className={`inline-block w-3 h-3 rounded-full border ${
-                          activePreset === p.id ? 'bg-ocean border-ocean' : 'border-line'
+                          level === p.id ? 'bg-ocean border-ocean' : 'border-line'
                         }`}
                       />
                       <span className="font-medium text-ink">{p.title}</span>
@@ -207,12 +187,7 @@ const AgentAccessPanel = () => {
                     <p className="mt-1 text-xs text-ink-soft">{p.description}</p>
                   </button>
                 ))}
-                {activePreset === 'custom' && (
-                  <p className="text-xs text-amber">
-                    Custom configuration (set via Advanced or config.toml).
-                  </p>
-                )}
-                {activePreset === 'full' && (
+                {level === 'full' && (
                   <p className="rounded border border-coral/40 bg-coral/5 p-2 text-xs text-coral">
                     ⚠ Full access runs commands with your full account access and is{' '}
                     <strong>not sandboxed</strong>. Only enable it when you trust the agent with
@@ -223,15 +198,33 @@ const AgentAccessPanel = () => {
               </div>
             </section>
 
-            {/* Trusted roots editor — relevant for Trusted Roots / custom modes. */}
+            {/* Workspace confinement — orthogonal to the tier; applies in all modes. */}
+            <section className="space-y-1">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 cursor-pointer"
+                  checked={workspaceOnly}
+                  onChange={e => toggleWorkspaceOnly(e.target.checked)}
+                />
+                <span>
+                  <span className="text-sm font-medium text-ink">Confine to workspace</span>
+                  <span className="block text-xs text-ink-soft">
+                    Restrict the agent to the workspace directory (plus any granted folders),
+                    whichever access mode is selected. When off, it can reach anywhere your user can
+                    — except the always-blocked credential and system directories.
+                  </span>
+                </span>
+              </label>
+            </section>
+
+            {/* Granted folders (trusted roots) — extra read/write reach. */}
             <section className="space-y-2">
-              <h2 className="text-sm font-semibold text-ink">
-                Granted folders (outside workspace)
-              </h2>
+              <h2 className="text-sm font-semibold text-ink">Granted folders</h2>
               <p className="text-xs text-ink-soft">
-                Each folder is reachable in addition to the workspace. Credential stores (~/.ssh,
-                ~/.gnupg, ~/.aws, keychains) and system directories (/etc, /System, C:\Windows, …)
-                are always blocked, even inside a granted folder.
+                Folders the agent may read and write, in addition to the workspace. Credential
+                stores (~/.ssh, ~/.gnupg, ~/.aws, keychains) and system directories (/etc, /System,
+                C:\Windows, …) are always blocked, even inside a granted folder.
               </p>
               {trustedRoots.length === 0 ? (
                 <p className="text-xs text-ink-soft">No folders granted.</p>
@@ -279,66 +272,6 @@ const AgentAccessPanel = () => {
                   Add
                 </button>
               </div>
-            </section>
-
-            <section className="space-y-2">
-              <button
-                type="button"
-                onClick={() => setShowAdvanced(v => !v)}
-                className="text-xs text-ocean hover:underline">
-                {showAdvanced ? '▾ Advanced' : '▸ Advanced'}
-              </button>
-              {showAdvanced && (
-                <div className="space-y-3 rounded-lg border border-line p-3">
-                  <label className="flex items-center justify-between text-sm">
-                    <span className="text-ink">Confine to workspace (workspace_only)</span>
-                    <input
-                      type="checkbox"
-                      checked={workspaceOnly}
-                      onChange={e => {
-                        setWorkspaceOnly(e.target.checked);
-                        void persist({
-                          level,
-                          workspaceOnly: e.target.checked,
-                          trustedRoots,
-                          allowToolInstall,
-                        });
-                      }}
-                    />
-                  </label>
-                  <label className="flex items-center justify-between text-sm">
-                    <span className="text-ink">Allow OS package installs (install_tool)</span>
-                    <input
-                      type="checkbox"
-                      checked={allowToolInstall}
-                      onChange={e => {
-                        setAllowToolInstall(e.target.checked);
-                        void persist({
-                          level,
-                          workspaceOnly,
-                          trustedRoots,
-                          allowToolInstall: e.target.checked,
-                        });
-                      }}
-                    />
-                  </label>
-                  <label className="flex items-center justify-between text-sm">
-                    <span className="text-ink">Autonomy level</span>
-                    <select
-                      value={level}
-                      onChange={e => {
-                        const lvl = e.target.value as AutonomyLevel;
-                        setLevel(lvl);
-                        void persist({ level: lvl, workspaceOnly, trustedRoots, allowToolInstall });
-                      }}
-                      className="rounded border border-line px-2 py-1 text-xs">
-                      <option value="readonly">read-only</option>
-                      <option value="supervised">supervised</option>
-                      <option value="full">full</option>
-                    </select>
-                  </label>
-                </div>
-              )}
             </section>
 
             {/* Auto-save status — changes persist on selection; no manual save. */}
