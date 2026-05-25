@@ -20,6 +20,44 @@ let cachedRpcUrl: string | null = null;
 
 const E2E_TOKEN_FILENAME = 'openhuman-e2e-rpc-token';
 
+function truncate(value: string, maxLength = 500): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+export function formatRpcCallFailure(method: string, result: RpcCallResult<unknown>): string {
+  const parts = [`[core-rpc] ${method} failed:`];
+  if (typeof result.httpStatus === 'number') {
+    parts.push(`httpStatus=${result.httpStatus}`);
+  }
+  if (result.error) {
+    parts.push(`error=${truncate(result.error)}`);
+  }
+  if (result.result !== undefined) {
+    parts.push(`result=${truncate(safeJson(result.result))}`);
+  }
+  if (parts.length === 1) {
+    parts.push(`payload=${truncate(safeJson(result))}`);
+  }
+  return parts.join(' ');
+}
+
+export function expectRpcOk<T>(
+  method: string,
+  result: RpcCallResult<T>
+): asserts result is RpcCallResult<T> & { ok: true; result: T } {
+  if (!result.ok) {
+    throw new Error(formatRpcCallFailure(method, result));
+  }
+}
+
 function readBearerToken(): string | null {
   const tokenPath = path.join(os.tmpdir(), E2E_TOKEN_FILENAME);
   try {
