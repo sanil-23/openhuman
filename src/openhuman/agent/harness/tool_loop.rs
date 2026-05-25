@@ -172,33 +172,6 @@ pub(crate) fn truncate_for_halt(s: &str) -> String {
     format!("{head}\n… [truncated]")
 }
 
-/// Opt-in debug switch (`OPENHUMAN_LOG_TOOL_OUTPUT=1`) to log a bounded preview
-/// of every tool result. Off by default: tool output can carry PII and is
-/// verbose. When on, the agent loop logs success/error + a credential-scrubbed,
-/// truncated preview of each result — including the commands that "succeed" with
-/// an error buried in stdout (e.g. `pip … | tail`), which are otherwise
-/// invisible because only the `is_error` flag is logged.
-pub(crate) fn tool_output_logging_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("OPENHUMAN_LOG_TOOL_OUTPUT")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
-}
-
-/// Bounded preview of a tool result for the opt-in output log. Larger than the
-/// halt clamp (we want to actually see command output when debugging), still
-/// capped so a 1MB blob can't flood the log.
-pub(crate) fn truncate_for_log(s: &str) -> String {
-    const MAX: usize = 2000;
-    if s.chars().count() <= MAX {
-        return s.to_string();
-    }
-    let head: String = s.chars().take(MAX).collect();
-    format!("{head}\n… [+{} more chars]", s.chars().count() - MAX)
-}
-
 /// Execute a single turn of the agent loop: send messages, parse tool calls,
 /// execute tools, and loop until the LLM produces a final text response.
 /// When `silent` is true, suppresses stdout (for channel use).
@@ -1089,21 +1062,6 @@ pub(crate) async fn run_tool_call_loop(
                 "<tool_result name=\"{}\">\n{}\n</tool_result>",
                 call.name, result
             );
-
-            // Opt-in (`OPENHUMAN_LOG_TOOL_OUTPUT=1`) debug log of the actual tool
-            // result — success AND error — so masked failures (exit-0 commands
-            // with an error in stdout) are visible without reproducing them.
-            // `result` is already credential-scrubbed; preview is bounded.
-            if tool_output_logging_enabled() {
-                tracing::info!(
-                    iteration,
-                    tool = call.name.as_str(),
-                    success = call_succeeded,
-                    chars = result.chars().count(),
-                    "[agent_loop] tool output: {}",
-                    truncate_for_log(&result)
-                );
-            }
 
             // Repeated-failure circuit breaker (shared guard) — halt with a root
             // cause instead of grinding to `max_iterations` on a doomed action.
