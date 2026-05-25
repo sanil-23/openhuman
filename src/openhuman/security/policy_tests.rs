@@ -2093,3 +2093,50 @@ fn supervised_runs_approved_redirects_but_blocks_hidden_execution() {
     // Full is documented full-trust and skips the structural guard entirely.
     assert!(full_policy().check_gated_command("echo $(date)").is_ok());
 }
+
+/// The default projects home (`~/OpenHuman/projects`) must always be a
+/// read-write trusted root on a policy built from config — `from_config` is the
+/// one autonomy→policy chokepoint every agent session uses, so the grant can't
+/// depend on the channels-startup path (skipped on web-chat-only cores).
+#[test]
+fn from_config_grants_default_projects_dir_as_readwrite_root() {
+    let cfg = crate::openhuman::config::AutonomyConfig::default();
+    let policy = SecurityPolicy::from_config(&cfg, StdPath::new("/tmp/ws"));
+    let projects = crate::openhuman::config::default_projects_dir()
+        .to_string_lossy()
+        .to_string();
+    assert!(
+        policy
+            .trusted_roots
+            .iter()
+            .any(|r| r.path == projects && matches!(r.access, TrustedAccess::ReadWrite)),
+        "from_config must grant {projects} as a read-write trusted root; got: {:?}",
+        policy.trusted_roots
+    );
+}
+
+/// A user-granted projects root is left untouched (no duplicate, access kept).
+#[test]
+fn from_config_does_not_duplicate_user_granted_projects_root() {
+    let projects = crate::openhuman::config::default_projects_dir()
+        .to_string_lossy()
+        .to_string();
+    let cfg = crate::openhuman::config::AutonomyConfig {
+        trusted_roots: vec![TrustedRoot {
+            path: projects.clone(),
+            access: TrustedAccess::Read,
+        }],
+        ..crate::openhuman::config::AutonomyConfig::default()
+    };
+    let policy = SecurityPolicy::from_config(&cfg, StdPath::new("/tmp/ws"));
+    let matches: Vec<_> = policy
+        .trusted_roots
+        .iter()
+        .filter(|r| r.path == projects)
+        .collect();
+    assert_eq!(matches.len(), 1, "must not duplicate an existing entry");
+    assert!(
+        matches!(matches[0].access, TrustedAccess::Read),
+        "must preserve the user-granted access level"
+    );
+}

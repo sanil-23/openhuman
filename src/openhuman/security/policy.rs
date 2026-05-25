@@ -1810,6 +1810,25 @@ impl SecurityPolicy {
             autonomy_config.allowed_commands.len(),
             autonomy_config.max_actions_per_hour
         );
+
+        // The default projects home (`~/OpenHuman/projects`) is always a
+        // read-write trusted root so the coding agent can create/edit projects
+        // there regardless of tier or `workspace_only`. Injected here — the one
+        // autonomy→policy chokepoint every session goes through — because the
+        // channels-startup injection is skipped on cores with no listening
+        // integrations (web-chat-only), and a freshly reloaded config wouldn't
+        // carry an in-memory edit anyway. A user-granted entry is left as-is.
+        let mut trusted_roots = autonomy_config.trusted_roots.clone();
+        let projects_path = crate::openhuman::config::default_projects_dir()
+            .to_string_lossy()
+            .to_string();
+        if !trusted_roots.iter().any(|r| r.path == projects_path) {
+            trusted_roots.push(TrustedRoot {
+                path: projects_path,
+                access: TrustedAccess::ReadWrite,
+            });
+        }
+
         Self {
             autonomy: autonomy_config.level,
             workspace_dir: workspace_dir.to_path_buf(),
@@ -1820,7 +1839,7 @@ impl SecurityPolicy {
             max_cost_per_day_cents: autonomy_config.max_cost_per_day_cents,
             require_approval_for_medium_risk: autonomy_config.require_approval_for_medium_risk,
             block_high_risk_commands: autonomy_config.block_high_risk_commands,
-            trusted_roots: autonomy_config.trusted_roots.clone(),
+            trusted_roots,
             allow_tool_install: autonomy_config.allow_tool_install,
             tracker: ActionTracker::new(),
         }
