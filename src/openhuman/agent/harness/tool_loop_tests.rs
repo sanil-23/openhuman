@@ -1007,3 +1007,52 @@ async fn run_tool_call_loop_halts_when_no_progress() {
         "loop should consume exactly 6 LLM turns before halting on no-progress"
     );
 }
+
+// -- RepeatFailureGuard (shared by run_tool_call_loop + run_inner_loop) --------
+
+#[test]
+fn repeat_failure_guard_halts_on_3_identical() {
+    let mut g = RepeatFailureGuard::new();
+    assert!(g
+        .record("shell", "pip install yfinance", false, "err")
+        .is_none());
+    assert!(g
+        .record("shell", "pip install yfinance", false, "err")
+        .is_none());
+    let halt = g.record(
+        "shell",
+        "pip install yfinance",
+        false,
+        "externally-managed-environment",
+    );
+    assert!(halt.is_some(), "same call failing 3x must trip the breaker");
+    assert!(halt.unwrap().contains("externally-managed-environment"));
+}
+
+#[test]
+fn repeat_failure_guard_halts_on_6_consecutive_varied() {
+    let mut g = RepeatFailureGuard::new();
+    // Distinct signatures → repeat guard never trips; only the consecutive run does.
+    for i in 0..5 {
+        assert!(g.record("shell", &format!("cmd{i}"), false, "e").is_none());
+    }
+    assert!(
+        g.record("shell", "cmd5", false, "e").is_some(),
+        "6 consecutive failures must trip the no-progress guard"
+    );
+}
+
+#[test]
+fn repeat_failure_guard_success_resets_consecutive() {
+    let mut g = RepeatFailureGuard::new();
+    for i in 0..5 {
+        g.record("shell", &format!("cmd{i}"), false, "e");
+    }
+    assert!(
+        g.record("shell", "ok", true, "fine").is_none(),
+        "success returns None"
+    );
+    // After a success the consecutive counter is back to 0, so one more failure
+    // is nowhere near the 6-in-a-row threshold.
+    assert!(g.record("shell", "cmd6", false, "e").is_none());
+}

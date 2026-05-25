@@ -36,14 +36,76 @@ pub(crate) const DEFAULT_MAX_TOOL_ITERATIONS: usize = 10;
 ///
 /// If the SAME `(tool, args)` call fails this many times, the agent is repeating a
 /// known-failed action verbatim — stop.
-const REPEAT_FAILURE_THRESHOLD: u32 = 3;
+pub(crate) const REPEAT_FAILURE_THRESHOLD: u32 = 3;
 /// If this many tool calls fail back-to-back with no success in between (even with
 /// varied args), the agent is making no progress — stop.
-const NO_PROGRESS_FAILURE_THRESHOLD: u32 = 6;
+pub(crate) const NO_PROGRESS_FAILURE_THRESHOLD: u32 = 6;
+
+/// Shared repeated-failure circuit breaker, used by BOTH agent loops
+/// (`run_tool_call_loop` here and `run_inner_loop` in `subagent_runner`) so they
+/// can't drift. Tracks per-`(tool,args)`-signature failure counts and a
+/// consecutive-failure run within a single agent turn; [`Self::record`] returns
+/// a root-cause halt summary once a threshold trips.
+#[derive(Default)]
+pub(crate) struct RepeatFailureGuard {
+    sig_counts: std::collections::HashMap<String, u32>,
+    consecutive: u32,
+}
+
+impl RepeatFailureGuard {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record one tool-call outcome. `args_sig` is a stable string form of the
+    /// arguments (e.g. the command). Returns `Some(summary)` when the breaker
+    /// trips — the caller should stop the loop and return that summary as the
+    /// agent's result instead of grinding to `max_iterations`.
+    pub(crate) fn record(
+        &mut self,
+        tool: &str,
+        args_sig: &str,
+        success: bool,
+        result: &str,
+    ) -> Option<String> {
+        if success {
+            self.consecutive = 0;
+            return None;
+        }
+        self.consecutive += 1;
+        let count = {
+            let c = self
+                .sig_counts
+                .entry(format!("{tool}|{args_sig}"))
+                .or_insert(0);
+            *c += 1;
+            *c
+        };
+        if count >= REPEAT_FAILURE_THRESHOLD {
+            return Some(format!(
+                "Stopping: the `{tool}` call was retried {count} times with identical arguments \
+                 and kept failing — repeating it will not help. Last error:\n{}\n\nThis looks \
+                 unrecoverable in the current environment (e.g. a missing tool/dependency that \
+                 cannot be installed here). Report this back instead of retrying.",
+                truncate_for_halt(result),
+            ));
+        }
+        if self.consecutive >= NO_PROGRESS_FAILURE_THRESHOLD {
+            return Some(format!(
+                "Stopping: {} tool calls in a row failed with no progress. Last error (from \
+                 `{tool}`):\n{}\n\nDifferent commands are all failing — the goal looks unreachable \
+                 in this environment. Report this back instead of retrying.",
+                self.consecutive,
+                truncate_for_halt(result),
+            ));
+        }
+        None
+    }
+}
 
 /// Clamp the last-error text embedded in a circuit-breaker halt summary so a huge
 /// tool error (already capped at 1MB upstream) can't blow up the agent's result.
-fn truncate_for_halt(s: &str) -> String {
+pub(crate) fn truncate_for_halt(s: &str) -> String {
     const MAX: usize = 600;
     if s.chars().count() <= MAX {
         return s.to_string();
@@ -224,13 +286,9 @@ pub(crate) async fn run_tool_call_loop(
     }
 
     let stop_hooks = current_stop_hooks();
-    // Repeated-failure circuit breaker state (see thresholds above). Keyed by
-    // `(tool, args)` so an agent that re-issues the identical failing call — or
-    // just keeps failing with no success — is halted with a root cause rather
-    // than grinding to `max_iterations`.
-    let mut failure_sig_counts: std::collections::HashMap<String, u32> =
-        std::collections::HashMap::new();
-    let mut consecutive_failures: u32 = 0;
+    // Repeated-failure circuit breaker — halts with a root cause rather than
+    // grinding to `max_iterations` (shared with the subagent loop).
+    let mut failure_guard = RepeatFailureGuard::new();
     let mut halt_reason: Option<String> = None;
     for iteration in 0..max_iterations {
         if let Some(ref sink) = on_progress {
@@ -975,48 +1033,20 @@ pub(crate) async fn run_tool_call_loop(
                 );
             }
 
-            // Repeated-failure circuit breaker. Track per-call-signature and
-            // consecutive failures so a known-failed action that the model keeps
-            // re-issuing (or a run that simply never makes progress) halts with a
-            // root cause instead of grinding to `max_iterations`.
-            if call_succeeded {
-                consecutive_failures = 0;
-            } else {
-                consecutive_failures += 1;
-                let sig = format!("{}|{}", call.name, call.arguments);
-                let sig_count = failure_sig_counts.entry(sig).or_insert(0);
-                *sig_count += 1;
-                if *sig_count >= REPEAT_FAILURE_THRESHOLD {
-                    tracing::warn!(
-                        iteration,
-                        tool = call.name.as_str(),
-                        repeats = *sig_count,
-                        "[agent_loop] repeated identical tool failure — halting to avoid a loop"
-                    );
-                    halt_reason = Some(format!(
-                        "Stopping: the `{}` call was retried {} times with identical arguments and \
-                         kept failing — repeating it will not help. Last error:\n{}\n\nThis looks \
-                         unrecoverable in the current environment (e.g. a missing tool/dependency \
-                         that cannot be installed here). Report this back instead of retrying.",
-                        call.name,
-                        *sig_count,
-                        truncate_for_halt(&result),
-                    ));
-                } else if consecutive_failures >= NO_PROGRESS_FAILURE_THRESHOLD {
-                    tracing::warn!(
-                        iteration,
-                        consecutive = consecutive_failures,
-                        "[agent_loop] no successful tool call in many attempts — halting"
-                    );
-                    halt_reason = Some(format!(
-                        "Stopping: {} tool calls in a row failed with no progress. Last error \
-                         (from `{}`):\n{}\n\nDifferent commands are all failing — the goal looks \
-                         unreachable in this environment. Report this back instead of retrying.",
-                        consecutive_failures,
-                        call.name,
-                        truncate_for_halt(&result),
-                    ));
-                }
+            // Repeated-failure circuit breaker (shared guard) — halt with a root
+            // cause instead of grinding to `max_iterations` on a doomed action.
+            if let Some(reason) = failure_guard.record(
+                &call.name,
+                &call.arguments.to_string(),
+                call_succeeded,
+                &result,
+            ) {
+                tracing::warn!(
+                    iteration,
+                    tool = call.name.as_str(),
+                    "[agent_loop] circuit breaker tripped — halting with root cause"
+                );
+                halt_reason = Some(reason);
             }
         }
 
