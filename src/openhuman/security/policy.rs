@@ -479,6 +479,78 @@ fn contains_unquoted_single_ampersand(command: &str) -> bool {
     false
 }
 
+/// Like [`contains_unquoted_single_ampersand`] but ignores file-descriptor
+/// duplication redirects, where the `&` is part of a redirect operator rather
+/// than a background/separator: `2>&1`, `>&2` (prev char `>`), and `&>file`
+/// (next char `>`). Used by [`has_hidden_execution`] so a benign `… 2>&1` —
+/// which `classify_command` already accounts for as a `Write` redirect — is not
+/// mistaken for a backgrounded command and hard-blocked after the human
+/// approved it. A standalone `&` (e.g. `cmd &`, `a & b`) still returns true,
+/// since it can run a second command `classify_command` wouldn't see.
+fn contains_unquoted_background_ampersand(command: &str) -> bool {
+    let mut quote = QuoteState::None;
+    let mut escaped = false;
+    let mut prev = '\0';
+    let mut chars = command.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match quote {
+            QuoteState::Single => {
+                if ch == '\'' {
+                    quote = QuoteState::None;
+                }
+            }
+            QuoteState::Double => {
+                if escaped {
+                    escaped = false;
+                    prev = ch;
+                    continue;
+                }
+                if ch == '\\' {
+                    escaped = true;
+                    prev = ch;
+                    continue;
+                }
+                if ch == '"' {
+                    quote = QuoteState::None;
+                }
+            }
+            QuoteState::None => {
+                if escaped {
+                    escaped = false;
+                    prev = ch;
+                    continue;
+                }
+                if ch == '\\' {
+                    escaped = true;
+                    prev = ch;
+                    continue;
+                }
+                match ch {
+                    '\'' => quote = QuoteState::Single,
+                    '"' => quote = QuoteState::Double,
+                    '&' => {
+                        if chars.next_if_eq(&'&').is_some() {
+                            // `&&` logical AND — consume both, not background.
+                        } else {
+                            let next = chars.peek().copied().unwrap_or('\0');
+                            // Skip fd-dup redirects: `2>&1`/`>&2` (prev `>`) and
+                            // `&>file` (next `>`).
+                            if prev != '>' && next != '>' {
+                                return true;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        prev = ch;
+    }
+
+    false
+}
+
 /// Detect an unquoted character in a shell command.
 fn contains_unquoted_char(command: &str, target: char) -> bool {
     let mut quote = QuoteState::None;
@@ -820,17 +892,25 @@ fn verb_class(args: &[String], read_verbs: &[&str]) -> CommandClass {
 /// past the approval summary, so these are refused outside Full (which is
 /// trusted to use redirects and pipes). Mirrors the structural checks in
 /// [`SecurityPolicy::is_command_allowed`].
-fn has_unsafe_structure(command: &str) -> bool {
+/// Detect shell structure that can **hide execution** from `classify_command`,
+/// which only inspects the base command of each `;`/`&&`/`|` segment. Command
+/// and process substitution and backticks run an *inner* command classification
+/// can't see (`echo $(rm -rf ~)` classifies as `echo` = Read and would run
+/// unprompted), and a trailing `&` detaches a process past the gate — so these
+/// stay hard-blocked outside Full.
+///
+/// Deliberately NOT flagged here: plain redirects (`>`, `2>&1`, `2>/dev/null`),
+/// `tee`, and `${VAR}` expansion. `classify_command` already lifts a redirect /
+/// `tee` to `Write`, so the gate prompts and — once the human approves — the
+/// command MUST actually run. Re-blocking an approved `… 2>&1` here was the bug
+/// that made Supervised mode unusable: every command the agent wrote carried a
+/// `2>&1`, got approved, then silently failed this in-tool guard and never ran.
+fn has_hidden_execution(command: &str) -> bool {
     command.contains('`')
         || command.contains("$(")
-        || command.contains("${")
         || command.contains("<(")
         || command.contains(">(")
-        || contains_unquoted_char(command, '>')
-        || command
-            .split_whitespace()
-            .any(|w| w == "tee" || w.ends_with("/tee"))
-        || contains_unquoted_single_ampersand(command)
+        || contains_unquoted_background_ampersand(command)
 }
 
 impl SecurityPolicy {
@@ -1004,9 +1084,12 @@ impl SecurityPolicy {
     /// read or an already-approved act. This enforces what must still hold:
     ///
     /// - **Read-only**: only `Read`-class commands run (`Block` otherwise).
-    /// - **Supervised**: no hidden subshell / redirect / `tee` / background that
-    ///   could smuggle a command past the approval the human saw. Full is
-    ///   trusted and skips the structural guard.
+    /// - **Supervised**: no *hidden execution* (command/process substitution,
+    ///   backticks, background `&`) that could smuggle an unseen command past
+    ///   the approval the human read. Plain redirects (`2>&1`, `> file`) and
+    ///   pipes are fine here — `classify_command` already lifts redirects to
+    ///   `Write` so the gate prompted on them, and the human approved the
+    ///   literal command. Full is trusted and skips the structural guard.
     ///
     /// Returns the classified [`CommandClass`] on success.
     pub fn check_gated_command(&self, command: &str) -> Result<CommandClass, String> {
@@ -1016,10 +1099,11 @@ impl SecurityPolicy {
                 "Security policy: read-only mode — only read commands are permitted".into(),
             );
         }
-        if self.autonomy != AutonomyLevel::Full && has_unsafe_structure(command) {
+        if self.autonomy != AutonomyLevel::Full && has_hidden_execution(command) {
             return Err(
-                "Command blocked: hidden subshell / redirect / background operators are not \
-                 allowed in this mode (use the file tools to write files)"
+                "Command blocked: command/process substitution ($(…), <(…)), backticks, and \
+                 background (&) are not allowed in this mode — they can run a hidden command the \
+                 approval prompt wouldn't show. Plain redirects like `2>&1` are fine."
                     .into(),
             );
         }
