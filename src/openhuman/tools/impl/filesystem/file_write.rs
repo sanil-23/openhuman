@@ -51,6 +51,14 @@ impl Tool for FileWriteTool {
     /// free. In Full neither prompts; in read-only `execute` blocks via
     /// `can_act()`. The existence probe is best-effort (relative to the
     /// workspace); when the path can't be resolved we fail safe and prompt.
+    ///
+    /// The probe runs at gate-routing time, microseconds before `execute()` in
+    /// the same sequential turn. A create→edit flip in that window would require
+    /// an external process to win the race — outside this gate's threat model,
+    /// which governs the agent, not concurrent writers — and `execute()` still
+    /// enforces workspace containment + symlink refusal regardless, so a write
+    /// that slips through as "create" cannot escape the sandbox. We therefore
+    /// do not re-probe in `execute()`.
     fn external_effect_with_args(&self, args: &serde_json::Value) -> bool {
         if self.security.gate_decision(CommandClass::Write) != GateDecision::Prompt {
             return false; // Full (allow) or read-only (blocked in execute)

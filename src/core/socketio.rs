@@ -850,13 +850,23 @@ fn emit_web_channel_event(io: &SocketIo, event: WebChannelEvent) {
     }
 }
 
+/// Events that stream once per token (their payloads concatenate into the final
+/// text / thinking / tool-args). Emitting the legacy `:`-delimited alias for
+/// these doubles every frame on the wire — the "double thinking-token
+/// streaming" bug — and no client subscribes to the colon variant, so the alias
+/// is suppressed for exactly these. Enumerated explicitly rather than matched by
+/// a `*_delta` suffix, so a future *discrete* event whose name happens to end in
+/// `_delta` still gets its compat alias instead of being silently dropped.
+const STREAMING_DELTA_EVENTS: &[&str] = &["text_delta", "thinking_delta", "tool_args_delta"];
+
 fn event_alias(name: &str) -> Option<String> {
-    // High-frequency streaming deltas are emitted once per token; the legacy
-    // colon-name alias would double every frame on the wire (visible as
-    // "double streaming" of thinking/text tokens) for no benefit — no client
-    // subscribes to the colon variants of these. Suppress the alias for them.
+    // Match against the canonical underscore form after stripping a `subagent_`
+    // prefix (subagent streaming mirrors the parent's deltas), so `text_delta`,
+    // `text:delta`, and `subagent_text_delta` all resolve to a listed event.
     // Lower-frequency discrete events keep the compat alias.
-    if name.ends_with("_delta") || name.ends_with(":delta") {
+    let normalized = name.replace(':', "_");
+    let base = normalized.strip_prefix("subagent_").unwrap_or(&normalized);
+    if STREAMING_DELTA_EVENTS.contains(&base) {
         return None;
     }
     if name.contains('_') {
@@ -894,6 +904,13 @@ mod tests {
         assert_eq!(event_alias("text_delta"), None);
         assert_eq!(event_alias("tool_args_delta"), None);
         assert_eq!(event_alias("subagent_tool_args_delta"), None);
+        // A *discrete* event that merely ends in `_delta` is NOT a streaming
+        // token event and must keep its compat alias — this is what the explicit
+        // STREAMING_DELTA_EVENTS set guarantees over the old `*_delta` suffix.
+        assert_eq!(
+            event_alias("inventory_delta").as_deref(),
+            Some("inventory:delta")
+        );
         // Sanity: a non-delta event in the same family still aliases.
         assert_eq!(event_alias("tool_call").as_deref(), Some("tool:call"));
     }
