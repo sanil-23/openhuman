@@ -937,6 +937,9 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
     });
     for (const threadId of threadIds) {
       dispatch(clearInferenceStatusForThread({ threadId }));
+      // Clear any parked approval too: a disconnect before onDone/onError would
+      // otherwise leave the approval card stuck for a turn that can't complete.
+      dispatch(clearPendingApprovalForThread({ threadId }));
       dispatch(endInferenceTurn({ threadId }));
     }
     if (activeThreadId) {

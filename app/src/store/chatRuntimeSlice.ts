@@ -301,6 +301,9 @@ const chatRuntimeSlice = createSlice({
       const threadId = snapshot.threadId;
 
       state.inferenceTurnLifecycleByThread[threadId] = snapshot.lifecycle;
+      // Snapshots don't carry pending-approval payloads; drop any stale in-memory
+      // approval so the card reflects the rehydrated core truth, not pre-drift state.
+      delete state.pendingApprovalByThread[threadId];
       if (snapshot.taskBoard) {
         state.taskBoardByThread[threadId] = snapshot.taskBoard;
       }

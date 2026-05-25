@@ -1,3 +1,4 @@
+import debug from 'debug';
 import React, { useState } from 'react';
 
 import { useT } from '../../lib/i18n/I18nContext';
@@ -11,6 +12,8 @@ import Button from '../ui/Button';
  * `approve_always_for_tool`, but the locked v1 contract is yes / no — a typed
  * `yes`/`no` chat reply is the equivalent server-side path.
  */
+const log = debug('openhuman:chat:approval-card');
+
 type BinaryDecision = 'approve_once' | 'deny';
 
 interface Props {
@@ -43,8 +46,10 @@ export const ApprovalRequestCard: React.FC<Props> = ({ threadId, approval }) => 
       // Resolve optimistically; ChatRuntimeProvider also clears on turn end.
       dispatch(clearPendingApprovalForThread({ threadId }));
     } catch (e) {
-      console.error('[approval] decide failed', e);
-      setErrorMsg(e instanceof Error ? e.message : t('chat.approval.error'));
+      // Keep raw RPC error detail in namespaced dev logs only; show the user the
+      // localized fallback — never leak internal error text into the UI.
+      log('approval_decide failed: %o', e);
+      setErrorMsg(t('chat.approval.error'));
       setDeciding(null);
     }
   };

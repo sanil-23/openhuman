@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
 import {
@@ -58,6 +58,9 @@ const AgentAccessPanel = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
+  // Monotonic guard so out-of-order auto-save responses can't clobber UI state
+  // with a stale result (last write wins).
+  const persistSeqRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +97,7 @@ const AgentAccessPanel = () => {
     workspaceOnly: boolean;
     trustedRoots: TrustedRoot[];
   }) => {
+    const seq = ++persistSeqRef.current;
     if (!isTauri()) return;
     setError(null);
     setSavedNote(null);
@@ -105,11 +109,18 @@ const AgentAccessPanel = () => {
         trusted_roots: next.trustedRoots,
         allow_tool_install: ALLOW_TOOL_INSTALL,
       });
-      setSavedNote(t('settings.agentAccess.saved'));
+      // Only the most recent persist may write UI state back.
+      if (persistSeqRef.current === seq) {
+        setSavedNote(t('settings.agentAccess.saved'));
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('settings.agentAccess.saveError'));
+      if (persistSeqRef.current === seq) {
+        setError(e instanceof Error ? e.message : t('settings.agentAccess.saveError'));
+      }
     } finally {
-      setIsSaving(false);
+      if (persistSeqRef.current === seq) {
+        setIsSaving(false);
+      }
     }
   };
 
