@@ -20,10 +20,12 @@ let cachedRpcUrl: string | null = null;
 
 const E2E_TOKEN_FILENAME = 'openhuman-e2e-rpc-token';
 
+/** Keep diagnostic payloads compact enough for CI assertion output. */
 function truncate(value: string, maxLength = 500): string {
   return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
 }
 
+/** Serialize arbitrary RPC payloads without throwing while formatting failures. */
 function safeJson(value: unknown): string {
   try {
     return JSON.stringify(value);
@@ -32,6 +34,7 @@ function safeJson(value: unknown): string {
   }
 }
 
+/** Format failed RPC calls with the method name and any available transport/core error details. */
 export function formatRpcCallFailure(method: string, result: RpcCallResult<unknown>): string {
   const parts = [`[core-rpc] ${method} failed:`];
   if (typeof result.httpStatus === 'number') {
@@ -49,6 +52,7 @@ export function formatRpcCallFailure(method: string, result: RpcCallResult<unkno
   return parts.join(' ');
 }
 
+/** Assert a positive RPC result while preserving useful failure diagnostics in E2E logs. */
 export function expectRpcOk<T>(
   method: string,
   result: RpcCallResult<T>
