@@ -51,6 +51,7 @@ const ar3: TranslationMap = {
   'workspace.obsidianConfigDirLabel': 'Obsidian config folder',
   'workspace.obsidianConfigDirHint':
     'Path to the folder containing obsidian.json (e.g. ~/.config/obsidian). Leave blank to auto-detect.',
+  'workspace.obsidianConfigDirPlaceholder': '~/.config/obsidian',
   'workspace.save': 'Save',
   'workspace.graphLoadFailed': 'فشل تحميل الرسم البياني للذاكرة',
   'workspace.loadingGraph': 'جارٍ تحميل الرسم البياني للذاكرة...',

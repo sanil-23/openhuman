@@ -51,6 +51,7 @@ const zhCN3: TranslationMap = {
   'workspace.obsidianConfigDirLabel': 'Obsidian config folder',
   'workspace.obsidianConfigDirHint':
     'Path to the folder containing obsidian.json (e.g. ~/.config/obsidian). Leave blank to auto-detect.',
+  'workspace.obsidianConfigDirPlaceholder': '~/.config/obsidian',
   'workspace.save': 'Save',
   'workspace.graphLoadFailed': '无法加载记忆图谱',
   'workspace.loadingGraph': '正在加载记忆图谱...',

@@ -113,8 +113,15 @@ export function ObsidianVaultSection({ contentRootAbs, onToast }: ObsidianVaultS
 
   const installObsidian = useCallback(() => {
     // https URL → openUrl falls back to window.open if the IPC bridge isn't
-    // ready, so this always reaches the download page.
-    void openUrl(OBSIDIAN_DOWNLOAD_URL);
+    // ready, so this normally reaches the download page. Swallow + log any
+    // rejection so it can't surface as an unhandled promise rejection.
+    void (async () => {
+      try {
+        await openUrl(OBSIDIAN_DOWNLOAD_URL);
+      } catch (err) {
+        console.error('[ui-flow][obsidian-vault] openUrl(download) failed', err);
+      }
+    })();
   }, []);
 
   const handleViewVault = useCallback(() => {
@@ -251,7 +258,7 @@ export function ObsidianVaultSection({ contentRootAbs, onToast }: ObsidianVaultS
                   type="text"
                   value={configDir}
                   onChange={e => setConfigDir(e.target.value)}
-                  placeholder="~/.config/obsidian"
+                  placeholder={t('workspace.obsidianConfigDirPlaceholder')}
                   spellCheck={false}
                   data-testid="obsidian-config-dir-input"
                   className="flex-1 rounded-md border border-neutral-300 bg-white px-2 py-1 font-mono text-xs

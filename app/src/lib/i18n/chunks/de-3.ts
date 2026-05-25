@@ -54,6 +54,7 @@ const de3: TranslationMap = {
   'workspace.obsidianConfigDirLabel': 'Obsidian config folder',
   'workspace.obsidianConfigDirHint':
     'Path to the folder containing obsidian.json (e.g. ~/.config/obsidian). Leave blank to auto-detect.',
+  'workspace.obsidianConfigDirPlaceholder': '~/.config/obsidian',
   'workspace.save': 'Save',
   'workspace.graphLoadFailed': 'Speicherdiagramm konnte nicht geladen werden',
   'workspace.loadingGraph': 'Speicherdiagramm wird geladen...',

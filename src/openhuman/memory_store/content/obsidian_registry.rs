@@ -114,6 +114,11 @@ fn registration_in_files(content_root: &Path, files: &[PathBuf]) -> VaultRegistr
 
         for entry in parsed.vaults.values() {
             let vault = lexically_normalize(Path::new(&entry.path));
+            // A malformed/empty vault path normalizes to "" and would otherwise
+            // match every content root (empty ancestor ⊂ anything) — skip it.
+            if vault.as_os_str().is_empty() {
+                continue;
+            }
             if is_ancestor_or_equal(&vault, &target) {
                 log::debug!(
                     "[content_store::obsidian_registry] content root is a registered vault \
@@ -162,7 +167,9 @@ fn lexically_normalize(p: &Path) -> PathBuf {
 fn is_ancestor_or_equal(ancestor: &Path, descendant: &Path) -> bool {
     let a: Vec<_> = ancestor.components().collect();
     let d: Vec<_> = descendant.components().collect();
-    if a.len() > d.len() {
+    // An empty ancestor must not match (it would otherwise be a prefix of
+    // everything); also bail when the ancestor is longer than the descendant.
+    if a.is_empty() || a.len() > d.len() {
         return false;
     }
     a.iter().zip(d.iter()).all(|(x, y)| x == y)
@@ -231,6 +238,23 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("memory_tree/content");
         let cfg = write_config(tmp.path(), &["/some/other/vault"]);
+        let got = registration_in_files(&root, &[cfg]);
+        assert_eq!(
+            got,
+            VaultRegistration {
+                registered: false,
+                config_found: true
+            }
+        );
+    }
+
+    #[test]
+    fn empty_vault_path_does_not_match_every_root() {
+        // Regression: a malformed entry with an empty `path` must not
+        // normalize to "" and match every content root as an ancestor.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("memory_tree/content");
+        let cfg = write_config(tmp.path(), &[""]);
         let got = registration_in_files(&root, &[cfg]);
         assert_eq!(
             got,

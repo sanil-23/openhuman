@@ -52,6 +52,7 @@ const ko3: TranslationMap = {
   'workspace.obsidianConfigDirLabel': 'Obsidian config folder',
   'workspace.obsidianConfigDirHint':
     'Path to the folder containing obsidian.json (e.g. ~/.config/obsidian). Leave blank to auto-detect.',
+  'workspace.obsidianConfigDirPlaceholder': '~/.config/obsidian',
   'workspace.save': 'Save',
   'workspace.graphLoadFailed': '메모리 그래프를 불러오지 못했습니다',
   'workspace.loadingGraph': '메모리 그래프를 불러오는 중...',
