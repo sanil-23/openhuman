@@ -143,7 +143,7 @@ const AgentAccessPanel = () => {
   return (
     <div>
       <SettingsHeader
-        title="Agent access"
+        title="Agent OS access"
         showBackButton
         onBack={navigateBack}
         breadcrumbs={breadcrumbs}

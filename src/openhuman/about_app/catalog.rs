@@ -1324,13 +1324,13 @@ const CAPABILITIES: &[Capability] = &[
     },
     Capability {
         id: "filesystem.access_mode",
-        name: "Agent Access Mode",
+        name: "Agent OS Access Mode",
         domain: "security",
         category: CapabilityCategory::Settings,
         description: "Choose how much filesystem and shell access the agent has: Read-Only, \
                       Workspace, Trusted Roots (grant specific folders outside the workspace), \
                       or Full Access. Credential stores stay blocked in every mode.",
-        how_to: "Settings → Agent access",
+        how_to: "Settings → Agent OS access",
         status: CapabilityStatus::Stable,
         privacy: None,
     },
@@ -1352,7 +1352,7 @@ const CAPABILITIES: &[Capability] = &[
         category: CapabilityCategory::Settings,
         description: "Install OS or language packages (apt/dnf/brew/winget/pipx/npm/cargo). \
                       High impact: only available when Full access / tool installation is enabled.",
-        how_to: "Enable in Settings → Agent access (Full access mode).",
+        how_to: "Enable in Settings → Agent OS access (Full access mode).",
         status: CapabilityStatus::Beta,
         privacy: None,
     },
