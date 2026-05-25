@@ -141,8 +141,9 @@ export function ObsidianVaultSection({ contentRootAbs, onToast }: ObsidianVaultS
           // Known vault — open it directly.
           const err = await fireDeepLink();
           toastOpenOutcome(err);
-          // Registered but the IPC/scheme still failed → also surface guidance.
-          if (err !== null) setExpanded(true);
+          // Registered but the IPC/scheme still failed → surface guidance;
+          // on success collapse any stale panel from a prior failed check.
+          setExpanded(err !== null);
           return;
         }
 

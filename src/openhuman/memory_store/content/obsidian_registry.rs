@@ -104,9 +104,10 @@ fn registration_in_files(content_root: &Path, files: &[PathBuf]) -> VaultRegistr
         let parsed: ObsidianConfig = match serde_json::from_str(&body) {
             Ok(p) => p,
             Err(err) => {
+                // Redact the path — it embeds the user's home/username.
                 log::warn!(
                     "[content_store::obsidian_registry] parse {} failed: {err} — skipping",
-                    path.display()
+                    crate::openhuman::memory::util::redact::redact(&path.display().to_string())
                 );
                 continue;
             }
@@ -123,7 +124,7 @@ fn registration_in_files(content_root: &Path, files: &[PathBuf]) -> VaultRegistr
                 log::debug!(
                     "[content_store::obsidian_registry] content root is a registered vault \
                      (matched in {})",
-                    path.display()
+                    crate::openhuman::memory::util::redact::redact(&path.display().to_string())
                 );
                 return VaultRegistration {
                     registered: true,
