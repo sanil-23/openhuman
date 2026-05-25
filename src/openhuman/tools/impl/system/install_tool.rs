@@ -121,7 +121,9 @@ impl Tool for InstallToolTool {
         }
         // Gate 2: read-only autonomy never installs.
         if !self.security.can_act() {
-            return Ok(ToolResult::error("Action blocked: autonomy is read-only."));
+            return Ok(ToolResult::error(
+                "[policy-blocked] Action blocked: autonomy is read-only.",
+            ));
         }
         // Gate 3: rate limit.
         if self.security.is_rate_limited() {

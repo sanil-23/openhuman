@@ -78,7 +78,9 @@ impl Tool for FileWriteTool {
             .ok_or_else(|| anyhow::anyhow!("Missing 'content' parameter"))?;
 
         if !self.security.can_act() {
-            return Ok(ToolResult::error("Action blocked: autonomy is read-only"));
+            return Ok(ToolResult::error(
+                "[policy-blocked] Action blocked: autonomy is read-only",
+            ));
         }
 
         if self.security.is_rate_limited() {
@@ -344,6 +346,17 @@ mod tests {
 
         assert!(result.is_error);
         assert!(result.output().contains("read-only"));
+        // The readonly block must carry the hard-reject marker so the agent
+        // harness recognizes it and halts on a verbatim repeat instead of
+        // grinding. Ties this tool's literal to the marker const — the
+        // const→detector half is covered by tool_loop's guard tests.
+        assert!(
+            result
+                .output()
+                .contains(crate::openhuman::security::POLICY_BLOCKED_MARKER),
+            "file_write readonly block must carry the hard-reject marker: {}",
+            result.output()
+        );
         assert!(!dir.join("out.txt").exists());
 
         let _ = tokio::fs::remove_dir_all(&dir).await;

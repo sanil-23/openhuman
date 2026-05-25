@@ -196,7 +196,7 @@ impl Tool for NpmExecTool {
         // must refuse here — it previously skipped the autonomy check entirely.
         if !self.security.can_act() {
             return Ok(ToolResult::error(
-                "Action blocked: the agent is in read-only mode and cannot run npm.",
+                "[policy-blocked] Action blocked: the agent is in read-only mode and cannot run npm.",
             ));
         }
         if self.security.is_rate_limited() {

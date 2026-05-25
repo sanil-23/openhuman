@@ -501,13 +501,15 @@ impl Tool for GitOperationsTool {
         if self.requires_write_access(operation) {
             if !self.security.can_act() {
                 return Ok(ToolResult::error(
-                    "Action blocked: git write operations require higher autonomy level",
+                    "[policy-blocked] Action blocked: git write operations require higher autonomy level",
                 ));
             }
 
             match self.security.autonomy {
                 AutonomyLevel::ReadOnly => {
-                    return Ok(ToolResult::error("Action blocked: read-only mode"));
+                    return Ok(ToolResult::error(
+                        "[policy-blocked] Action blocked: read-only mode",
+                    ));
                 }
                 AutonomyLevel::Supervised | AutonomyLevel::Full => {}
             }

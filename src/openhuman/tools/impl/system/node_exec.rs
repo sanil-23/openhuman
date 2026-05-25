@@ -170,7 +170,7 @@ impl Tool for NodeExecTool {
         // even in read-only mode.
         if !self.security.can_act() {
             return Ok(ToolResult::error(
-                "Action blocked: the agent is in read-only mode and cannot execute code.",
+                "[policy-blocked] Action blocked: the agent is in read-only mode and cannot execute code.",
             ));
         }
         if self.security.is_rate_limited() {

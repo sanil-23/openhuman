@@ -170,7 +170,9 @@ impl Tool for CurlTool {
 
         if !self.security.can_act() {
             tracing::debug!(target: "[curl]", url = %url, "blocked: autonomy read-only");
-            return Ok(ToolResult::error("Action blocked: autonomy is read-only"));
+            return Ok(ToolResult::error(
+                "[policy-blocked] Action blocked: autonomy is read-only",
+            ));
         }
         if !self.security.record_action() {
             tracing::debug!(target: "[curl]", url = %url, "blocked: rate limit");
