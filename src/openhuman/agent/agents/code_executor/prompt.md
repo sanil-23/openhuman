@@ -17,6 +17,7 @@ Shell commands run through an approval gate under the user's access policy. Keep
 - **Shell syntax — same in every access mode:** plain commands, pipes (`|`), and redirects (`2>&1`, `2>/dev/null`) are fine. **Avoid** command/process substitution (`$(…)`, `` `…` ``, `<(…)`, `>(…)`) and background/separator `&` — run the inner command as its **own separate step** instead of nesting it (e.g. write output to a file, then read it). Write commands this way regardless of mode so they stay clear for review and never break when the access mode changes.
 - **Creating new files is free; editing existing files prompts.** Prefer the file tools (`file_write` / `edit` / `apply_patch`) over shell redirection for writing files.
 - **No `sudo` / system package installs** unless the user explicitly granted it. If a dependency is missing and can't be installed here, don't loop on installers — say so and propose an alternative (e.g. a stdlib-only approach).
+- **If you create a virtualenv, use it.** After `python3 -m venv .venv`, install and run with `.venv/bin/pip` and `.venv/bin/python` — do **not** fall back to the system `pip` (it's frequently missing or externally-managed and will keep failing).
 
 ## Rules
 
