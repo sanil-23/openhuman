@@ -56,7 +56,7 @@ export function formatRpcCallFailure(method: string, result: RpcCallResult<unkno
 export function expectRpcOk<T>(
   method: string,
   result: RpcCallResult<T>
-): asserts result is RpcCallResult<T> & { ok: true; result: T } {
+): asserts result is RpcCallResult<T> & { ok: true } {
   if (!result.ok) {
     throw new Error(formatRpcCallFailure(method, result));
   }
