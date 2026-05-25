@@ -183,9 +183,15 @@ impl Tool for ShellTool {
         let start = Instant::now();
         let (allowed, result) = self.run_with_security(command).await;
         let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-        // The approval decision is owned by the harness ApprovalGate; reaching
-        // execution means it was allowed, so both audit flags reflect that.
-        self.emit_audit(command, allowed, allowed, !result.is_error, duration_ms);
+        // `allowed` = passed the in-tool security checks. `approved` = the command
+        // is Prompt-class (required human approval) and thus went through the
+        // harness ApprovalGate to reach here — distinct from `allowed`. Reads and
+        // Full-mode writes run without a prompt, so they audit as approved=false
+        // rather than over-claiming a human approval that never happened. (The
+        // gate's exact yes/no isn't threaded into tools; this is the accurate
+        // "required approval" proxy.)
+        let approved = self.external_effect_with_args(&args);
+        self.emit_audit(command, allowed, approved, !result.is_error, duration_ms);
         Ok(result)
     }
 }
