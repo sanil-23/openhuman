@@ -47,7 +47,22 @@ pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
         for ext in &exts {
             let candidate = dir.join(format!("{name}{ext}"));
             if candidate.is_file() {
-                return Some(candidate);
+                // On Unix a plain `is_file()` can match a non-executable file and
+                // falsely report the tool as available; require the exec bit.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let is_exec = std::fs::metadata(&candidate)
+                        .map(|m| m.permissions().mode() & 0o111 != 0)
+                        .unwrap_or(false);
+                    if is_exec {
+                        return Some(candidate);
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    return Some(candidate);
+                }
             }
         }
     }

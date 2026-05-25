@@ -24,6 +24,9 @@ use super::detect_tools::find_on_path;
 
 /// Hard cap on an install before it is killed.
 const INSTALL_TIMEOUT_SECS: u64 = 300;
+/// Per-stream cap on captured installer output (1 MiB) — verbose package
+/// managers can emit very large stdout/stderr and spike memory.
+const MAX_OUTPUT_BYTES: usize = 1_048_576;
 
 pub struct InstallToolTool {
     security: Arc<SecurityPolicy>,
@@ -115,7 +118,7 @@ impl Tool for InstallToolTool {
         // Gate 1: feature must be explicitly enabled (Full access mode).
         if !self.security.allow_tool_install {
             return Ok(ToolResult::error(
-                "OS package installation is disabled. Enable it in the agent access settings \
+                "[policy-denied] OS package installation is disabled. Enable it in the agent access settings \
                  (Full access mode / allow_tool_install) before installing tools.",
             ));
         }
@@ -197,8 +200,22 @@ impl Tool for InstallToolTool {
             }
         };
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if stdout.len() > MAX_OUTPUT_BYTES {
+            stdout.truncate(crate::openhuman::util::floor_char_boundary(
+                &stdout,
+                MAX_OUTPUT_BYTES,
+            ));
+            stdout.push_str("\n... [stdout truncated at 1 MiB]");
+        }
+        if stderr.len() > MAX_OUTPUT_BYTES {
+            stderr.truncate(crate::openhuman::util::floor_char_boundary(
+                &stderr,
+                MAX_OUTPUT_BYTES,
+            ));
+            stderr.push_str("\n... [stderr truncated at 1 MiB]");
+        }
         if output.status.success() {
             Ok(ToolResult::success(format!(
                 "Installed '{package}' via {program}.\n{stdout}"

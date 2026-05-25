@@ -209,7 +209,9 @@ struct AutonomySettingsUpdate {
     /// `{ "path": "/abs/dir", "access": "read" | "readwrite" }`.
     trusted_roots: Option<Vec<crate::openhuman::security::TrustedRoot>>,
     allow_tool_install: Option<bool>,
-    max_actions_per_hour: Option<u32>,
+    // Accept u64 to match the published schema (`TypeSchema::U64`); clamped to the
+    // internal u32 at apply time. u32::MAX/hr is already effectively unlimited.
+    max_actions_per_hour: Option<u64>,
 }
 
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
@@ -1191,7 +1193,9 @@ fn handle_update_autonomy_settings(params: Map<String, Value>) -> ControllerFutu
             forbidden_paths: update.forbidden_paths,
             trusted_roots: update.trusted_roots,
             allow_tool_install: update.allow_tool_install,
-            max_actions_per_hour: update.max_actions_per_hour,
+            max_actions_per_hour: update
+                .max_actions_per_hour
+                .map(|v| u32::try_from(v).unwrap_or(u32::MAX)),
         };
         to_json(config_rpc::load_and_apply_autonomy_settings(patch).await?)
     })
