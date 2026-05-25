@@ -6,6 +6,23 @@ use std::time::Instant;
 
 use crate::openhuman::util::floor_char_boundary;
 
+/// Stable, machine-recognizable marker prefixing a **permanent** policy
+/// rejection: the identical `(tool, args)` call can never succeed in the
+/// current tier (read-only blocking a write, a forbidden/credential path, a
+/// disallowed high-risk or hidden-execution command, an off-allowlist command).
+/// The agent harness ([`crate::openhuman::agent::harness::tool_loop`]) detects
+/// this and halts on the **first verbatim repeat** rather than reiterating a
+/// provably-futile call. Kept short and bracketed so it survives the
+/// `Error: …` wrapping the tool layer adds and is easy to grep in logs.
+pub const POLICY_BLOCKED_MARKER: &str = "[policy-blocked]";
+
+/// Stable marker prefixing a **this-turn denial** — the user answered "no" to
+/// an approval prompt, or the prompt timed out / its channel dropped. Unlike a
+/// block this isn't permanent across turns, but re-issuing the *same* call this
+/// turn just re-prompts the user, so the harness records it in the circuit
+/// breaker and stops the agent from re-asking the identical call.
+pub const POLICY_DENIED_MARKER: &str = "[policy-denied]";
+
 /// How much autonomy the agent has
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -1095,17 +1112,19 @@ impl SecurityPolicy {
     pub fn check_gated_command(&self, command: &str) -> Result<CommandClass, String> {
         let class = self.classify_command(command);
         if self.gate_decision(class) == GateDecision::Block {
-            return Err(
-                "Security policy: read-only mode — only read commands are permitted".into(),
-            );
+            return Err(format!(
+                "{POLICY_BLOCKED_MARKER} Security policy: read-only mode — only read commands are \
+                 permitted. Do not retry this command; use a read-only approach or report that it \
+                 cannot be done in this mode."
+            ));
         }
         if self.autonomy != AutonomyLevel::Full && has_hidden_execution(command) {
-            return Err(
-                "Command blocked: command/process substitution ($(…), <(…)), backticks, and \
-                 background (&) are not allowed in this mode — they can run a hidden command the \
-                 approval prompt wouldn't show. Plain redirects like `2>&1` are fine."
-                    .into(),
-            );
+            return Err(format!(
+                "{POLICY_BLOCKED_MARKER} Command blocked: command/process substitution ($(…), \
+                 <(…)), backticks, and background (&) are not allowed in this mode — they can run \
+                 a hidden command the approval prompt wouldn't show. Plain redirects like `2>&1` \
+                 are fine. Do not retry as-is; rewrite the command without these constructs."
+            ));
         }
         Ok(class)
     }
@@ -1145,7 +1164,8 @@ impl SecurityPolicy {
                 truncated
             );
             return Err(format!(
-                "Command not allowed by security policy: {truncated}"
+                "{POLICY_BLOCKED_MARKER} Command not allowed by security policy: {truncated}. \
+                 Do not retry this command; it is off the allowlist for this mode."
             ));
         }
 
@@ -1157,7 +1177,11 @@ impl SecurityPolicy {
                     "[openhuman:policy] High-risk command blocked: {}",
                     &command[..floor_char_boundary(command, 80)]
                 );
-                return Err("Command blocked: high-risk command is disallowed by policy".into());
+                return Err(format!(
+                    "{POLICY_BLOCKED_MARKER} Command blocked: high-risk command is disallowed by \
+                     policy. Do not retry this command; choose a safer approach or report that it \
+                     cannot be done."
+                ));
             }
             if self.autonomy == AutonomyLevel::Supervised && !approved {
                 log::warn!(
@@ -1476,7 +1500,10 @@ impl SecurityPolicy {
     /// Returns the canonical `PathBuf` on success.
     pub async fn validate_path(&self, path: &str) -> Result<PathBuf, String> {
         if !self.is_path_string_allowed(path) {
-            return Err(format!("Path not allowed by security policy: {path}"));
+            return Err(format!(
+                "{POLICY_BLOCKED_MARKER} Path not allowed by security policy: {path}. Do not \
+                 retry this path; use an allowed location (the workspace or a granted folder)."
+            ));
         }
         let expanded = self.expand_tilde(path);
         let full_path = if Path::new(&expanded).is_absolute() {
@@ -1489,7 +1516,7 @@ impl SecurityPolicy {
             .map_err(|e| format!("Failed to resolve path '{path}': {e}"))?;
         if !self.is_resolved_path_allowed_for(&resolved, false) {
             return Err(format!(
-                "Resolved path escapes workspace: {}",
+                "{POLICY_BLOCKED_MARKER} Resolved path escapes workspace: {}",
                 resolved.display()
             ));
         }
@@ -1512,7 +1539,10 @@ impl SecurityPolicy {
     /// Returns the canonical full path (parent resolved + filename appended).
     pub async fn validate_parent_path(&self, path: &str) -> Result<PathBuf, String> {
         if !self.is_path_string_allowed(path) {
-            return Err(format!("Path not allowed by security policy: {path}"));
+            return Err(format!(
+                "{POLICY_BLOCKED_MARKER} Path not allowed by security policy: {path}. Do not \
+                 retry this path; use an allowed location (the workspace or a granted folder)."
+            ));
         }
         let expanded = self.expand_tilde(path);
         let full_path = if Path::new(&expanded).is_absolute() {
@@ -1545,7 +1575,7 @@ impl SecurityPolicy {
             .map_err(|e| format!("Failed to resolve parent of '{path}': {e}"))?;
         if !self.is_resolved_path_allowed_for(&canonical_ancestor, true) {
             return Err(format!(
-                "Resolved parent path escapes workspace: {}",
+                "{POLICY_BLOCKED_MARKER} Resolved parent path escapes workspace: {}",
                 canonical_ancestor.display()
             ));
         }
@@ -1680,7 +1710,7 @@ impl SecurityPolicy {
         // Credential stores are never reachable, even via a trusted-root grant.
         if Self::is_always_forbidden(resolved) {
             return Err(format!(
-                "Resolved path is a protected credential store: {}",
+                "{POLICY_BLOCKED_MARKER} Resolved path is a protected credential store: {}",
                 resolved.display()
             ));
         }
@@ -1700,7 +1730,7 @@ impl SecurityPolicy {
             };
             if resolved.starts_with(&forbidden_resolved) {
                 return Err(format!(
-                    "Resolved path is inside a forbidden directory: {}",
+                    "{POLICY_BLOCKED_MARKER} Resolved path is inside a forbidden directory: {}",
                     forbidden_resolved.display()
                 ));
             }
@@ -1731,7 +1761,8 @@ impl SecurityPolicy {
                         operation_name
                     );
                     return Err(format!(
-                        "Security policy: read-only mode, cannot perform '{operation_name}'"
+                        "{POLICY_BLOCKED_MARKER} Security policy: read-only mode, cannot perform \
+                         '{operation_name}'. Do not retry; this tier blocks all write actions."
                     ));
                 }
 

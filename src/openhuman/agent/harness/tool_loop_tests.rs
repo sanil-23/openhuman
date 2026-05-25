@@ -1056,3 +1056,80 @@ fn repeat_failure_guard_success_resets_consecutive() {
     // is nowhere near the 6-in-a-row threshold.
     assert!(g.record("shell", "cmd6", false, "e").is_none());
 }
+
+// -- Hard policy rejects (marker-driven, halt on first verbatim repeat) ---------
+
+#[test]
+fn hard_reject_kind_detects_markers() {
+    use crate::openhuman::security::{POLICY_BLOCKED_MARKER, POLICY_DENIED_MARKER};
+    // Marker survives the `Error: …` wrapping the tool/subagent layers add.
+    assert_eq!(
+        hard_reject_kind(&format!("Error: {POLICY_BLOCKED_MARKER} Path not allowed")),
+        Some(HardReject::Blocked)
+    );
+    assert_eq!(
+        hard_reject_kind(&format!("{POLICY_DENIED_MARKER} User denied 'shell'.")),
+        Some(HardReject::Denied)
+    );
+    assert_eq!(hard_reject_kind("Error: connection reset by peer"), None);
+}
+
+#[test]
+fn hard_reject_blocked_halts_on_first_repeat_not_third() {
+    use crate::openhuman::security::POLICY_BLOCKED_MARKER;
+    let mut g = RepeatFailureGuard::new();
+    let blocked =
+        format!("Error: {POLICY_BLOCKED_MARKER} Path not allowed by security policy: /etc");
+    // First occurrence is allowed through so the model can read the reason and pivot.
+    assert!(
+        g.record("file_read", "/etc/passwd", false, &blocked)
+            .is_none(),
+        "first hard reject should not halt — let the model change approach"
+    );
+    // Second identical attempt = first verbatim repeat → halt (vs the generic 3).
+    let halt = g.record("file_read", "/etc/passwd", false, &blocked);
+    assert!(
+        halt.is_some(),
+        "an identical blocked call must halt on the 2nd attempt"
+    );
+    let msg = halt.unwrap();
+    assert!(msg.contains("blocked by the security policy"), "got: {msg}");
+}
+
+#[test]
+fn hard_reject_denied_halts_on_first_repeat() {
+    use crate::openhuman::security::POLICY_DENIED_MARKER;
+    let mut g = RepeatFailureGuard::new();
+    let denied = format!("Error: {POLICY_DENIED_MARKER} User denied 'shell' execution.");
+    assert!(g.record("shell", "rm -rf build", false, &denied).is_none());
+    let halt = g.record("shell", "rm -rf build", false, &denied);
+    assert!(
+        halt.is_some(),
+        "re-issued denied call must halt on the 2nd attempt"
+    );
+    assert!(halt.unwrap().contains("denied and re-issued"));
+}
+
+#[test]
+fn hard_reject_distinct_args_do_not_trip_repeat() {
+    use crate::openhuman::security::POLICY_BLOCKED_MARKER;
+    let mut g = RepeatFailureGuard::new();
+    let mk = POLICY_BLOCKED_MARKER;
+    // Different forbidden paths each time: the per-signature repeat guard never
+    // trips (every signature is seen once); only the no-progress backstop can.
+    for i in 0..5 {
+        assert!(g
+            .record(
+                "file_read",
+                &format!("/etc/x{i}"),
+                false,
+                &format!("{mk} blocked")
+            )
+            .is_none());
+    }
+    assert!(
+        g.record("file_read", "/etc/x5", false, &format!("{mk} blocked"))
+            .is_some(),
+        "6 distinct hard rejects in a row should still trip the no-progress guard"
+    );
+}

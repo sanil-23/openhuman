@@ -33,6 +33,7 @@ use tokio::sync::oneshot;
 
 use crate::core::event_bus::{publish_global, DomainEvent};
 use crate::openhuman::config::Config;
+use crate::openhuman::security::POLICY_DENIED_MARKER;
 
 use super::store;
 use super::types::{ApprovalDecision, GateOutcome, PendingApproval};
@@ -249,7 +250,10 @@ impl ApprovalGate {
                     GateOutcome::Allow
                 } else {
                     GateOutcome::Deny {
-                        reason: format!("User denied '{tool_name}' execution."),
+                        reason: format!(
+                            "{POLICY_DENIED_MARKER} User denied '{tool_name}' execution. Do not \
+                             re-request the same call this turn; take a different approach or stop."
+                        ),
                     }
                 }
             }
@@ -264,7 +268,8 @@ impl ApprovalGate {
                 let _ = store::decide(&self.config, &request_id, ApprovalDecision::Deny);
                 GateOutcome::Deny {
                     reason: format!(
-                        "Approval channel for '{tool_name}' closed before a decision was made."
+                        "{POLICY_DENIED_MARKER} Approval channel for '{tool_name}' closed before \
+                         a decision was made."
                     ),
                 }
             }
@@ -279,7 +284,8 @@ impl ApprovalGate {
                 );
                 GateOutcome::Deny {
                     reason: format!(
-                        "Approval for '{tool_name}' timed out after {}s.",
+                        "{POLICY_DENIED_MARKER} Approval for '{tool_name}' timed out after {}s. Do \
+                         not re-request the same call this turn; take a different approach or stop.",
                         self.ttl.as_secs()
                     ),
                 }

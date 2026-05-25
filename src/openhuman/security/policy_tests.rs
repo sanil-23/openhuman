@@ -1547,8 +1547,12 @@ fn validate_command_truncates_secrets_in_allowlist_miss_error() {
         "Err return leaked the secret past the 80-char truncation boundary: {err}"
     );
     assert!(
-        err.starts_with("Command not allowed by security policy: "),
-        "Err return should still carry the policy-decision prefix: {err}"
+        err.starts_with(crate::openhuman::security::POLICY_BLOCKED_MARKER),
+        "hard block should lead with the recognizable policy marker: {err}"
+    );
+    assert!(
+        err.contains("Command not allowed by security policy: "),
+        "Err return should still carry the policy-decision text: {err}"
     );
 }
 

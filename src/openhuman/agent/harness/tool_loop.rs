@@ -40,6 +40,40 @@ pub(crate) const REPEAT_FAILURE_THRESHOLD: u32 = 3;
 /// If this many tool calls fail back-to-back with no success in between (even with
 /// varied args), the agent is making no progress — stop.
 pub(crate) const NO_PROGRESS_FAILURE_THRESHOLD: u32 = 6;
+/// Hard policy rejections (a security block or a gate denial) are deterministic:
+/// the identical `(tool, args)` call provably cannot succeed. Halt on the FIRST
+/// verbatim repeat — i.e. the second identical attempt — rather than letting the
+/// agent burn the generic [`REPEAT_FAILURE_THRESHOLD`] on a doomed call. The first
+/// occurrence is allowed through so the model can read the "do not retry" reason
+/// and pivot to a different, allowed approach.
+pub(crate) const HARD_REJECT_REPEAT_THRESHOLD: u32 = 2;
+
+/// Classification of a deterministic, recognizable policy rejection, detected via
+/// the stable markers the security/approval layers emit
+/// ([`crate::openhuman::security::POLICY_BLOCKED_MARKER`] /
+/// [`POLICY_DENIED_MARKER`](crate::openhuman::security::POLICY_DENIED_MARKER)).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HardReject {
+    /// Permanent for this tier (read-only write, forbidden/credential path,
+    /// disallowed command) — never succeeds on retry.
+    Blocked,
+    /// User denied / approval timed out this turn — re-asking the identical call
+    /// only re-prompts.
+    Denied,
+}
+
+/// Recognize a hard policy rejection from a tool result. Matches anywhere in the
+/// string (not just the prefix) so it survives the `Error: …` wrapping the tool
+/// layer adds. `Blocked` takes precedence over `Denied` if both somehow appear.
+pub(crate) fn hard_reject_kind(result: &str) -> Option<HardReject> {
+    if result.contains(crate::openhuman::security::POLICY_BLOCKED_MARKER) {
+        Some(HardReject::Blocked)
+    } else if result.contains(crate::openhuman::security::POLICY_DENIED_MARKER) {
+        Some(HardReject::Denied)
+    } else {
+        None
+    }
+}
 
 /// Shared repeated-failure circuit breaker, used by BOTH agent loops
 /// (`run_tool_call_loop` here and `run_inner_loop` in `subagent_runner`) so they
@@ -81,14 +115,38 @@ impl RepeatFailureGuard {
             *c += 1;
             *c
         };
-        if count >= REPEAT_FAILURE_THRESHOLD {
-            return Some(format!(
-                "Stopping: the `{tool}` call was retried {count} times with identical arguments \
-                 and kept failing — repeating it will not help. Last error:\n{}\n\nThis looks \
-                 unrecoverable in the current environment (e.g. a missing tool/dependency that \
-                 cannot be installed here). Report this back instead of retrying.",
-                truncate_for_halt(result),
-            ));
+        // Hard policy rejections trip on the first verbatim repeat; everything
+        // else uses the generic identical-retry threshold.
+        let hard = hard_reject_kind(result);
+        let repeat_threshold = if hard.is_some() {
+            HARD_REJECT_REPEAT_THRESHOLD
+        } else {
+            REPEAT_FAILURE_THRESHOLD
+        };
+        if count >= repeat_threshold {
+            return Some(match hard {
+                Some(HardReject::Blocked) => format!(
+                    "Stopping: the `{tool}` call is blocked by the security policy and was \
+                     re-issued with identical arguments — it can never succeed this way. \
+                     Reason:\n{}\n\nDo not repeat this call; use an allowed alternative or report \
+                     that it can't be done here.",
+                    truncate_for_halt(result),
+                ),
+                Some(HardReject::Denied) => format!(
+                    "Stopping: the `{tool}` call was denied and re-issued unchanged — re-asking \
+                     will not change the answer. Reason:\n{}\n\nDo not repeat this call; take a \
+                     different approach or report that it can't be done here.",
+                    truncate_for_halt(result),
+                ),
+                None => format!(
+                    "Stopping: the `{tool}` call was retried {count} times with identical \
+                     arguments and kept failing — repeating it will not help. Last error:\n{}\n\n\
+                     This looks unrecoverable in the current environment (e.g. a missing \
+                     tool/dependency that cannot be installed here). Report this back instead of \
+                     retrying.",
+                    truncate_for_halt(result),
+                ),
+            });
         }
         if self.consecutive >= NO_PROGRESS_FAILURE_THRESHOLD {
             return Some(format!(
@@ -819,6 +877,20 @@ pub(crate) async fn run_tool_call_loop(
                                     "<tool_result name=\"{}\">\n{reason}\n</tool_result>",
                                     call.name
                                 );
+                                // Record the denial in the shared breaker (the
+                                // gate's `[policy-denied]` marker makes it a
+                                // hard reject) so a re-issued identical call
+                                // halts the turn instead of re-prompting
+                                // forever — the normal record path below is
+                                // skipped by this `continue`.
+                                if let Some(halt) = failure_guard.record(
+                                    &call.name,
+                                    &call.arguments.to_string(),
+                                    false,
+                                    &reason,
+                                ) {
+                                    halt_reason = Some(halt);
+                                }
                                 continue;
                             }
                         }

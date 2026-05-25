@@ -38,6 +38,7 @@ pub use policy::ToolOperation;
 pub use policy::{CommandClass, GateDecision};
 #[allow(unused_imports)]
 pub use policy::{TrustedAccess, TrustedRoot};
+pub use policy::{POLICY_BLOCKED_MARKER, POLICY_DENIED_MARKER};
 #[allow(unused_imports)]
 pub use secrets::SecretStore;
 #[allow(unused_imports)]
