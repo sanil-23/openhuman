@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { useT } from '../../../lib/i18n/I18nContext';
 import {
   type AutonomyLevel,
   isTauri,
@@ -22,29 +23,29 @@ interface PresetOption {
   description: string;
 }
 
-const PRESETS: PresetOption[] = [
-  {
-    id: 'readonly',
-    title: 'Read-only',
-    description:
-      'Reads files and runs read-only commands to explore — but never writes, edits, or runs anything that changes state.',
-  },
-  {
-    id: 'supervised',
-    title: 'Ask before edit',
-    description:
-      'Creates new files freely, but asks for your approval before editing an existing file, running a command, reaching the network, or installing anything.',
-  },
-  {
-    id: 'full',
-    title: 'Full access',
-    description:
-      'Runs commands with your full user account access — it can read/write anywhere allowed, except credential and system stores. Destructive commands, network access, and installs still ask for approval.',
-  },
-];
-
 const AgentAccessPanel = () => {
+  const { t } = useT();
   const { navigateBack, breadcrumbs } = useSettingsNavigation();
+
+  // Tier presets — built inside the component so titles/descriptions resolve
+  // through `t()` (i18n). Order matters: it's the display order.
+  const presets: PresetOption[] = [
+    {
+      id: 'readonly',
+      title: t('settings.agentAccess.tier.readonly.title'),
+      description: t('settings.agentAccess.tier.readonly.desc'),
+    },
+    {
+      id: 'supervised',
+      title: t('settings.agentAccess.tier.supervised.title'),
+      description: t('settings.agentAccess.tier.supervised.desc'),
+    },
+    {
+      id: 'full',
+      title: t('settings.agentAccess.tier.full.title'),
+      description: t('settings.agentAccess.tier.full.desc'),
+    },
+  ];
 
   const [level, setLevel] = useState<AutonomyLevel>('supervised');
   const [workspaceOnly, setWorkspaceOnly] = useState(false);
@@ -72,7 +73,8 @@ const AgentAccessPanel = () => {
         setWorkspaceOnly(resp.result.workspace_only);
         setTrustedRoots(resp.result.trusted_roots ?? []);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load access settings');
+        if (!cancelled)
+          setError(e instanceof Error ? e.message : t('settings.agentAccess.loadError'));
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -81,6 +83,7 @@ const AgentAccessPanel = () => {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Auto-apply: every change persists immediately (no separate Save button).
@@ -102,9 +105,9 @@ const AgentAccessPanel = () => {
         trusted_roots: next.trustedRoots,
         allow_tool_install: ALLOW_TOOL_INSTALL,
       });
-      setSavedNote('Saved — applies on your next message.');
+      setSavedNote(t('settings.agentAccess.saved'));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save access settings');
+      setError(e instanceof Error ? e.message : t('settings.agentAccess.saveError'));
     } finally {
       setIsSaving(false);
     }
@@ -143,7 +146,7 @@ const AgentAccessPanel = () => {
   return (
     <div>
       <SettingsHeader
-        title="Agent OS access"
+        title={t('settings.agentAccess.title')}
         showBackButton
         onBack={navigateBack}
         breadcrumbs={breadcrumbs}
@@ -151,19 +154,19 @@ const AgentAccessPanel = () => {
 
       <div className="p-4 space-y-6">
         {!isTauri() && (
-          <p className="text-sm text-coral">
-            Access settings are only available in the desktop app.
-          </p>
+          <p className="text-sm text-coral">{t('settings.agentAccess.desktopOnly')}</p>
         )}
 
         {isLoading ? (
-          <p className="text-sm text-ink-soft">Loading…</p>
+          <p className="text-sm text-ink-soft">{t('settings.agentAccess.loading')}</p>
         ) : (
           <>
             <section className="space-y-2">
-              <h2 className="text-sm font-semibold text-ink">Access mode</h2>
+              <h2 className="text-sm font-semibold text-ink">
+                {t('settings.agentAccess.accessMode')}
+              </h2>
               <div className="grid gap-2">
-                {PRESETS.map(p => (
+                {presets.map(p => (
                   <button
                     key={p.id}
                     type="button"
@@ -181,7 +184,9 @@ const AgentAccessPanel = () => {
                       />
                       <span className="font-medium text-ink">{p.title}</span>
                       {p.id === 'supervised' && (
-                        <span className="text-xs text-ink-soft">(default)</span>
+                        <span className="text-xs text-ink-soft">
+                          {t('settings.agentAccess.defaultTag')}
+                        </span>
                       )}
                     </div>
                     <p className="mt-1 text-xs text-ink-soft">{p.description}</p>
@@ -189,10 +194,7 @@ const AgentAccessPanel = () => {
                 ))}
                 {level === 'full' && (
                   <p className="rounded border border-coral/40 bg-coral/5 p-2 text-xs text-coral">
-                    ⚠ Full access runs commands with your full account access and is{' '}
-                    <strong>not sandboxed</strong>. Only enable it when you trust the agent with
-                    this machine. Credential and system directories stay blocked, and destructive,
-                    network, and install actions still ask for approval.
+                    {t('settings.agentAccess.fullWarning')}
                   </p>
                 )}
               </div>
@@ -208,11 +210,11 @@ const AgentAccessPanel = () => {
                   onChange={e => toggleWorkspaceOnly(e.target.checked)}
                 />
                 <span>
-                  <span className="text-sm font-medium text-ink">Confine to workspace</span>
+                  <span className="text-sm font-medium text-ink">
+                    {t('settings.agentAccess.confine.label')}
+                  </span>
                   <span className="block text-xs text-ink-soft">
-                    Restrict the agent to the workspace directory (plus any granted folders),
-                    whichever access mode is selected. When off, it can reach anywhere your user can
-                    — except the always-blocked credential and system directories.
+                    {t('settings.agentAccess.confine.desc')}
                   </span>
                 </span>
               </label>
@@ -220,14 +222,12 @@ const AgentAccessPanel = () => {
 
             {/* Granted folders (trusted roots) — extra read/write reach. */}
             <section className="space-y-2">
-              <h2 className="text-sm font-semibold text-ink">Granted folders</h2>
-              <p className="text-xs text-ink-soft">
-                Folders the agent may read and write, in addition to the workspace. Credential
-                stores (~/.ssh, ~/.gnupg, ~/.aws, keychains) and system directories (/etc, /System,
-                C:\Windows, …) are always blocked, even inside a granted folder.
-              </p>
+              <h2 className="text-sm font-semibold text-ink">
+                {t('settings.agentAccess.grantedFolders')}
+              </h2>
+              <p className="text-xs text-ink-soft">{t('settings.agentAccess.grantedDesc')}</p>
               {trustedRoots.length === 0 ? (
-                <p className="text-xs text-ink-soft">No folders granted.</p>
+                <p className="text-xs text-ink-soft">{t('settings.agentAccess.noneGranted')}</p>
               ) : (
                 <ul className="space-y-1">
                   {trustedRoots.map(r => (
@@ -237,13 +237,15 @@ const AgentAccessPanel = () => {
                       <span className="font-mono text-xs text-ink truncate">{r.path}</span>
                       <span className="flex items-center gap-2">
                         <span className="text-xs text-ink-soft">
-                          {r.access === 'readwrite' ? 'read + write' : 'read-only'}
+                          {r.access === 'readwrite'
+                            ? t('settings.agentAccess.readWrite')
+                            : t('settings.agentAccess.readOnly')}
                         </span>
                         <button
                           type="button"
                           onClick={() => removeRoot(r.path)}
                           className="text-xs text-coral hover:underline">
-                          Remove
+                          {t('settings.agentAccess.remove')}
                         </button>
                       </span>
                     </li>
@@ -255,21 +257,23 @@ const AgentAccessPanel = () => {
                   type="text"
                   value={newRootPath}
                   onChange={e => setNewRootPath(e.target.value)}
-                  placeholder="/absolute/path/to/folder"
+                  placeholder={t('settings.agentAccess.pathPlaceholder')}
+                  aria-label={t('settings.agentAccess.pathPlaceholder')}
                   className="flex-1 rounded border border-line px-2 py-1 text-xs font-mono"
                 />
                 <select
                   value={newRootAccess}
                   onChange={e => setNewRootAccess(e.target.value as TrustedAccess)}
+                  aria-label={t('settings.agentAccess.accessLevelLabel')}
                   className="rounded border border-line px-2 py-1 text-xs">
-                  <option value="read">read-only</option>
-                  <option value="readwrite">read + write</option>
+                  <option value="read">{t('settings.agentAccess.readOnly')}</option>
+                  <option value="readwrite">{t('settings.agentAccess.readWrite')}</option>
                 </select>
                 <button
                   type="button"
                   onClick={addRoot}
                   className="rounded bg-primary-500 px-3 py-1 text-xs text-white hover:bg-primary-600">
-                  Add
+                  {t('settings.agentAccess.add')}
                 </button>
               </div>
             </section>
@@ -279,11 +283,11 @@ const AgentAccessPanel = () => {
               {error ? (
                 <span className="text-coral">{error}</span>
               ) : isSaving ? (
-                <span className="text-ink-soft">Saving…</span>
+                <span className="text-ink-soft">{t('settings.agentAccess.saving')}</span>
               ) : savedNote ? (
                 <span className="text-sage">✓ {savedNote}</span>
               ) : (
-                <span className="text-ink-soft">Changes apply on your next message.</span>
+                <span className="text-ink-soft">{t('settings.agentAccess.changesApply')}</span>
               )}
             </div>
           </>
