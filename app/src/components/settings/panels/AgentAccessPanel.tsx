@@ -170,13 +170,13 @@ const AgentAccessPanel = () => {
                     onClick={() => selectTier(p.id)}
                     className={`text-left rounded-lg border p-3 transition ${
                       level === p.id
-                        ? 'border-ocean bg-ocean/5'
-                        : 'border-line hover:border-ocean/50'
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-line hover:border-primary-300'
                     }`}>
                     <div className="flex items-center gap-2">
                       <span
                         className={`inline-block w-3 h-3 rounded-full border ${
-                          level === p.id ? 'bg-ocean border-ocean' : 'border-line'
+                          level === p.id ? 'bg-primary-500 border-primary-500' : 'border-line'
                         }`}
                       />
                       <span className="font-medium text-ink">{p.title}</span>
@@ -268,7 +268,7 @@ const AgentAccessPanel = () => {
                 <button
                   type="button"
                   onClick={addRoot}
-                  className="rounded bg-ocean px-3 py-1 text-xs text-white hover:bg-ocean/90">
+                  className="rounded bg-primary-500 px-3 py-1 text-xs text-white hover:bg-primary-600">
                   Add
                 </button>
               </div>
