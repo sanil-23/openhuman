@@ -53,7 +53,6 @@ const hi3: TranslationMap = {
   'workspace.obsidianConfigDirHint':
     'Path to the folder containing obsidian.json (e.g. ~/.config/obsidian). Leave blank to auto-detect.',
   'workspace.obsidianConfigDirPlaceholder': '~/.config/obsidian',
-  'workspace.save': 'Save',
   'workspace.graphLoadFailed': 'मेमोरी ग्राफ लोड नहीं हो पाया',
   'workspace.loadingGraph': 'मेमोरी ग्राफ लोड हो रहा है...',
   'workspace.graphViewMode': 'मेमोरी ग्राफ व्यू मोड',

@@ -1040,7 +1040,15 @@ pub async fn obsidian_vault_status_rpc(
     let cfg = config.clone();
     let resp = tokio::task::spawn_blocking(move || -> ObsidianVaultStatusResponse {
         let content_root = cfg.memory_tree_content_root();
-        let extra = obsidian_config_dir.as_deref().map(std::path::Path::new);
+        // Treat a blank/whitespace override as "no override" — otherwise
+        // `Path::new("")` resolves to `.` and would probe a stray local
+        // `./obsidian.json`. The UI omits the field when empty, but the RPC
+        // is a public controller so normalize defensively here.
+        let extra = obsidian_config_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(std::path::Path::new);
         let reg = obsidian_registry::vault_registration_status(&content_root, extra);
         ObsidianVaultStatusResponse {
             registered: reg.registered,
@@ -2488,6 +2496,18 @@ mod tests {
             obsidian_vault_status_rpc(&cfg, Some(cfg_dir.path().to_string_lossy().to_string()))
                 .await
                 .unwrap();
+        assert!(!outcome.value.registered);
+    }
+
+    #[tokio::test]
+    async fn obsidian_status_blank_override_is_treated_as_none() {
+        // A whitespace-only override must be normalized to None rather than
+        // resolving to "." and probing a stray local ./obsidian.json. The temp
+        // content root isn't under any real host vault, so this stays false.
+        let (_tmp, cfg) = test_config();
+        let outcome = obsidian_vault_status_rpc(&cfg, Some("   ".to_string()))
+            .await
+            .unwrap();
         assert!(!outcome.value.registered);
     }
 }

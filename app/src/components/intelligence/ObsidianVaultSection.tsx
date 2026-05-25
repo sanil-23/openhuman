@@ -272,7 +272,7 @@ export function ObsidianVaultSection({ contentRootAbs, onToast }: ObsidianVaultS
                   data-testid="obsidian-config-dir-save"
                   className="rounded-md bg-violet-500 px-3 py-1 text-xs font-semibold text-white
                              hover:bg-violet-600 disabled:opacity-50">
-                  {t('workspace.save')}
+                  {t('common.save')}
                 </button>
               </div>
               <p className="text-xs text-neutral-500 dark:text-neutral-400">

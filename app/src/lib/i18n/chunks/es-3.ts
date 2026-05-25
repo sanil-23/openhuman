@@ -54,7 +54,6 @@ const es3: TranslationMap = {
   'workspace.obsidianConfigDirHint':
     'Path to the folder containing obsidian.json (e.g. ~/.config/obsidian). Leave blank to auto-detect.',
   'workspace.obsidianConfigDirPlaceholder': '~/.config/obsidian',
-  'workspace.save': 'Save',
   'workspace.graphLoadFailed': 'No se pudo cargar el grafo de memoria',
   'workspace.loadingGraph': 'Cargando grafo de memoria...',
   'workspace.graphViewMode': 'Modo de vista del grafo de memoria',
