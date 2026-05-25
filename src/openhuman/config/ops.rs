@@ -880,10 +880,14 @@ pub async fn load_and_apply_autonomy_settings(
 }
 
 /// Returns the current `[autonomy]` settings block as JSON (no secrets).
+///
+/// Emits a log line so `into_cli_compatible_json` wraps the payload under
+/// `result` — the shape every consumer reads (`AgentAccessPanel` /
+/// `AutonomyPanel` use `res.result.*`, and `json_rpc_e2e` strips the wrapper).
 pub async fn get_autonomy_settings() -> Result<RpcOutcome<serde_json::Value>, String> {
     let config = load_config_with_timeout().await?;
     let value = serde_json::to_value(&config.autonomy).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::new(value, Vec::new()))
+    Ok(RpcOutcome::single_log(value, "autonomy settings read"))
 }
 
 /// Updates the analytics-related settings in the configuration.
