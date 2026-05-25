@@ -742,6 +742,9 @@ const de5: TranslationMap = {
   'skills.meetingBots.platforms.zoom': 'Zoom',
   'skills.meetingBots.soonSuffix': 'bald',
   'skills.setup.screenIntel.permissionPathLabel': 'macOS wendet Datenschutz an:',
+  'settings.agentAccess.title': 'Agent OS access',
+  'settings.agentAccess.menuDesc':
+    'Control where the agent can read/write and whether it can use the shell.',
 };
 
 export default de5;

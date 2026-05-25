@@ -705,6 +705,9 @@ const ko5: TranslationMap = {
   'skills.meetingBots.platforms.zoom': 'Zoom',
   'skills.meetingBots.soonSuffix': '곧',
   'skills.setup.screenIntel.permissionPathLabel': 'macOS는 다음에 개인 정보 보호를 적용합니다.',
+  'settings.agentAccess.title': 'Agent OS access',
+  'settings.agentAccess.menuDesc':
+    'Control where the agent can read/write and whether it can use the shell.',
 };
 
 export default ko5;

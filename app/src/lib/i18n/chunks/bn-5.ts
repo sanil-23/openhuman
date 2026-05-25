@@ -715,6 +715,9 @@ const bn5: TranslationMap = {
   'skills.meetingBots.platforms.zoom': 'জুম',
   'skills.meetingBots.soonSuffix': 'শীঘ্রই',
   'skills.setup.screenIntel.permissionPathLabel': 'macOS গোপনীয়তা প্রযোজ্য:',
+  'settings.agentAccess.title': 'Agent OS access',
+  'settings.agentAccess.menuDesc':
+    'Control where the agent can read/write and whether it can use the shell.',
 };
 
 export default bn5;

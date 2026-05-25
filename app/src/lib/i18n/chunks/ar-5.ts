@@ -702,6 +702,9 @@ const ar5: TranslationMap = {
   'skills.meetingBots.platforms.zoom': 'تكبير',
   'skills.meetingBots.soonSuffix': 'قريبًا',
   'skills.setup.screenIntel.permissionPathLabel': 'يطبق macOS الخصوصية على:',
+  'settings.agentAccess.title': 'Agent OS access',
+  'settings.agentAccess.menuDesc':
+    'Control where the agent can read/write and whether it can use the shell.',
 };
 
 export default ar5;

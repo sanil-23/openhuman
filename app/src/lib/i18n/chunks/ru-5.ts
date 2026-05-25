@@ -722,6 +722,9 @@ const ru5: TranslationMap = {
   'skills.meetingBots.platforms.zoom': 'Zoom',
   'skills.meetingBots.soonSuffix': 'скоро',
   'skills.setup.screenIntel.permissionPathLabel': 'macOS применяет конфиденциальность к:',
+  'settings.agentAccess.title': 'Agent OS access',
+  'settings.agentAccess.menuDesc':
+    'Control where the agent can read/write and whether it can use the shell.',
 };
 
 export default ru5;

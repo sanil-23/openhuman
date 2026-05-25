@@ -782,6 +782,13 @@ pub(crate) async fn run_tool_call_loop(
                     "<tool_result name=\"{}\">\n{denied}\n</tool_result>",
                     call.name
                 );
+                // Record so a re-issued identical call halts the turn rather than
+                // repeating a deterministic policy denial to max_iterations.
+                if let Some(halt) =
+                    failure_guard.record(&call.name, &call.arguments.to_string(), false, &denied)
+                {
+                    halt_reason = Some(halt);
+                }
                 continue;
             }
 
@@ -811,6 +818,14 @@ pub(crate) async fn run_tool_call_loop(
                             "<tool_result name=\"{}\">\n{denied}\n</tool_result>",
                             call.name
                         );
+                        if let Some(halt) = failure_guard.record(
+                            &call.name,
+                            &call.arguments.to_string(),
+                            false,
+                            &denied,
+                        ) {
+                            halt_reason = Some(halt);
+                        }
                         continue;
                     }
                 }
@@ -852,6 +867,14 @@ pub(crate) async fn run_tool_call_loop(
                         "<tool_result name=\"{}\">\n{denied}\n</tool_result>",
                         call.name
                     );
+                    if let Some(halt) = failure_guard.record(
+                        &call.name,
+                        &call.arguments.to_string(),
+                        false,
+                        &denied,
+                    ) {
+                        halt_reason = Some(halt);
+                    }
                     continue;
                 }
             }

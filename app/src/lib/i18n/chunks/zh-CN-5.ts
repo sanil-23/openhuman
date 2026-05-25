@@ -676,6 +676,9 @@ const zhCN5: TranslationMap = {
   'skills.meetingBots.platforms.zoom': '变焦',
   'skills.meetingBots.soonSuffix': '很快',
   'skills.setup.screenIntel.permissionPathLabel': 'macOS 将隐私应用于：',
+  'settings.agentAccess.title': 'Agent OS access',
+  'settings.agentAccess.menuDesc':
+    'Control where the agent can read/write and whether it can use the shell.',
 };
 
 export default zhCN5;

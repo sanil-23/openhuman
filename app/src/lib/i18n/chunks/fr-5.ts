@@ -733,6 +733,9 @@ const fr5: TranslationMap = {
   'skills.meetingBots.platforms.zoom': 'Zoom',
   'skills.meetingBots.soonSuffix': 'bientôt',
   'skills.setup.screenIntel.permissionPathLabel': 'macOS applique la confidentialité à :',
+  'settings.agentAccess.title': 'Agent OS access',
+  'settings.agentAccess.menuDesc':
+    'Control where the agent can read/write and whether it can use the shell.',
 };
 
 export default fr5;

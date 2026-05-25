@@ -726,6 +726,9 @@ const pt5: TranslationMap = {
   'skills.meetingBots.platforms.zoom': 'Zoom',
   'skills.meetingBots.soonSuffix': 'em breve',
   'skills.setup.screenIntel.permissionPathLabel': 'macOS aplica privacidade a:',
+  'settings.agentAccess.title': 'Agent OS access',
+  'settings.agentAccess.menuDesc':
+    'Control where the agent can read/write and whether it can use the shell.',
 };
 
 export default pt5;

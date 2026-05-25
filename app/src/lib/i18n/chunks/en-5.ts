@@ -204,6 +204,9 @@ const en5: TranslationMap = {
   'settings.developerMenu.integrationTriggers.desc':
     'Configure AI triage settings for Composio integration triggers',
   'settings.appearance.menuDesc': 'Pick light, dark, or match your system theme',
+  'settings.agentAccess.title': 'Agent OS access',
+  'settings.agentAccess.menuDesc':
+    'Control where the agent can read/write and whether it can use the shell.',
   'settings.mascot.active': 'Active',
   'settings.mascot.characterDesc': 'Character desc',
   'settings.mascot.characterHeading': 'Character heading',

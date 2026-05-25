@@ -135,8 +135,8 @@ const SettingsHome = () => {
         },
         {
           id: 'agent-access',
-          title: 'Agent OS access',
-          description: 'Control where the agent can read/write and whether it can use the shell.',
+          title: t('settings.agentAccess.title'),
+          description: t('settings.agentAccess.menuDesc'),
           icon: (
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path

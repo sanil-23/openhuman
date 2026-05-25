@@ -2995,6 +2995,9 @@ const en: TranslationMap = {
   'settings.mcpServer.configFilePath': 'Config file',
   'settings.mcpServer.clientSelectorAriaLabel': 'MCP client selector',
   'settings.appearance.menuDesc': 'Pick light, dark, or match your system theme',
+  'settings.agentAccess.title': 'Agent OS access',
+  'settings.agentAccess.menuDesc':
+    'Control where the agent can read/write and whether it can use the shell.',
   'settings.appearance.title': 'Appearance',
   'settings.appearance.themeHeading': 'Theme',
   'settings.appearance.themeAria': 'Theme',

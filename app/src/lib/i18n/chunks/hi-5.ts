@@ -716,6 +716,9 @@ const hi5: TranslationMap = {
   'skills.meetingBots.platforms.zoom': 'ज़ूम करें',
   'skills.meetingBots.soonSuffix': 'जल्द ही',
   'skills.setup.screenIntel.permissionPathLabel': 'macOS निम्नलिखित पर गोपनीयता लागू करता है:',
+  'settings.agentAccess.title': 'Agent OS access',
+  'settings.agentAccess.menuDesc':
+    'Control where the agent can read/write and whether it can use the shell.',
 };
 
 export default hi5;

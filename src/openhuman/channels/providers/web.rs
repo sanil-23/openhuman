@@ -616,14 +616,30 @@ pub async fn start_chat(
     if let Some(gate) = crate::openhuman::approval::ApprovalGate::try_global() {
         if let Some(request_id) = gate.pending_for_thread(&thread_id) {
             if let Some(decision) = crate::openhuman::approval::parse_approval_reply(&message) {
-                let _ = gate.decide(&request_id, decision);
-                log::info!(
-                    "[web-channel] routed chat reply to approval gate thread_id={} request_id={} decision={}",
-                    thread_id,
-                    request_id,
-                    decision.as_str()
-                );
-                return Ok(request_id);
+                match gate.decide(&request_id, decision) {
+                    Ok(_) => {
+                        log::info!(
+                            "[web-channel] routed chat reply to approval gate thread_id={} request_id={} decision={}",
+                            thread_id,
+                            request_id,
+                            decision.as_str()
+                        );
+                        return Ok(request_id);
+                    }
+                    Err(err) => {
+                        // Don't claim success: the parked turn is still waiting on
+                        // its oneshot. Log and fall through so the reply is
+                        // dispatched as a fresh turn rather than silently dropped
+                        // (the stale parked request will TTL out).
+                        log::warn!(
+                            "[web-channel] failed to route chat reply to approval gate thread_id={} request_id={} decision={} err={}",
+                            thread_id,
+                            request_id,
+                            decision.as_str(),
+                            err
+                        );
+                    }
+                }
             }
         }
     }
