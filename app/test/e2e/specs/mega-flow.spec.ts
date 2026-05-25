@@ -31,7 +31,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { waitForApp } from '../helpers/app-helpers';
-import { callOpenhumanRpc } from '../helpers/core-rpc';
+import { callOpenhumanRpc, expectRpcOk } from '../helpers/core-rpc';
 import { triggerDeepLink } from '../helpers/deep-link-helpers';
 import { hasAppChrome } from '../helpers/element-helpers';
 import {
@@ -237,6 +237,9 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
     // Re-login since reset wipes the session.
     await triggerDeepLink('openhuman://auth?token=mega-composio-token');
     await waitForMockRequest('POST', '/telegram/login-tokens/', 15_000);
+    // Wait for the core to finish storing the session token before calling
+    // composio RPCs — without this the session may not be persisted yet.
+    await waitForMockRequest('GET', '/auth/me', 10_000);
 
     // Seed connections + available triggers; start with an empty active list.
     setMockBehaviors({
@@ -247,8 +250,10 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
       composioActiveTriggers: JSON.stringify([]),
     });
 
-    const before = await callOpenhumanRpc('openhuman.composio_list_triggers', {});
-    expect(before.ok).toBe(true);
+    const listTriggersMethod = 'openhuman.composio_list_triggers';
+    const enableTriggerMethod = 'openhuman.composio_enable_trigger';
+    const before = await callOpenhumanRpc(listTriggersMethod, {});
+    expectRpcOk(listTriggersMethod, before);
     // list_triggers always emits a log line → RpcOutcome wraps in {result, logs}.
     // JSON-RPC result shape: { result: { triggers: [...] }, logs: [...] }
     // callResult.result = { result: { triggers: [...] }, logs: [...] }
@@ -258,14 +263,14 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
     expect(Array.isArray(beforeList)).toBe(true);
     expect(beforeList).toHaveLength(0);
 
-    const enable = await callOpenhumanRpc('openhuman.composio_enable_trigger', {
+    const enable = await callOpenhumanRpc(enableTriggerMethod, {
       connection_id: 'c1',
       slug: 'GMAIL_NEW_GMAIL_MESSAGE',
     });
-    expect(enable.ok).toBe(true);
+    expectRpcOk(enableTriggerMethod, enable);
 
-    const after = await callOpenhumanRpc('openhuman.composio_list_triggers', {});
-    expect(after.ok).toBe(true);
+    const after = await callOpenhumanRpc(listTriggersMethod, {});
+    expectRpcOk(listTriggersMethod, after);
     const afterList = (after.result?.result?.triggers ?? after.result?.triggers ?? []) as unknown[];
     expect(afterList.length).toBeGreaterThan(0);
     console.log(`${LOG} composio: enable mutated active list to`, afterList);
@@ -561,6 +566,8 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
 
     await triggerDeepLink('openhuman://auth?token=mega-composio-webhook-token');
     await waitForMockRequest('POST', '/telegram/login-tokens/', 15_000);
+    // Wait for the core to finish storing the session token before proceeding.
+    await waitForMockRequest('GET', '/auth/me', 10_000);
     clearRequestLog();
 
     // Seed composio state.
@@ -573,11 +580,13 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
     });
 
     // Step 1 — enable trigger.
-    const enable = await callOpenhumanRpc('openhuman.composio_enable_trigger', {
+    const enableTriggerMethod = 'openhuman.composio_enable_trigger';
+    const listTriggersMethod = 'openhuman.composio_list_triggers';
+    const enable = await callOpenhumanRpc(enableTriggerMethod, {
       connection_id: 'c2',
       slug: 'GITHUB_PULL_REQUEST_EVENT',
     });
-    expect(enable.ok).toBe(true);
+    expectRpcOk(enableTriggerMethod, enable);
     console.log(`${LOG} composio+webhook: trigger enabled`);
 
     // Step 2 — register an echo tunnel so the core has a tunnel ID to work with.
@@ -617,8 +626,8 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
 
     // Step 4 — verify the enabled trigger is still listed.
     // list_triggers always emits a log line → {result: {triggers:[...]}, logs:[...]}
-    const list = await callOpenhumanRpc('openhuman.composio_list_triggers', {});
-    expect(list.ok).toBe(true);
+    const list = await callOpenhumanRpc(listTriggersMethod, {});
+    expectRpcOk(listTriggersMethod, list);
     const triggers: unknown[] = list.result?.result?.triggers ?? list.result?.triggers ?? [];
     expect(triggers.length).toBeGreaterThan(0);
     console.log(
