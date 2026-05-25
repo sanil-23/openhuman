@@ -1666,7 +1666,10 @@ pub async fn bootstrap_core_runtime(embedded_core: bool) {
     // triage / cron turns carry no chat context and pass straight through, so
     // autonomous automation is never blocked.
     if std::env::var("OPENHUMAN_APPROVAL_GATE")
-        .map(|v| !matches!(v.trim(), "0" | "false" | "FALSE"))
+        .map(|v| {
+            let t = v.trim();
+            !(t == "0" || t.eq_ignore_ascii_case("false"))
+        })
         .unwrap_or(true)
     {
         let (session_id, ephemeral) = match std::env::var("OPENHUMAN_CORE_TOKEN")
@@ -1686,8 +1689,16 @@ pub async fn bootstrap_core_runtime(embedded_core: bool) {
         }
         let _ =
             crate::openhuman::approval::ApprovalGate::init_global(cfg.clone(), session_id.clone());
+        // Never log a token-derived session_id: when OPENHUMAN_CORE_TOKEN is set,
+        // session_id IS that secret. Only the generated ephemeral UUID is safe to
+        // print.
+        let session_label = if ephemeral {
+            session_id.as_str()
+        } else {
+            "<redacted>"
+        };
         log::info!(
-            "[runtime] approval gate installed (on by default; set OPENHUMAN_APPROVAL_GATE=0 to disable, session_id={session_id}) — \
+            "[runtime] approval gate installed (on by default; set OPENHUMAN_APPROVAL_GATE=0 to disable, session_id={session_label}) — \
              Prompt-class external-effect tool calls park for approval in interactive chat turns"
         );
         // Bridge ApprovalRequested → `approval_request` web socket event. This MUST

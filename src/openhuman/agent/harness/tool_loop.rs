@@ -1204,6 +1204,19 @@ pub(crate) async fn run_tool_call_loop(
         // tool results are already in `history` above, so the caller still has
         // full context if it wants it.
         if let Some(reason) = halt_reason.take() {
+            // Mirror the normal-completion path: emit TurnCompleted before the
+            // early return, otherwise progress consumers stay "in-flight"
+            // indefinitely when the circuit breaker trips.
+            if let Some(ref sink) = on_progress {
+                if let Err(e) = sink
+                    .send(AgentProgress::TurnCompleted {
+                        iterations: (iteration + 1) as u32,
+                    })
+                    .await
+                {
+                    log::warn!("[agent_loop] progress sink closed at TurnCompleted: {e}");
+                }
+            }
             return Ok(reason);
         }
     }

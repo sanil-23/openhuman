@@ -242,7 +242,8 @@ impl ApprovalGate {
             return (
                 GateOutcome::Deny {
                     reason: format!(
-                        "Approval gate could not persist the request — denying for safety: {err}"
+                        "{POLICY_DENIED_MARKER} Approval gate could not persist the request — \
+                         denying for safety: {err}"
                     ),
                 },
                 None,
@@ -338,25 +339,30 @@ impl ApprovalGate {
                         ttl_secs = self.ttl.as_secs(),
                         "[approval::gate] timeout race: persisted decision was Approve, honoring approval"
                     );
-                    return (GateOutcome::Allow, Some(request_id));
+                    // Fall through (no early return) so `clear_thread` below runs
+                    // on this path too — otherwise the stale thread→request
+                    // mapping survives and the next yes/no on the thread could be
+                    // routed to this already-finished request.
+                    (GateOutcome::Allow, Some(request_id))
+                } else {
+                    tracing::warn!(
+                        request_id = %request_id,
+                        tool = tool_name,
+                        ttl_secs = self.ttl.as_secs(),
+                        "[approval::gate] approval timed out, denying"
+                    );
+                    (
+                        GateOutcome::Deny {
+                            reason: format!(
+                                "{POLICY_DENIED_MARKER} Approval for '{tool_name}' timed out after \
+                                 {}s. Do not re-request the same call this turn; take a different \
+                                 approach or stop.",
+                                self.ttl.as_secs()
+                            ),
+                        },
+                        None,
+                    )
                 }
-                tracing::warn!(
-                    request_id = %request_id,
-                    tool = tool_name,
-                    ttl_secs = self.ttl.as_secs(),
-                    "[approval::gate] approval timed out, denying"
-                );
-                (
-                    GateOutcome::Deny {
-                        reason: format!(
-                            "{POLICY_DENIED_MARKER} Approval for '{tool_name}' timed out after \
-                             {}s. Do not re-request the same call this turn; take a different \
-                             approach or stop.",
-                            self.ttl.as_secs()
-                        ),
-                    },
-                    None,
-                )
             }
         };
         // The thread routing mapping is only needed while parked; clear it on
@@ -710,7 +716,14 @@ mod tests {
         // (issue #2135).
         let g = gate.clone();
         let handle = tokio::spawn(async move {
-            g.intercept_audited("composio", "send slack", serde_json::json!({}))
+            // Scope a chat context *inside* the spawned task — task-locals don't
+            // cross `tokio::spawn`, and `intercept` only parks (creates a pending
+            // row) when a chat context is present.
+            APPROVAL_CHAT_CONTEXT
+                .scope(
+                    chat_ctx(),
+                    g.intercept_audited("composio", "send slack", serde_json::json!({})),
+                )
                 .await
         });
         let pending = loop {
@@ -742,7 +755,11 @@ mod tests {
         // Deny path → no id (nothing to record afterward).
         let g = gate.clone();
         let denied = tokio::spawn(async move {
-            g.intercept_audited("composio", "send slack", serde_json::json!({}))
+            APPROVAL_CHAT_CONTEXT
+                .scope(
+                    chat_ctx(),
+                    g.intercept_audited("composio", "send slack", serde_json::json!({})),
+                )
                 .await
         });
         let pending = loop {
@@ -760,7 +777,11 @@ mod tests {
         // Allowlist-shortcut path → also no id (no row was created).
         let g = gate.clone();
         let first = tokio::spawn(async move {
-            g.intercept_audited("pushover", "first send", serde_json::json!({}))
+            APPROVAL_CHAT_CONTEXT
+                .scope(
+                    chat_ctx(),
+                    g.intercept_audited("pushover", "first send", serde_json::json!({})),
+                )
                 .await
         });
         let pending = loop {
@@ -783,8 +804,11 @@ mod tests {
             "the prompting call still persists a row"
         );
 
-        let (second_outcome, second_id) = gate
-            .intercept_audited("pushover", "second send", serde_json::json!({}))
+        let (second_outcome, second_id) = APPROVAL_CHAT_CONTEXT
+            .scope(
+                chat_ctx(),
+                gate.intercept_audited("pushover", "second send", serde_json::json!({})),
+            )
             .await;
         assert!(matches!(second_outcome, GateOutcome::Allow));
         assert!(

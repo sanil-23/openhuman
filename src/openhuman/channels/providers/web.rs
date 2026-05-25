@@ -617,7 +617,7 @@ pub async fn start_chat(
         if let Some(request_id) = gate.pending_for_thread(&thread_id) {
             if let Some(decision) = crate::openhuman::approval::parse_approval_reply(&message) {
                 match gate.decide(&request_id, decision) {
-                    Ok(_) => {
+                    Ok(Some(_)) => {
                         log::info!(
                             "[web-channel] routed chat reply to approval gate thread_id={} request_id={} decision={}",
                             thread_id,
@@ -625,6 +625,18 @@ pub async fn start_chat(
                             decision.as_str()
                         );
                         return Ok(request_id);
+                    }
+                    Ok(None) => {
+                        // `decide` returns `Ok(None)` when the request is already
+                        // gone / already decided — the parked turn was NOT resumed
+                        // by this call. Don't ACK it as applied; fall through so the
+                        // reply is dispatched as a fresh turn.
+                        log::warn!(
+                            "[web-channel] approval reply targeted a non-pending/already-decided request thread_id={} request_id={} decision={} — dispatching as fresh turn",
+                            thread_id,
+                            request_id,
+                            decision.as_str()
+                        );
                     }
                     Err(err) => {
                         // Don't claim success: the parked turn is still waiting on
