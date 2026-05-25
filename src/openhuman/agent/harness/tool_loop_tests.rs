@@ -1133,3 +1133,215 @@ fn hard_reject_distinct_args_do_not_trip_repeat() {
         "6 distinct hard rejects in a row should still trip the no-progress guard"
     );
 }
+
+// -- Harness ↔ ApprovalGate seam (park → decide → execute/deny) ----------------
+
+/// External-effect tool used to exercise the approval gate. Records whether
+/// `execute()` actually ran so a test can assert deny blocks it / approve lets
+/// it through.
+struct GatedTool {
+    ran: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl Tool for GatedTool {
+    fn name(&self) -> &str {
+        "gated_act"
+    }
+    fn description(&self) -> &str {
+        "external-effect tool used to exercise the approval gate seam"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    fn external_effect_with_args(&self, _args: &serde_json::Value) -> bool {
+        true
+    }
+    async fn execute(&self, _args: serde_json::Value) -> Result<ToolResult> {
+        self.ran.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(ToolResult::success("gated tool ran"))
+    }
+}
+
+/// End-to-end seam test for the harness ↔ `ApprovalGate` wiring — the exact path
+/// validated by hand (park → decide → execute / deny). Drives the *real*
+/// `run_tool_call_loop` with the process-global gate installed. Uses one gate +
+/// one held `TempDir` for all scenarios: the gate is a `OnceLock`, no other test
+/// installs it, and the existing harness tests use non-external-effect tools so
+/// the install can't gate them.
+#[tokio::test]
+async fn run_tool_call_loop_approval_gate_seam() {
+    use crate::openhuman::approval::{
+        ApprovalChatContext, ApprovalDecision, ApprovalGate, APPROVAL_CHAT_CONTEXT,
+    };
+    use crate::openhuman::security::POLICY_DENIED_MARKER;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let config = crate::openhuman::config::Config {
+        workspace_dir: dir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let gate = ApprovalGate::init_global(config, "harness-gate-seam-test");
+    let mm = crate::openhuman::config::MultimodalConfig::default();
+
+    // Provider that calls `gated_act` once, then finishes with "done".
+    let scripted = || ScriptedProvider {
+        responses: Mutex::new(vec![
+            Ok(ChatResponse {
+                text: Some(
+                    "<tool_call>{\"name\":\"gated_act\",\"arguments\":{}}</tool_call>".into(),
+                ),
+                tool_calls: vec![],
+                usage: None,
+            }),
+            Ok(ChatResponse {
+                text: Some("done".into()),
+                tool_calls: vec![],
+                usage: None,
+            }),
+        ]),
+        native_tools: false,
+        vision: false,
+    };
+
+    // Concurrent decider: waits for the loop to park `thread`, then decides.
+    let decide_when_parked = |thread: &'static str, decision: ApprovalDecision| {
+        let gate = gate.clone();
+        async move {
+            for _ in 0..300 {
+                if let Some(rid) = gate.pending_for_thread(thread) {
+                    gate.decide(&rid, decision).unwrap();
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("gate never parked thread {thread}");
+        }
+    };
+
+    // ── Scenario 1: chat turn + DENY → tool must NOT execute; marker surfaces ──
+    {
+        let ran = Arc::new(AtomicBool::new(false));
+        let provider = scripted();
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(GatedTool { ran: ran.clone() })];
+        let mut history = vec![ChatMessage::user("act")];
+        let ctx = ApprovalChatContext {
+            thread_id: "seam-deny".into(),
+            client_id: "c".into(),
+        };
+        let lf = APPROVAL_CHAT_CONTEXT.scope(
+            ctx,
+            run_tool_call_loop(
+                &provider,
+                &mut history,
+                &tools,
+                "p",
+                "m",
+                0.0,
+                true,
+                None,
+                "channel",
+                &mm,
+                3,
+                None,
+                None,
+                &[],
+                None,
+                None,
+            ),
+        );
+        let (res, ()) = tokio::join!(lf, decide_when_parked("seam-deny", ApprovalDecision::Deny));
+        res.unwrap();
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "a denied external-effect tool must NOT execute"
+        );
+        let joined = history
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains(POLICY_DENIED_MARKER),
+            "denied tool result must carry the policy-denied marker: {joined}"
+        );
+    }
+
+    // ── Scenario 2: chat turn + APPROVE → tool executes ──
+    {
+        let ran = Arc::new(AtomicBool::new(false));
+        let provider = scripted();
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(GatedTool { ran: ran.clone() })];
+        let mut history = vec![ChatMessage::user("act")];
+        let ctx = ApprovalChatContext {
+            thread_id: "seam-approve".into(),
+            client_id: "c".into(),
+        };
+        let lf = APPROVAL_CHAT_CONTEXT.scope(
+            ctx,
+            run_tool_call_loop(
+                &provider,
+                &mut history,
+                &tools,
+                "p",
+                "m",
+                0.0,
+                true,
+                None,
+                "channel",
+                &mm,
+                3,
+                None,
+                None,
+                &[],
+                None,
+                None,
+            ),
+        );
+        let (res, ()) = tokio::join!(
+            lf,
+            decide_when_parked("seam-approve", ApprovalDecision::ApproveOnce)
+        );
+        res.unwrap();
+        assert!(
+            ran.load(Ordering::SeqCst),
+            "an approved external-effect tool must execute"
+        );
+    }
+
+    // ── Scenario 3: NO chat context → not gated (chat-only invariant) → runs ──
+    {
+        let ran = Arc::new(AtomicBool::new(false));
+        let provider = scripted();
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(GatedTool { ran: ran.clone() })];
+        let mut history = vec![ChatMessage::user("act")];
+        // No APPROVAL_CHAT_CONTEXT.scope → a background / non-chat turn.
+        let res = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools,
+            "p",
+            "m",
+            0.0,
+            true,
+            None,
+            "channel",
+            &mm,
+            3,
+            None,
+            None,
+            &[],
+            None,
+            None,
+        )
+        .await;
+        res.unwrap();
+        assert!(
+            ran.load(Ordering::SeqCst),
+            "without a chat context the gate must not park (chat-only invariant)"
+        );
+    }
+}
