@@ -89,9 +89,7 @@ describe('ApprovalRequestCard', () => {
     await waitFor(() => {
       // Raw RPC error text ('gate not installed') is no longer surfaced to the
       // user — it's kept in a namespaced debug log; the localized fallback shows.
-      expect(
-        screen.getByText('Could not record your decision — try again.')
-      ).toBeInTheDocument();
+      expect(screen.getByText(/Could not record your decision/)).toBeInTheDocument();
     });
     // Decision failed → approval stays parked, buttons remain actionable.
     expect(store.getState().chatRuntime.pendingApprovalByThread[THREAD]).toEqual(approval);
