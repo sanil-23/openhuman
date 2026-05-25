@@ -214,13 +214,21 @@ mod tests {
         let command = runtime
             .build_shell_command("echo hi", Path::new("/tmp"))
             .unwrap();
+        let prog = command.as_std().get_program().to_string_lossy().into_owned();
         let args: Vec<String> = command
             .as_std()
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(command.as_std().get_program().to_string_lossy(), "sh");
-        assert_eq!(args, vec!["-lc", "echo hi"]);
+        // NativeRuntime prefers bash with `set -o pipefail` when bash is present
+        // (so masked pipe failures surface), and falls back to plain `sh`.
+        if let Some(bash) = bash_path() {
+            assert_eq!(prog, bash);
+            assert_eq!(args, vec!["-lc".to_string(), "set -o pipefail\necho hi".to_string()]);
+        } else {
+            assert_eq!(prog, "sh");
+            assert_eq!(args, vec!["-lc".to_string(), "echo hi".to_string()]);
+        }
         assert_eq!(command.as_std().get_current_dir(), Some(Path::new("/tmp")));
     }
 

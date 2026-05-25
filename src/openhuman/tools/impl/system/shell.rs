@@ -191,7 +191,8 @@ impl Tool for ShellTool {
         // gate's exact yes/no isn't threaded into tools; this is the accurate
         // "required approval" proxy.)
         let approved = self.external_effect_with_args(&args);
-        self.emit_audit(command, allowed, approved, !result.is_error, duration_ms);
+        // emit_audit signature is (command, approved, allowed, …) — keep that order.
+        self.emit_audit(command, approved, allowed, !result.is_error, duration_ms);
         Ok(result)
     }
 }
