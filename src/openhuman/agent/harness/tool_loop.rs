@@ -58,7 +58,7 @@ fn truncate_for_halt(s: &str) -> String {
 /// truncated preview of each result — including the commands that "succeed" with
 /// an error buried in stdout (e.g. `pip … | tail`), which are otherwise
 /// invisible because only the `is_error` flag is logged.
-fn tool_output_logging_enabled() -> bool {
+pub(crate) fn tool_output_logging_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
         std::env::var("OPENHUMAN_LOG_TOOL_OUTPUT")
@@ -70,7 +70,7 @@ fn tool_output_logging_enabled() -> bool {
 /// Bounded preview of a tool result for the opt-in output log. Larger than the
 /// halt clamp (we want to actually see command output when debugging), still
 /// capped so a 1MB blob can't flood the log.
-fn truncate_for_log(s: &str) -> String {
+pub(crate) fn truncate_for_log(s: &str) -> String {
     const MAX: usize = 2000;
     if s.chars().count() <= MAX {
         return s.to_string();

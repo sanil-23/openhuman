@@ -1624,6 +1624,21 @@ async fn run_inner_loop(
             let call_output_chars = result_text.chars().count();
             let call_elapsed_ms = call_started.elapsed().as_millis() as u64;
 
+            // Opt-in (`OPENHUMAN_LOG_TOOL_OUTPUT=1`) debug log of the subagent's
+            // tool result — the subagent runs this loop, not `run_tool_call_loop`,
+            // so without this its tool output (the real pip/install errors) never
+            // reaches the log. `result_text` is already scrubbed; preview bounded.
+            if crate::openhuman::agent::harness::tool_loop::tool_output_logging_enabled() {
+                tracing::info!(
+                    agent_id = %agent_id,
+                    tool = call.name.as_str(),
+                    success = call_success,
+                    chars = call_output_chars,
+                    "[subagent_runner] tool output: {}",
+                    crate::openhuman::agent::harness::tool_loop::truncate_for_log(&result_text)
+                );
+            }
+
             if force_text_mode {
                 let status = if call_success { "ok" } else { "error" };
                 let _ = std::fmt::Write::write_fmt(
