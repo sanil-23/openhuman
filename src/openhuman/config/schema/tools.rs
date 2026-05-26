@@ -91,6 +91,11 @@ impl Default for BrowserComputerUseConfig {
 pub struct BrowserConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// DEPRECATED: the browser tool now shares the unified web-access host list
+    /// in `[http_request].allowed_domains` (see `tools::ops::all_tools_with_runtime`).
+    /// Still parsed for backward compatibility but no longer gates browser
+    /// navigation. Manage allowed hosts via Settings → Search → Allowed websites;
+    /// browser allow-all remains gated by `OPENHUMAN_BROWSER_ALLOW_ALL`.
     #[serde(default)]
     pub allowed_domains: Vec<String>,
     #[serde(default)]

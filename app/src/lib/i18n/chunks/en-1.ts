@@ -1033,11 +1033,17 @@ const en1: TranslationMap = {
   'settings.search.allowedSitesLabel': 'Allowed websites',
   'settings.search.allowAllAria': 'Allow all sites',
   'settings.search.allowedSitesHint':
-    'Websites the assistant may open and read while researching (one host per line, e.g. reuters.com). A host also covers its subdomains. Leave empty to block all web access.',
+    'Hosts the assistant may open and read — via web fetch and the browser tool — one per line, e.g. reuters.com. A host also covers its subdomains. Web search itself is not restricted by this list.',
   'settings.search.allowedSitesAllOn':
     'The assistant can open any public website. Local and private addresses stay blocked.',
   'settings.search.allowedSitesPlaceholder': 'reuters.com\napnews.com\ngithub.com',
   'settings.search.allowedSitesSave': 'Save websites',
+  'settings.search.accessModeAria': 'Web access mode',
+  'settings.search.accessAllowAll': 'Allow all',
+  'settings.search.accessCustom': 'Custom',
+  'settings.search.accessBlockAll': 'Block all',
+  'settings.search.accessBlockAllHint':
+    'All web access is blocked — the assistant cannot open or read any website.',
   'settings.embeddings.title': 'Embeddings',
   'settings.embeddings.description':
     'Choose which embedding provider converts memory into vectors for semantic search. Changing the provider, model, or dimensions invalidates stored vectors and requires a full memory reset.',

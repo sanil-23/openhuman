@@ -1,9 +1,12 @@
 /**
- * Tests for SearchPanel — the "Allowed websites" (web-access firewall) section.
+ * Tests for SearchPanel — the "Allowed websites" (unified web-access firewall)
+ * section.
  *
- * Covers: loading the host allowlist into the editor, the "Allow all sites"
- * toggle (persists `allow_all`), and saving an edited host list (persists
- * `allowed_domains` + `allow_all: false`).
+ * Covers the tri-state access mode (Allow all / Custom / Block all):
+ *  - deriving the initial mode from the loaded settings,
+ *  - "Allow all"  → persists `allow_all: true`,
+ *  - "Block all"  → persists `allowed_domains: []` + `allow_all: false`,
+ *  - "Custom"     → reveals the host editor and saving persists the list.
  */
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
@@ -45,7 +48,14 @@ function settings(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe('SearchPanel — allowed websites', () => {
+const PLACEHOLDER = 'settings.search.allowedSitesPlaceholder';
+const ALLOW_ALL = 'settings.search.accessAllowAll';
+const CUSTOM = 'settings.search.accessCustom';
+const BLOCK_ALL = 'settings.search.accessBlockAll';
+
+const radio = (name: string) => screen.getByRole('radio', { name });
+
+describe('SearchPanel — unified web-access modes', () => {
   beforeEach(() => {
     hoisted.getSearchSettings.mockReset();
     hoisted.updateSearchSettings.mockReset();
@@ -53,34 +63,48 @@ describe('SearchPanel — allowed websites', () => {
     hoisted.updateSearchSettings.mockResolvedValue({ result: {} });
   });
 
-  test('loads the explicit host list into the editor', async () => {
+  test('explicit host list → starts in Custom mode with the editor populated', async () => {
     renderWithProviders(<SearchPanel embedded />);
-    // The textarea mounts empty, then a sync effect fills it from settings on
-    // the next tick — wait for the value rather than asserting immediately.
+    // The textarea mounts empty, then a one-time sync effect fills it from
+    // settings on the next tick — wait for the value rather than asserting now.
     await waitFor(() => {
-      const ta = screen.getByPlaceholderText(
-        'settings.search.allowedSitesPlaceholder'
-      ) as HTMLTextAreaElement;
+      const ta = screen.getByPlaceholderText(PLACEHOLDER) as HTMLTextAreaElement;
       expect(ta.value).toBe('reuters.com');
     });
+    expect(radio(CUSTOM)).toHaveAttribute('aria-checked', 'true');
+    expect(radio(ALLOW_ALL)).toHaveAttribute('aria-checked', 'false');
   });
 
-  test('toggling "Allow all sites" persists allow_all: true', async () => {
+  test('selecting "Allow all" persists allow_all: true and hides the editor', async () => {
     renderWithProviders(<SearchPanel embedded />);
-    await screen.findByPlaceholderText('settings.search.allowedSitesPlaceholder');
+    await screen.findByPlaceholderText(PLACEHOLDER);
 
-    const toggle = screen.getByRole('switch', { name: 'settings.search.allowAllAria' });
-    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(radio(ALLOW_ALL));
 
-    fireEvent.click(toggle);
     await waitFor(() =>
       expect(hoisted.updateSearchSettings).toHaveBeenCalledWith({ allow_all: true })
     );
+    expect(screen.queryByPlaceholderText(PLACEHOLDER)).toBeNull();
   });
 
-  test('saving an edited host list persists allowed_domains + allow_all: false', async () => {
+  test('selecting "Block all" persists an empty allowlist and hides the editor', async () => {
     renderWithProviders(<SearchPanel embedded />);
-    const textarea = await screen.findByPlaceholderText('settings.search.allowedSitesPlaceholder');
+    await screen.findByPlaceholderText(PLACEHOLDER);
+
+    fireEvent.click(radio(BLOCK_ALL));
+
+    await waitFor(() =>
+      expect(hoisted.updateSearchSettings).toHaveBeenCalledWith({
+        allowed_domains: [],
+        allow_all: false,
+      })
+    );
+    expect(screen.queryByPlaceholderText(PLACEHOLDER)).toBeNull();
+  });
+
+  test('Custom: saving an edited host list persists allowed_domains + allow_all: false', async () => {
+    renderWithProviders(<SearchPanel embedded />);
+    const textarea = await screen.findByPlaceholderText(PLACEHOLDER);
 
     fireEvent.change(textarea, { target: { value: 'github.com\n  apnews.com  \n\n' } });
     fireEvent.click(screen.getByText('settings.search.allowedSitesSave'));
@@ -93,14 +117,38 @@ describe('SearchPanel — allowed websites', () => {
     );
   });
 
-  test('hides the editor when allow-all is already on', async () => {
+  test('allow_all settings → starts in Allow-all mode with no editor', async () => {
     hoisted.getSearchSettings.mockResolvedValue({
       result: settings({ allowed_domains: ['*'], allow_all: true }),
     });
     renderWithProviders(<SearchPanel embedded />);
 
-    const toggle = await screen.findByRole('switch', { name: 'settings.search.allowAllAria' });
-    expect(toggle).toHaveAttribute('aria-checked', 'true');
-    expect(screen.queryByPlaceholderText('settings.search.allowedSitesPlaceholder')).toBeNull();
+    await waitFor(() => expect(radio(ALLOW_ALL)).toHaveAttribute('aria-checked', 'true'));
+    expect(screen.queryByPlaceholderText(PLACEHOLDER)).toBeNull();
+  });
+
+  test('empty allowlist → starts in Block-all mode with no editor', async () => {
+    hoisted.getSearchSettings.mockResolvedValue({
+      result: settings({ allowed_domains: [], allow_all: false }),
+    });
+    renderWithProviders(<SearchPanel embedded />);
+
+    await waitFor(() => expect(radio(BLOCK_ALL)).toHaveAttribute('aria-checked', 'true'));
+    expect(screen.queryByPlaceholderText(PLACEHOLDER)).toBeNull();
+  });
+
+  test('switching Block → Custom keeps the previously typed hosts', async () => {
+    renderWithProviders(<SearchPanel embedded />);
+    const textarea = (await screen.findByPlaceholderText(PLACEHOLDER)) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'example.com' } });
+
+    // Block all (persists empty list) then back to Custom — the editor text is
+    // local state and must survive the round trip so the user doesn't lose it.
+    fireEvent.click(radio(BLOCK_ALL));
+    await waitFor(() => expect(screen.queryByPlaceholderText(PLACEHOLDER)).toBeNull());
+    fireEvent.click(radio(CUSTOM));
+
+    const reopened = (await screen.findByPlaceholderText(PLACEHOLDER)) as HTMLTextAreaElement;
+    expect(reopened.value).toBe('example.com');
   });
 });

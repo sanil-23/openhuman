@@ -1352,6 +1352,12 @@ const es1: TranslationMap = {
     'The assistant can open any public website. Local and private addresses stay blocked.',
   'settings.search.allowedSitesPlaceholder': 'reuters.com\napnews.com\ngithub.com',
   'settings.search.allowedSitesSave': 'Save websites',
+  'settings.search.accessModeAria': 'Web access mode',
+  'settings.search.accessAllowAll': 'Allow all',
+  'settings.search.accessCustom': 'Custom',
+  'settings.search.accessBlockAll': 'Block all',
+  'settings.search.accessBlockAllHint':
+    'All web access is blocked — the assistant cannot open or read any website.',
 };
 
 export default es1;
