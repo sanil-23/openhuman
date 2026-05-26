@@ -115,6 +115,21 @@ impl Tool for InstallToolTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        // Gate 0: installs mutate the host (not the workspace), so they must
+        // never run without an explicit human Approve. The ApprovalGate only
+        // parks for an interactive turn (`APPROVAL_CHAT_CONTEXT` present, set on
+        // the web-chat path); background / triage / cron turns bypass the gate
+        // entirely. Fail closed there — a doomed retry is short-circuited by the
+        // `[policy-denied]` marker.
+        if crate::openhuman::approval::APPROVAL_CHAT_CONTEXT
+            .try_with(|_| ())
+            .is_err()
+        {
+            return Ok(ToolResult::error(
+                "[policy-denied] install_tool requires interactive approval and is not available \
+                 in autonomous (background) turns.",
+            ));
+        }
         // Gate 1: feature must be explicitly enabled (Full access mode).
         if !self.security.allow_tool_install {
             return Ok(ToolResult::error(
@@ -233,6 +248,7 @@ impl Tool for InstallToolTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::openhuman::approval::{ApprovalChatContext, APPROVAL_CHAT_CONTEXT};
     use crate::openhuman::security::AutonomyLevel;
 
     fn policy(allow_install: bool, autonomy: AutonomyLevel) -> Arc<SecurityPolicy> {
@@ -244,10 +260,22 @@ mod tests {
         })
     }
 
+    // install_tool refuses outside an interactive (approval) turn — Gate 0 — so
+    // tests that exercise the *other* gates run inside a chat context.
+    fn chat_ctx() -> ApprovalChatContext {
+        ApprovalChatContext {
+            thread_id: "t-test".into(),
+            client_id: "c-test".into(),
+        }
+    }
+
     #[tokio::test]
     async fn blocked_when_install_disabled() {
         let tool = InstallToolTool::new(policy(false, AutonomyLevel::Full));
-        let result = tool.execute(json!({ "package": "jq" })).await.unwrap();
+        let result = APPROVAL_CHAT_CONTEXT
+            .scope(chat_ctx(), tool.execute(json!({ "package": "jq" })))
+            .await
+            .unwrap();
         assert!(result.is_error);
         assert!(result.output().contains("disabled"), "{}", result.output());
     }
@@ -255,7 +283,10 @@ mod tests {
     #[tokio::test]
     async fn blocked_when_readonly() {
         let tool = InstallToolTool::new(policy(true, AutonomyLevel::ReadOnly));
-        let result = tool.execute(json!({ "package": "jq" })).await.unwrap();
+        let result = APPROVAL_CHAT_CONTEXT
+            .scope(chat_ctx(), tool.execute(json!({ "package": "jq" })))
+            .await
+            .unwrap();
         assert!(result.is_error);
         assert!(result.output().contains("read-only"), "{}", result.output());
     }
@@ -263,13 +294,30 @@ mod tests {
     #[tokio::test]
     async fn rejects_injection_in_package_name() {
         let tool = InstallToolTool::new(policy(true, AutonomyLevel::Full));
-        let result = tool
-            .execute(json!({ "package": "jq; rm -rf /" }))
+        let result = APPROVAL_CHAT_CONTEXT
+            .scope(
+                chat_ctx(),
+                tool.execute(json!({ "package": "jq; rm -rf /" })),
+            )
             .await
             .unwrap();
         assert!(result.is_error);
         assert!(
             result.output().contains("Invalid package name"),
+            "{}",
+            result.output()
+        );
+    }
+
+    #[tokio::test]
+    async fn refuses_in_autonomous_turn_without_chat_context() {
+        // No APPROVAL_CHAT_CONTEXT scope → background/autonomous turn → refused
+        // by Gate 0 before any install logic runs.
+        let tool = InstallToolTool::new(policy(true, AutonomyLevel::Full));
+        let result = tool.execute(json!({ "package": "jq" })).await.unwrap();
+        assert!(result.is_error);
+        assert!(
+            result.output().contains("interactive approval"),
             "{}",
             result.output()
         );

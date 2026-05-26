@@ -71,6 +71,9 @@ impl Tool for FileWriteTool {
         } else {
             self.security.workspace_dir.join(path)
         };
+        // Sync `stat` — intentionally blocking, since the `Tool` trait makes
+        // this method sync. Fast for local paths; would only need
+        // `block_in_place` if a remote/slow filesystem is ever supported here.
         target.exists() // exists = edit → prompt; new = create → free
     }
 

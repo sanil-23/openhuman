@@ -12,9 +12,10 @@ import {
 import SettingsHeader from '../components/SettingsHeader';
 import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
 
-// The install tool is always available (installs still go through the approval
-// gate), so this is fixed rather than a UI knob. The access *tier* and the
-// "confine to workspace" toggle are the user-facing controls.
+// Installs are always *available* but never silent: every `install_tool` call
+// is routed through the approval gate, so the user is asked to Approve/Deny each
+// install in chat. There is therefore no per-user "disable installs" knob here —
+// the consent is captured per-install by the gate, not by a static config flag.
 const ALLOW_TOOL_INSTALL = true;
 
 interface PresetOption {

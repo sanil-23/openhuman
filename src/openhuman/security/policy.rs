@@ -923,6 +923,11 @@ fn verb_class(args: &[String], read_verbs: &[&str]) -> CommandClass {
 /// that made Supervised mode unusable: every command the agent wrote carried a
 /// `2>&1`, got approved, then silently failed this in-tool guard and never ran.
 fn has_hidden_execution(command: &str) -> bool {
+    // The backtick check is deliberately NOT quote-aware: any backtick in the
+    // command string is blocked, even inside a double-quoted literal. Over-
+    // blocking is the safe direction here. (By contrast the `&` case below is
+    // quote-aware via `contains_unquoted_background_ampersand`, because that one
+    // must still allow benign fd-dup redirects like `2>&1`.)
     command.contains('`')
         || command.contains("$(")
         || command.contains("<(")
@@ -1810,6 +1815,12 @@ impl SecurityPolicy {
             autonomy_config.allowed_commands.len(),
             autonomy_config.max_actions_per_hour
         );
+
+        // NOTE: `autonomy_config.auto_approve` / `always_ask` are loaded from
+        // config (with non-empty defaults) but are NOT consumed here — the
+        // ApprovalGate has no always-allow / always-ask allowlist wired to them
+        // yet, so approval is driven purely by tier + `CommandClass`. These
+        // fields pre-date this PR; wiring them into the gate is a follow-up.
 
         // The default projects home (`~/OpenHuman/projects`) is always a
         // read-write trusted root so the coding agent can create/edit projects
