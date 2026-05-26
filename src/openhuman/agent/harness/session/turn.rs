@@ -484,6 +484,9 @@ impl Agent {
         // the prior conversation or system prompt bleeding in — and it's
         // immune to history trimming (which drops/reorders from the front).
         // The persisted transcript is unaffected (bug-report-2026-05-26 A1).
+        // Bounded: each entry truncates the result to 800 chars, so at the
+        // default 10-iteration cap the digest is ~8 KB — revisit if
+        // `max_tool_iterations` is raised substantially.
         let mut turn_tool_digest = String::new();
 
         // Capture the last `Vec<ChatMessage>` sent to the provider so we
@@ -1027,7 +1030,8 @@ impl Agent {
             // digest (no system prompt, no prior conversation), not the full
             // conversation. `base_messages` above is still used for the
             // transcript persist below, so the saved transcript is unchanged
-            // (bug-report-2026-05-26 A1).
+            // (bug-report-2026-05-26 A1). `user_message` below is the
+            // `turn(&mut self, message: &str)` parameter (the turn's request).
             let turn_summary_input = vec![ChatMessage::user(format!(
                 "You were working on this user request:\n{user_message}\n\nHere are the tool calls you made this turn and their results — compile your checkpoint from these:\n{}",
                 if turn_tool_digest.is_empty() {
@@ -1097,6 +1101,11 @@ impl Agent {
 
             // Persist the checkpoint so the transcript ends on a
             // well-formed assistant message (never a dangling tool cycle).
+            // Note: `base_messages` ends before the final (capped) iteration's
+            // tool results — those landed after the last `last_provider_messages`
+            // snapshot — so the persisted transcript omits them. That's fine:
+            // the checkpoint prose covers the work done, and the transcript
+            // stays structurally correct (ends on an assistant message).
             let mut checkpoint_messages = base_messages;
             checkpoint_messages.push(ChatMessage::assistant(checkpoint.clone()));
             self.persist_session_transcript(

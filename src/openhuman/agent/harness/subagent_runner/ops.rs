@@ -255,8 +255,10 @@ impl LazyToolkitResolver {
                 }
                 // Ambiguous: 2+ actions normalize to the same slug (e.g.
                 // `read_file` and `ReadFile` → `readfile`). We deliberately
-                // refuse to guess, but log it so the collision is diagnosable.
-                tracing::debug!(
+                // refuse to guess. Warn (not debug): a slug collision is a
+                // toolkit configuration anomaly that should surface in normal
+                // operator logs, not stay hidden behind debug filtering.
+                tracing::warn!(
                     requested = %name,
                     norm = %norm,
                     "[subagent_runner] ambiguous normalized-slug match — multiple actions resolve to the same slug; not resolving"
@@ -1926,6 +1928,10 @@ async fn run_inner_loop(
             deterministic
         }
     };
+    // NB: unlike the main-agent path, this checkpoint is intentionally NOT
+    // written to a sub-agent transcript — the calling agent's transcript
+    // captures the delegated result, so there's no data loss. Don't "fix"
+    // this by adding a `persist_subagent_transcript` call.
     Ok((checkpoint, max_iterations, usage))
 }
 
