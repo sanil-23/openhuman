@@ -222,8 +222,8 @@ impl LlmEntityExtractor {
                 // chunk (bug-report-2026-05-26 I1).
                 log::warn!(
                     "[memory_tree::extract::llm] LLM response truncated mid-JSON ({e}); \
-                     response_chars={} — retrying",
-                    raw.chars().count()
+                     response_bytes={} — retrying",
+                    raw.len()
                 );
                 return None;
             }

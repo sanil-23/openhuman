@@ -77,6 +77,11 @@ pub fn start(config: Config) {
         // (bug-report-2026-05-26 I2).
         let shutdown_cfg = config.clone();
         crate::core::shutdown::register(move || {
+            // NOTE: `shutdown::register` is bound `F: Fn() -> Fut`, so this
+            // closure may be invoked more than once; each call must hand the
+            // returned future its own owned `Config`. Moving `shutdown_cfg`
+            // in directly is `E0507` (cannot move out of an `Fn` closure), so
+            // the per-call clone is required, not redundant.
             let cfg = shutdown_cfg.clone();
             async move {
                 match release_running_locks(&cfg) {

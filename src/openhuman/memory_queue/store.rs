@@ -343,6 +343,12 @@ pub fn recover_stale_locks(config: &Config) -> Result<usize> {
 /// Returns the number of rows released (bug-report-2026-05-26 I2).
 pub fn release_running_locks(config: &Config) -> Result<usize> {
     with_connection(config, |conn| {
+        // TODO(multi-process): this releases *every* `running` row, with no
+        // process-scoped guard (e.g. a `worker_pid` / session-token column).
+        // Correct today because a single worker pool is the invariant, but if
+        // multi-process workers are ever introduced, a rolling restart with
+        // two overlapping processes would let one shutdown release the other's
+        // in-flight locks. Add a per-owner predicate here when that happens.
         let n = conn.execute(
             "UPDATE mem_tree_jobs
                 SET status = 'ready',
