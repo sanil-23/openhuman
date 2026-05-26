@@ -428,3 +428,47 @@ fn truncate_for_log_long_input_appends_ellipsis() {
     assert_eq!(out.chars().count(), 11); // 10 + "…"
     assert!(out.ends_with('…'));
 }
+
+#[tokio::test]
+async fn extract_retries_on_truncated_response() {
+    // First response is truncated mid-JSON (serde EOF) — a stream cutoff,
+    // not a wrong-shape body. It must be treated as retryable rather than
+    // silently dropped; the second (complete) response then recovers the
+    // entities (bug-report-2026-05-26 I1).
+    use crate::openhuman::memory::chat::{ChatPrompt, ChatProvider};
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct TruncatedThenCompleteProvider {
+        calls: AtomicUsize,
+    }
+    #[async_trait]
+    impl ChatProvider for TruncatedThenCompleteProvider {
+        fn name(&self) -> &str {
+            "test:truncated"
+        }
+        async fn chat_for_json(&self, _p: &ChatPrompt) -> anyhow::Result<String> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                // Array never closes → serde reports EOF (is_eof()).
+                Ok(r#"{"entities":[{"kind":"person","text":"Alice"}"#.to_string())
+            } else {
+                Ok(r#"{"entities":[{"kind":"person","text":"Alice"}],"importance":0.5,"importance_reason":"r"}"#.to_string())
+            }
+        }
+    }
+
+    let mock = Arc::new(TruncatedThenCompleteProvider {
+        calls: AtomicUsize::new(0),
+    });
+    let ex = LlmEntityExtractor::new(LlmExtractorConfig::default(), mock.clone());
+    let out = ex.extract("Alice met Bob.").await.unwrap();
+    assert_eq!(
+        mock.calls.load(Ordering::SeqCst),
+        2,
+        "truncation should trigger a retry, not a silent drop"
+    );
+    assert_eq!(out.entities.len(), 1);
+    assert_eq!(out.entities[0].text, "Alice");
+}
