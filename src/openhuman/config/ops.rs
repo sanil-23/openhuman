@@ -894,10 +894,23 @@ pub async fn load_and_apply_autonomy_settings(
     apply_autonomy_settings(&mut config, update).await
 }
 
+/// Serializes the load-modify-save in [`add_auto_approve_tool`] so two
+/// concurrent "Always allow" appends (different tools) can't read the same
+/// `auto_approve`, each push their own, and clobber the other on save
+/// (last-write-wins lost-update). Holding it across load→save makes the second
+/// caller observe the first's write and union the entries. Process-local; the
+/// allowlist lives in a single per-launch config file. (CodeRabbit, PR #2706.)
+fn auto_approve_write_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 /// Append `tool_name` to `autonomy.auto_approve` ("Always allow") and persist +
 /// reload the live policy. Idempotent — a no-op (no disk write) when the tool is
 /// already allow-listed. Backs the `ApproveAlwaysForTool` approval decision.
 pub async fn add_auto_approve_tool(tool_name: &str) -> Result<(), String> {
+    // Serialize the read-modify-write against concurrent appends (see lock doc).
+    let _guard = auto_approve_write_lock().lock().await;
     let mut config = load_config_with_timeout().await?;
     if config.autonomy.auto_approve.iter().any(|t| t == tool_name) {
         tracing::debug!(
