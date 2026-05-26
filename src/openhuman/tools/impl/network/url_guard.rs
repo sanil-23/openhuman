@@ -614,7 +614,7 @@ mod tests {
         ] {
             let err = validate_url(notation, &allow).unwrap_err().to_string();
             assert!(
-                err.contains("allowed_domains"),
+                err.contains("allowed websites"),
                 "Expected allowlist rejection for {notation}, got: {err}"
             );
         }
