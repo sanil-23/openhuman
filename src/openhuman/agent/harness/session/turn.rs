@@ -36,7 +36,7 @@ use crate::openhuman::context::prompt::{LearnedContextData, PromptContext, Promp
 use crate::openhuman::context::{ReductionOutcome, ARCHIVIST_EXTRACTION_PROMPT};
 use crate::openhuman::inference::model_context::context_window_for_model;
 use crate::openhuman::inference::provider::{
-    ChatMessage, ChatRequest, ConversationMessage, ProviderDelta,
+    ChatMessage, ChatRequest, ConversationMessage, ProviderDelta, UsageInfo,
 };
 use crate::openhuman::memory::MemoryCategory;
 use crate::openhuman::tools::traits::ToolCallOptions;
@@ -1008,13 +1008,41 @@ impl Agent {
                 .clone()
                 .unwrap_or_else(|| self.tool_dispatcher.to_provider_messages(&self.history));
             let checkpoint_iteration = (self.config.max_tool_iterations + 1) as u32;
-            let mut checkpoint = self
+            let (mut checkpoint, checkpoint_usage) = self
                 .summarize_iteration_checkpoint(
                     &base_messages,
                     &effective_model,
                     checkpoint_iteration,
                 )
                 .await;
+
+            // Fold the checkpoint call's usage into the turn's cumulative
+            // accounting. The provider call happens regardless of whether we
+            // keep its prose, so dropping its tokens would undercount the
+            // turn and mis-attribute the prior iteration's usage to the
+            // checkpoint message (mirrors the normal final-response path).
+            if let Some(ref usage) = checkpoint_usage {
+                self.context.record_usage(usage);
+                cumulative_input_tokens += usage.input_tokens;
+                cumulative_output_tokens += usage.output_tokens;
+                cumulative_cached_input_tokens += usage.cached_input_tokens;
+                cumulative_charged_usd += usage.charged_amount_usd;
+                last_turn_usage = Some(transcript::TurnUsage {
+                    model: effective_model.clone(),
+                    usage: transcript::MessageUsage {
+                        input: usage.input_tokens,
+                        output: usage.output_tokens,
+                        cached_input: usage.cached_input_tokens,
+                        cost_usd: usage.charged_amount_usd,
+                    },
+                    ts: chrono::Utc::now().to_rfc3339(),
+                });
+            } else {
+                // No usage on the checkpoint call: don't attribute a stale
+                // prior-iteration snapshot to the checkpoint assistant message.
+                last_turn_usage = None;
+            }
+
             if checkpoint.trim().is_empty() {
                 log::warn!("[agent_loop] checkpoint summary empty — using deterministic fallback");
                 checkpoint = build_deterministic_checkpoint(
@@ -1994,16 +2022,19 @@ impl Agent {
     /// deltas to the progress sink (when attached) so the checkpoint
     /// appears in the UI like any other reply.
     ///
-    /// Returns the summary text, or an empty string if the provider call
-    /// fails or yields nothing — the caller then falls back to
+    /// Returns the summary text (empty when the provider call fails or
+    /// yields nothing — the caller then falls back to
     /// [`build_deterministic_checkpoint`] so the thread is never left on an
-    /// unterminated tool cycle (bug-report-2026-05-26 A1).
+    /// unterminated tool cycle, bug-report-2026-05-26 A1) **paired with the
+    /// provider usage** for this extra call, so the caller can fold it into
+    /// the turn's cumulative token/cost accounting instead of silently
+    /// dropping it.
     async fn summarize_iteration_checkpoint(
         &self,
         base_messages: &[ChatMessage],
         effective_model: &str,
         iteration_for_stream: u32,
-    ) -> String {
+    ) -> (String, Option<UsageInfo>) {
         let mut messages = base_messages.to_vec();
         messages.push(ChatMessage::user(MAX_ITER_CHECKPOINT_INSTRUCTION));
 
@@ -2056,18 +2087,29 @@ impl Agent {
 
         match result {
             Ok(resp) => {
+                let usage = resp.usage.clone();
                 // Strip any stray tool-call XML a text-mode model may have
                 // emitted; keep only the prose.
-                let (text, _calls) = self.tool_dispatcher.parse_response(&resp);
-                if text.trim().is_empty() {
+                let (text, calls) = self.tool_dispatcher.parse_response(&resp);
+                let checkpoint = if !text.trim().is_empty() {
+                    text
+                } else if calls.is_empty() {
+                    // No tool-call markup was present, so the raw text (if
+                    // any) is genuine prose — safe to use.
                     resp.text.unwrap_or_default()
                 } else {
-                    text
-                }
+                    // `parse_response` stripped tool-call markup and left no
+                    // prose. Do NOT re-emit `resp.text` here: it would persist
+                    // the raw `<tool_call>…` markup verbatim as the checkpoint.
+                    // Return empty so the caller uses the deterministic
+                    // fallback instead (bug-report-2026-05-26 A1).
+                    String::new()
+                };
+                (checkpoint, usage)
             }
             Err(e) => {
                 log::warn!("[agent_loop] checkpoint summary call failed: {e:#}");
-                String::new()
+                (String::new(), None)
             }
         }
     }

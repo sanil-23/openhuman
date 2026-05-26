@@ -92,6 +92,33 @@ fn parse_tool_call_value_accepts_argument_key_aliases() {
 }
 
 #[test]
+fn whole_response_singleton_ignores_generic_arg_aliases() {
+    // A plain JSON answer that happens to carry a `name` plus a generic,
+    // object-valued `input`. Tagged contexts widen `input` into arguments…
+    let answer = serde_json::json!({ "name": "Alice", "input": { "value": "hi" } });
+    let tagged = parse_tool_calls_from_json_value(&answer);
+    assert_eq!(tagged.len(), 1);
+    assert_eq!(tagged[0].arguments, serde_json::json!({ "value": "hi" }));
+
+    // …but the whole-response (bare singleton) path must NOT slurp `input`
+    // into tool arguments — only the canonical `arguments` key counts there,
+    // so arbitrary JSON answers aren't dressed up as fully-formed calls.
+    let whole = parse_tool_calls_from_json_value_aliased(&answer, false);
+    assert_eq!(whole.len(), 1);
+    assert_eq!(whole[0].arguments, serde_json::json!({}));
+
+    // The `tool_calls`-keyed envelope is an explicit marker and stays
+    // permissive even when aliases are forbidden for bare objects.
+    let envelope = serde_json::json!({
+        "tool_calls": [ { "name": "echo", "input": { "value": "hi" } } ]
+    });
+    let calls = parse_tool_calls_from_json_value_aliased(&envelope, false);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "echo");
+    assert_eq!(calls[0].arguments, serde_json::json!({ "value": "hi" }));
+}
+
+#[test]
 fn parse_tool_calls_from_json_value_handles_tool_calls_array_arrays_and_singletons() {
     let wrapped = serde_json::json!({
         "tool_calls": [

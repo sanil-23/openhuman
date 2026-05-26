@@ -48,6 +48,27 @@ fn first_args_by_keys(obj: &serde_json::Value) -> serde_json::Value {
 }
 
 pub(crate) fn parse_tool_call_value(value: &serde_json::Value) -> Option<ParsedToolCall> {
+    // Default to the permissive (tagged) behaviour: callers that reach a
+    // value through an explicit tool-call marker (`tool_calls` array,
+    // `<tool_call>` tags, ```tool_call blocks) accept the arg-key aliases.
+    parse_tool_call_value_aliased(value, true)
+}
+
+/// Parse a single JSON value as a tool call.
+///
+/// `allow_arg_aliases` controls whether the generic argument-key aliases in
+/// [`TOOL_ARG_KEYS`] (notably the very generic `input`) are honoured for a
+/// **bare** `{ "name": .., .. }` object. The whole-response fallback path
+/// (`parse_tool_calls` on a top-level JSON object) passes `false`: there, a
+/// normal model reply such as `{"name":"Alice","input":"hi"}` must not have
+/// its `input` slurped into tool arguments and routed to execution
+/// (bug-report-2026-05-26 A3 follow-up). The `function`-wrapped shape stays
+/// permissive regardless — the `function` key is an unambiguous tool-call
+/// marker.
+fn parse_tool_call_value_aliased(
+    value: &serde_json::Value,
+    allow_arg_aliases: bool,
+) -> Option<ParsedToolCall> {
     if let Some(function) = value.get("function") {
         let name = function
             .get("name")
@@ -76,7 +97,13 @@ pub(crate) fn parse_tool_call_value(value: &serde_json::Value) -> Option<ParsedT
         return None;
     }
 
-    let arguments = first_args_by_keys(value);
+    let arguments = if allow_arg_aliases {
+        first_args_by_keys(value)
+    } else {
+        // Singleton whole-response fallback: only the canonical `arguments`
+        // key counts, so a plain JSON answer isn't dressed up as a call.
+        parse_arguments_value(value.get("arguments"))
+    };
     Some(ParsedToolCall {
         name,
         arguments,
@@ -85,11 +112,25 @@ pub(crate) fn parse_tool_call_value(value: &serde_json::Value) -> Option<ParsedT
 }
 
 pub(crate) fn parse_tool_calls_from_json_value(value: &serde_json::Value) -> Vec<ParsedToolCall> {
+    // Tagged contexts (callers reach here via an explicit tool-call marker)
+    // accept the argument-key aliases.
+    parse_tool_calls_from_json_value_aliased(value, true)
+}
+
+/// Like [`parse_tool_calls_from_json_value`], but lets the caller forbid
+/// generic arg-key aliases on a **bare** singleton/array object. The
+/// `tool_calls`-keyed envelope always stays permissive — that key is an
+/// unambiguous tool-call marker even on the whole-response path.
+pub(crate) fn parse_tool_calls_from_json_value_aliased(
+    value: &serde_json::Value,
+    allow_arg_aliases: bool,
+) -> Vec<ParsedToolCall> {
     let mut calls = Vec::new();
 
     if let Some(tool_calls) = value.get("tool_calls").and_then(|v| v.as_array()) {
         for call in tool_calls {
-            if let Some(parsed) = parse_tool_call_value(call) {
+            // `tool_calls` entries are explicitly tool-call shaped → widen.
+            if let Some(parsed) = parse_tool_call_value_aliased(call, true) {
                 calls.push(parsed);
             }
         }
@@ -101,14 +142,14 @@ pub(crate) fn parse_tool_calls_from_json_value(value: &serde_json::Value) -> Vec
 
     if let Some(array) = value.as_array() {
         for item in array {
-            if let Some(parsed) = parse_tool_call_value(item) {
+            if let Some(parsed) = parse_tool_call_value_aliased(item, allow_arg_aliases) {
                 calls.push(parsed);
             }
         }
         return calls;
     }
 
-    if let Some(parsed) = parse_tool_call_value(value) {
+    if let Some(parsed) = parse_tool_call_value_aliased(value, allow_arg_aliases) {
         calls.push(parsed);
     }
 
@@ -371,7 +412,12 @@ pub(crate) fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) 
     // First, try to parse as OpenAI-style JSON response with tool_calls array
     // This handles providers like Minimax that return tool_calls in native JSON format
     if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(response.trim()) {
-        calls = parse_tool_calls_from_json_value(&json_value);
+        // Whole-response parse: a bare top-level object/array is NOT an
+        // explicit tool-call marker, so forbid the generic arg-key aliases
+        // here (a plain `{"name":..,"input":..}` answer must stay text).
+        // The `tool_calls`-keyed envelope is still honoured (it carries its
+        // own marker) — handled inside the `_aliased` helper.
+        calls = parse_tool_calls_from_json_value_aliased(&json_value, false);
         if !calls.is_empty() {
             // If we found tool_calls, extract any content field as text
             if let Some(content) = json_value.get("content").and_then(|v| v.as_str()) {

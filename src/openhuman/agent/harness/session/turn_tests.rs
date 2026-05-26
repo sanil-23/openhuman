@@ -7,7 +7,7 @@ use crate::openhuman::agent::tool_policy::{
     GeneratedToolRuntimeContext, GeneratedToolRuntimeRisk, ToolPolicy, ToolPolicyDecision,
     ToolPolicyRequest,
 };
-use crate::openhuman::inference::provider::{ChatRequest, ChatResponse, Provider};
+use crate::openhuman::inference::provider::{ChatRequest, ChatResponse, Provider, UsageInfo};
 use crate::openhuman::memory::Memory;
 use crate::openhuman::tools::ToolResult;
 use crate::openhuman::tools::{PermissionLevel, Tool};
@@ -976,6 +976,70 @@ async fn turn_checkpoint_falls_back_to_deterministic_summary_when_model_summary_
         reply.contains("echo"),
         "fallback should list the tool that ran, got: {reply}"
     );
+}
+
+#[tokio::test]
+async fn turn_checkpoint_usage_is_folded_into_transcript_accounting() {
+    // The extra checkpoint provider call costs tokens; those must land in
+    // the persisted transcript's cumulative accounting rather than being
+    // silently dropped (CodeRabbit review on bug-report-2026-05-26 A1).
+    let provider: Arc<dyn Provider> = Arc::new(SequenceProvider {
+        responses: AsyncMutex::new(vec![
+            // Tool iteration — provider reports no usage.
+            Ok(ChatResponse {
+                text: Some("<tool_call>{\"name\":\"echo\",\"arguments\":{}}</tool_call>".into()),
+                tool_calls: vec![],
+                usage: None,
+            }),
+            // Checkpoint call — reports usage that must be accounted for.
+            Ok(ChatResponse {
+                text: Some("**Done so far:** ran echo.\n**Next steps:** continue.".into()),
+                tool_calls: vec![],
+                usage: Some(UsageInfo {
+                    input_tokens: 11,
+                    output_tokens: 4,
+                    cached_input_tokens: 2,
+                    charged_amount_usd: 0.05,
+                    ..UsageInfo::default()
+                }),
+            }),
+        ]),
+        requests: AsyncMutex::new(Vec::new()),
+    });
+    let mut agent = make_agent_with_builder(
+        provider,
+        vec![Box::new(EchoTool)],
+        Box::new(FixedMemoryLoader {
+            context: String::new(),
+        }),
+        vec![],
+        crate::openhuman::config::AgentConfig {
+            max_tool_iterations: 1,
+            ..crate::openhuman::config::AgentConfig::default()
+        },
+        crate::openhuman::config::ContextConfig::default(),
+    );
+
+    agent
+        .turn("hello")
+        .await
+        .expect("turn should emit a checkpoint at the iteration cap");
+
+    let transcript = transcript::read_transcript(
+        agent
+            .session_transcript_path
+            .as_ref()
+            .expect("checkpoint turn should persist a transcript"),
+    )
+    .expect("transcript should be readable");
+    // Only the checkpoint call reported usage, so the turn totals must equal
+    // exactly its numbers — proof the extra call is accounted for, not lost.
+    assert_eq!(
+        transcript.meta.input_tokens, 11,
+        "checkpoint input tokens should be folded into the turn total"
+    );
+    assert_eq!(transcript.meta.output_tokens, 4);
+    assert_eq!(transcript.meta.cached_input_tokens, 2);
 }
 
 #[tokio::test]
