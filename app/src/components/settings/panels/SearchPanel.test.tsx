@@ -117,6 +117,25 @@ describe('SearchPanel — unified web-access modes', () => {
     );
   });
 
+  test('Custom: pasted URLs are normalized to bare hosts before persisting', async () => {
+    renderWithProviders(<SearchPanel embedded />);
+    const textarea = await screen.findByPlaceholderText(PLACEHOLDER);
+
+    // Users paste full URLs; url_guard matches on host, so a scheme/path entry
+    // would never match. The editor strips both down to the bare host.
+    fireEvent.change(textarea, {
+      target: { value: 'https://reuters.com/markets\nhttp://apnews.com/\ngithub.com' },
+    });
+    fireEvent.click(screen.getByText('settings.search.allowedSitesSave'));
+
+    await waitFor(() =>
+      expect(hoisted.updateSearchSettings).toHaveBeenCalledWith({
+        allowed_domains: ['reuters.com', 'apnews.com', 'github.com'],
+        allow_all: false,
+      })
+    );
+  });
+
   test('allow_all settings → starts in Allow-all mode with no editor', async () => {
     hoisted.getSearchSettings.mockResolvedValue({
       result: settings({ allowed_domains: ['*'], allow_all: true }),

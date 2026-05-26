@@ -424,7 +424,12 @@ export interface SearchSettingsUpdate {
    * blocks all web access.
    */
   allowed_domains?: string[];
-  /** "Allow all sites" toggle. true → allowlist becomes `["*"]`. */
+  /**
+   * "Allow all sites" toggle. true → allowlist becomes `["*"]`.
+   * NOTE: `allow_all` is applied AFTER `allowed_domains` server-side, so when
+   * both are sent in one patch `allow_all` wins (true → `["*"]`, false → the
+   * `"*"` wildcard is dropped). Don't send both with conflicting intent.
+   */
   allow_all?: boolean;
 }
 

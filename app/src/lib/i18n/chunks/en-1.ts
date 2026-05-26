@@ -1031,7 +1031,6 @@ const en1: TranslationMap = {
   'settings.search.placeholderParallel': 'pk_...',
   'settings.search.placeholderBrave': 'BSA...',
   'settings.search.allowedSitesLabel': 'Allowed websites',
-  'settings.search.allowAllAria': 'Allow all sites',
   'settings.search.allowedSitesHint':
     'Hosts the assistant may open and read — via web fetch and the browser tool — one per line, e.g. reuters.com. A host also covers its subdomains. Web search itself is not restricted by this list.',
   'settings.search.allowedSitesAllOn':

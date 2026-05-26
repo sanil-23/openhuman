@@ -39,6 +39,19 @@ interface EngineOption {
   requiresKey: boolean;
 }
 
+/**
+ * Normalize a user-entered allowed-site entry down to a bare host so it
+ * matches `url_guard`'s host-based comparison. Strips a leading scheme and any
+ * path/query/fragment — e.g. `https://reuters.com/markets` → `reuters.com` —
+ * and trims surrounding whitespace. The `*` allow-all wildcard is preserved.
+ */
+const normalizeAllowedHost = (raw: string): string =>
+  raw
+    .trim()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .replace(/\/.*$/, '')
+    .trim();
+
 const SearchPanel = ({ embedded = false }: { embedded?: boolean }) => {
   const { t } = useT();
   const { navigateBack, breadcrumbs } = useSettingsNavigation();
@@ -173,10 +186,7 @@ const SearchPanel = ({ embedded = false }: { embedded?: boolean }) => {
   };
 
   const persistAllowedDomains = () => {
-    const domains = allowedText
-      .split('\n')
-      .map(s => s.trim())
-      .filter(Boolean);
+    const domains = allowedText.split('\n').map(normalizeAllowedHost).filter(Boolean);
     // Editing the explicit host list implies "not allow-all".
     void persistSearchUpdate({ allowed_domains: domains, allow_all: false });
   };
@@ -330,9 +340,11 @@ const SearchPanel = ({ embedded = false }: { embedded?: boolean }) => {
                 curl and (when enabled) the browser tool. Web search is not
                 gated by this list. */}
             <div className="rounded-xl border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-3 space-y-2">
-              <label className="text-xs font-semibold text-stone-700 dark:text-neutral-200">
+              {/* Section heading, not a form label — use a <p> so screen
+                  readers don't announce an orphan <label> with no htmlFor. */}
+              <p className="text-xs font-semibold text-stone-700 dark:text-neutral-200">
                 {t('settings.search.allowedSitesLabel')}
-              </label>
+              </p>
               <div
                 role="radiogroup"
                 aria-label={t('settings.search.accessModeAria')}

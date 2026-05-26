@@ -1343,7 +1343,6 @@ const pt1: TranslationMap = {
   'subconscious.durationSeconds': '{seconds}s',
   'subconscious.durationMilliseconds': '{milliseconds}ms',
   'settings.search.allowedSitesLabel': 'Allowed websites',
-  'settings.search.allowAllAria': 'Allow all sites',
   'settings.search.allowedSitesHint':
     'Websites the assistant may open and read while researching (one host per line, e.g. reuters.com). A host also covers its subdomains. Leave empty to block all web access.',
   'settings.search.allowedSitesAllOn':
