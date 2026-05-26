@@ -1329,12 +1329,14 @@ const bn1: TranslationMap = {
   'subconscious.priority.normal': 'স্বাভাবিক',
   'subconscious.durationSeconds': '{seconds}s',
   'subconscious.durationMilliseconds': '{milliseconds}ms',
-  "settings.search.allowedSitesLabel": "Allowed websites",
-  "settings.search.allowAllAria": "Allow all sites",
-  "settings.search.allowedSitesHint": "Websites the assistant may open and read while researching (one host per line, e.g. reuters.com). A host also covers its subdomains. Leave empty to block all web access.",
-  "settings.search.allowedSitesAllOn": "The assistant can open any public website. Local and private addresses stay blocked.",
-  "settings.search.allowedSitesPlaceholder": "reuters.com\napnews.com\ngithub.com",
-  "settings.search.allowedSitesSave": "Save websites",
+  'settings.search.allowedSitesLabel': 'Allowed websites',
+  'settings.search.allowAllAria': 'Allow all sites',
+  'settings.search.allowedSitesHint':
+    'Websites the assistant may open and read while researching (one host per line, e.g. reuters.com). A host also covers its subdomains. Leave empty to block all web access.',
+  'settings.search.allowedSitesAllOn':
+    'The assistant can open any public website. Local and private addresses stay blocked.',
+  'settings.search.allowedSitesPlaceholder': 'reuters.com\napnews.com\ngithub.com',
+  'settings.search.allowedSitesSave': 'Save websites',
 };
 
 export default bn1;
