@@ -47,7 +47,7 @@ pub(super) fn validate_url(raw_url: &str, allowed_domains: &[String]) -> anyhow:
         anyhow::bail!(
             "I'm not allowed to open any website yet — the allowed websites list is empty. \
              Add the site you need (or turn on \"Allow all sites\") under \
-             Settings → Search → Allowed websites, then ask me again."
+             Settings → Developer Options → Search engine → Allowed websites, then ask me again."
         );
     }
 
@@ -61,7 +61,7 @@ pub(super) fn validate_url(raw_url: &str, allowed_domains: &[String]) -> anyhow:
         anyhow::bail!(
             "I'm not allowed to open '{host}' — it isn't in your allowed websites. \
              Add it (or turn on \"Allow all sites\") under \
-             Settings → Search → Allowed websites, then ask me again."
+             Settings → Developer Options → Search engine → Allowed websites, then ask me again."
         );
     }
 
