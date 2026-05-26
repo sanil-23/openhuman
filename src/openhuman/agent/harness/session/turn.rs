@@ -478,6 +478,14 @@ impl Agent {
         // Collect tool call records across all iterations for post-turn hooks
         let mut all_tool_records: Vec<ToolCallRecord> = Vec::new();
 
+        // Trim-robust digest of THIS turn's tool calls + results, compiled as
+        // the loop runs. Used as the *only* context for the max-iteration
+        // checkpoint summary, so it compiles "what I did this turn" without
+        // the prior conversation or system prompt bleeding in — and it's
+        // immune to history trimming (which drops/reorders from the front).
+        // The persisted transcript is unaffected (bug-report-2026-05-26 A1).
+        let mut turn_tool_digest = String::new();
+
         // Capture the last `Vec<ChatMessage>` sent to the provider so we
         // can persist it as a session transcript after the turn completes.
         let mut last_provider_messages: Option<Vec<ChatMessage>> = None;
@@ -960,6 +968,14 @@ impl Agent {
                         r.name,
                         truncate_with_ellipsis(&r.output, 300)
                     );
+                    // Record this call in the turn digest (output truncated to
+                    // bound size) for a possible max-iteration checkpoint.
+                    turn_tool_digest.push_str(&format!(
+                        "- {} [{}]: {}\n",
+                        r.name,
+                        if r.success { "ok" } else { "failed" },
+                        truncate_with_ellipsis(&r.output, 800)
+                    ));
                 }
                 log::info!(
                     "[agent] all tools complete for iteration {} — looping back to provider",
@@ -1007,10 +1023,23 @@ impl Agent {
             let base_messages = last_provider_messages
                 .clone()
                 .unwrap_or_else(|| self.tool_dispatcher.to_provider_messages(&self.history));
+            // Summarize ONLY this turn's work: feed the compiled tool-call
+            // digest (no system prompt, no prior conversation), not the full
+            // conversation. `base_messages` above is still used for the
+            // transcript persist below, so the saved transcript is unchanged
+            // (bug-report-2026-05-26 A1).
+            let turn_summary_input = vec![ChatMessage::user(format!(
+                "You were working on this user request:\n{user_message}\n\nHere are the tool calls you made this turn and their results — compile your checkpoint from these:\n{}",
+                if turn_tool_digest.is_empty() {
+                    "(no tool calls recorded)"
+                } else {
+                    turn_tool_digest.as_str()
+                }
+            ))];
             let checkpoint_iteration = (self.config.max_tool_iterations + 1) as u32;
             let (mut checkpoint, checkpoint_usage) = self
                 .summarize_iteration_checkpoint(
-                    &base_messages,
+                    &turn_summary_input,
                     &effective_model,
                     checkpoint_iteration,
                 )

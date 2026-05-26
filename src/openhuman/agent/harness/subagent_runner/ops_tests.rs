@@ -636,6 +636,68 @@ async fn runner_errors_outside_parent_context() {
 }
 
 #[tokio::test]
+async fn subagent_emits_checkpoint_at_iteration_cap_instead_of_erroring() {
+    // A sub-agent that keeps calling tools and never finishes must hit its
+    // cap and return a graceful partial-progress checkpoint (Ok), not a bare
+    // MaxIterationsExceeded that discards its work — so the delegating agent
+    // can continue from what it got (bug-report-2026-05-26 A1, mirrors the
+    // main agent). Two tool rounds (max_iterations=2), then the summarize
+    // call returns prose which becomes the checkpoint.
+    let provider = ScriptedProvider::new(vec![
+        tool_response("file_read", "{}"),
+        tool_response("file_read", "{}"),
+        text_response("Progress so far: read the file. Remaining: keep going."),
+    ]);
+    let parent = make_parent(provider.clone(), vec![stub("file_read")]);
+    let mut def = make_def_named_tools(&["file_read"]);
+    def.max_iterations = 2;
+
+    let outcome = with_parent_context(parent, async {
+        run_subagent(&def, "keep reading forever", SubagentRunOptions::default()).await
+    })
+    .await
+    .expect("hitting the iteration cap should return a checkpoint, not error");
+
+    assert!(
+        outcome.output.contains("Progress so far"),
+        "expected the model-written checkpoint, got: {}",
+        outcome.output
+    );
+}
+
+#[tokio::test]
+async fn subagent_checkpoint_falls_back_to_deterministic_when_summary_empty() {
+    // Same cap, but the summarize call yields nothing (response queue
+    // exhausted → empty). The runner must fall back to a deterministic
+    // partial-progress digest so the parent still gets a usable result
+    // (bug-report-2026-05-26 A1).
+    let provider = ScriptedProvider::new(vec![
+        tool_response("file_read", "{}"),
+        tool_response("file_read", "{}"),
+    ]);
+    let parent = make_parent(provider.clone(), vec![stub("file_read")]);
+    let mut def = make_def_named_tools(&["file_read"]);
+    def.max_iterations = 2;
+
+    let outcome = with_parent_context(parent, async {
+        run_subagent(&def, "keep reading forever", SubagentRunOptions::default()).await
+    })
+    .await
+    .expect("empty summary should fall back, not error");
+
+    assert!(
+        outcome.output.contains("tool-call limit"),
+        "expected the deterministic fallback checkpoint, got: {}",
+        outcome.output
+    );
+    assert!(
+        outcome.output.contains("file_read"),
+        "deterministic checkpoint should list the tool work done, got: {}",
+        outcome.output
+    );
+}
+
+#[tokio::test]
 async fn runner_allows_spawn_at_max_depth() {
     let provider = ScriptedProvider::new(vec![text_response("ok")]);
     let parent = make_parent(provider.clone(), vec![]);

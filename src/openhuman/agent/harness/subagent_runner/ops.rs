@@ -34,6 +34,7 @@ use crate::openhuman::context::prompt::{
 use crate::openhuman::inference::provider::{ChatMessage, ChatRequest, Provider, ToolCall};
 use crate::openhuman::memory_conversations::ConversationMessage;
 use crate::openhuman::tools::{Tool, ToolCategory, ToolSpec};
+use crate::openhuman::util::truncate_with_ellipsis;
 
 /// Prompt suffix injected into every typed sub-agent run.
 ///
@@ -1227,6 +1228,12 @@ async fn run_inner_loop(
 ) -> Result<(String, usize, AggregatedUsage), SubagentRunError> {
     let max_iterations = max_iterations.max(1);
 
+    // Compiled digest of this sub-agent run's tool calls + results, for a
+    // graceful checkpoint if it hits the iteration cap (mirrors the main
+    // agent — bug-report-2026-05-26 A1). Accumulated as the loop runs so it's
+    // robust to history trimming.
+    let mut run_tool_digest = String::new();
+
     // Sub-agent transcript stem — mirrors what
     // `persist_subagent_transcript` used to compute on one-shot
     // post-loop writes. We compute it once up front so **every
@@ -1760,6 +1767,15 @@ async fn run_inner_loop(
             let call_output_chars = result_text.chars().count();
             let call_elapsed_ms = call_started.elapsed().as_millis() as u64;
 
+            // Record this call in the run digest (output truncated to bound
+            // size) for a possible max-iteration checkpoint.
+            run_tool_digest.push_str(&format!(
+                "- {} [{}]: {}\n",
+                call.name,
+                if call_success { "ok" } else { "failed" },
+                truncate_with_ellipsis(&result_text, 800)
+            ));
+
             // Repeated-failure circuit breaker (shared guard). `call.arguments`
             // is the stable signature; on a trip we stash the root-cause summary
             // and bail after this iteration's tool results are recorded.
@@ -1851,7 +1867,66 @@ async fn run_inner_loop(
         }
     }
 
-    Err(SubagentRunError::MaxIterationsExceeded(max_iterations))
+    // Iteration cap reached. Instead of erroring — which discards all of the
+    // sub-agent's partial work (the parent just sees "delegate failed") —
+    // compile a graceful checkpoint of what it accomplished and return it as
+    // the result, so the calling agent can continue from the partial progress
+    // (mirrors the main-agent checkpoint — bug-report-2026-05-26 A1).
+    let digest = if run_tool_digest.is_empty() {
+        "(no tool calls completed)"
+    } else {
+        run_tool_digest.as_str()
+    };
+    let deterministic = format!(
+        "I reached my tool-call limit ({max_iterations} steps) before finishing this task. \
+         Progress so far (tool calls + results):\n{digest}\n\nThe task is incomplete — the above is \
+         what I accomplished; continue from here."
+    );
+    let summary_input = vec![ChatMessage::user(format!(
+        "You are sub-agent `{agent_id}` and reached your tool-call limit before finishing. Here are \
+         the tool calls you made and their results — compile a brief progress checkpoint (what you \
+         accomplished, what still remains) for the agent that delegated to you. Do not call tools.\n\n{digest}"
+    ))];
+    let checkpoint = match provider
+        .chat(
+            ChatRequest {
+                messages: &summary_input,
+                tools: None,
+                stream: None,
+            },
+            model,
+            temperature,
+        )
+        .await
+    {
+        Ok(resp) => {
+            if let Some(ref u) = resp.usage {
+                usage.input_tokens += u.input_tokens;
+                usage.output_tokens += u.output_tokens;
+                usage.cached_input_tokens += u.cached_input_tokens;
+                usage.charged_amount_usd += u.charged_amount_usd;
+            }
+            // Strip any stray tool-call markup a text-mode model emits; if no
+            // prose survives, fall back to the deterministic digest.
+            let raw = resp.text.unwrap_or_default();
+            let (prose, _) = super::super::parse::parse_tool_calls(&raw);
+            if prose.trim().is_empty() {
+                deterministic
+            } else {
+                prose
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                agent_id = %agent_id,
+                task_id = %task_id,
+                error = %e,
+                "[subagent_runner] checkpoint summary call failed — using deterministic fallback"
+            );
+            deterministic
+        }
+    };
+    Ok((checkpoint, max_iterations, usage))
 }
 
 fn parse_tool_arguments(arguments: &str) -> serde_json::Value {
