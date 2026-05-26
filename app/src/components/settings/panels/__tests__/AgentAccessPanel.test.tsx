@@ -18,6 +18,7 @@ const autonomy = (overrides: Partial<AutonomySettings> = {}): AutonomySettings =
   trusted_roots: [],
   allow_tool_install: true,
   max_actions_per_hour: 0,
+  auto_approve: [],
   ...overrides,
 });
 
