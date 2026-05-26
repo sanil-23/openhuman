@@ -1009,6 +1009,9 @@ pub async fn apply_search_settings(
     // Allowed websites (web_fetch / curl host allowlist). Trim + drop blanks
     // + dedupe so the saved TOML stays clean; `"*"` is preserved as the
     // allow-all wildcard.
+    let allowlist_touched = update.allowed_domains.is_some() || update.allow_all.is_some();
+    let before_count = config.http_request.allowed_domains.len();
+    let before_allow_all = config.http_request.allowed_domains.iter().any(|d| d == "*");
     if let Some(domains) = update.allowed_domains {
         let mut cleaned: Vec<String> = domains
             .into_iter()
@@ -1025,6 +1028,21 @@ pub async fn apply_search_settings(
         } else {
             config.http_request.allowed_domains.retain(|d| d != "*");
         }
+    }
+    if allowlist_touched {
+        // Grep-friendly state-transition log for a security-sensitive surface.
+        // Record only host counts + the allow-all wildcard flag — never the raw
+        // hosts (redaction rule). Lets us trace "who widened/narrowed web reach"
+        // without leaking the allowlist contents.
+        let after_count = config.http_request.allowed_domains.len();
+        let after_allow_all = config.http_request.allowed_domains.iter().any(|d| d == "*");
+        tracing::info!(
+            before_count,
+            after_count,
+            before_allow_all,
+            after_allow_all,
+            "[config] http_request.allowed_domains updated"
+        );
     }
     config.save().await.map_err(|e| e.to_string())?;
     let snapshot = snapshot_config_json(config)?;
