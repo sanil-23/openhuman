@@ -100,9 +100,18 @@ fn parse_tool_call_value_aliased(
     let arguments = if allow_arg_aliases {
         first_args_by_keys(value)
     } else {
-        // Singleton whole-response fallback: only the canonical `arguments`
-        // key counts, so a plain JSON answer isn't dressed up as a call.
-        parse_arguments_value(value.get("arguments"))
+        // Whole-response bare-object fallback: require the canonical
+        // `arguments` key as an explicit tool-call marker. A plain JSON reply
+        // that merely carries a `name` (e.g. {"name":"Alice","input":…}) must
+        // stay plain text, not be dispatched as a tool call just because its
+        // name happens to match a registered tool (CodeRabbit, #2683). Tagged
+        // contexts (`<tool_call>`/`<invoke>`, `tool_calls` array, `function`
+        // wrapper) reach this fn with `allow_arg_aliases = true` and keep the
+        // permissive behaviour.
+        match value.get("arguments") {
+            Some(args) => parse_arguments_value(Some(args)),
+            None => return None,
+        }
     };
     Some(ParsedToolCall {
         name,

@@ -100,12 +100,22 @@ fn whole_response_singleton_ignores_generic_arg_aliases() {
     assert_eq!(tagged.len(), 1);
     assert_eq!(tagged[0].arguments, serde_json::json!({ "value": "hi" }));
 
-    // …but the whole-response (bare singleton) path must NOT slurp `input`
-    // into tool arguments — only the canonical `arguments` key counts there,
-    // so arbitrary JSON answers aren't dressed up as fully-formed calls.
+    // …but the whole-response (bare singleton) path must treat this as plain
+    // text, not a tool call: it carries no canonical `arguments` marker, only
+    // a `name` that happens to match a tool (CodeRabbit, #2683).
     let whole = parse_tool_calls_from_json_value_aliased(&answer, false);
-    assert_eq!(whole.len(), 1);
-    assert_eq!(whole[0].arguments, serde_json::json!({}));
+    assert!(
+        whole.is_empty(),
+        "bare whole-response object without canonical `arguments` must not dispatch a tool call"
+    );
+
+    // A bare object WITH the canonical `arguments` key is still recognized on
+    // the whole-response path — `arguments` is the explicit tool-call marker.
+    let bare_call = serde_json::json!({ "name": "echo", "arguments": { "value": "hi" } });
+    let calls = parse_tool_calls_from_json_value_aliased(&bare_call, false);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "echo");
+    assert_eq!(calls[0].arguments, serde_json::json!({ "value": "hi" }));
 
     // The `tool_calls`-keyed envelope is an explicit marker and stays
     // permissive even when aliases are forbidden for bare objects.
