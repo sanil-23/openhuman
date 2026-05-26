@@ -829,13 +829,28 @@ async fn turn_uses_cached_transcript_prefix_on_first_iteration() {
 }
 
 #[tokio::test]
-async fn turn_errors_when_max_tool_iterations_are_exceeded() {
+async fn turn_emits_checkpoint_when_max_tool_iterations_are_exceeded() {
+    // First response forces a tool call (consuming the single allowed
+    // iteration); the second is the model-written checkpoint the harness
+    // requests (tools disabled) once the cap is hit. The turn must NOT
+    // error anymore — it returns a resumable checkpoint so the thread stays
+    // well-formed and the user can continue on their next message
+    // (bug-report-2026-05-26 A1).
     let provider: Arc<dyn Provider> = Arc::new(SequenceProvider {
-        responses: AsyncMutex::new(vec![Ok(ChatResponse {
-            text: Some("<tool_call>{\"name\":\"echo\",\"arguments\":{}}</tool_call>".into()),
-            tool_calls: vec![],
-            usage: None,
-        })]),
+        responses: AsyncMutex::new(vec![
+            Ok(ChatResponse {
+                text: Some("<tool_call>{\"name\":\"echo\",\"arguments\":{}}</tool_call>".into()),
+                tool_calls: vec![],
+                usage: None,
+            }),
+            Ok(ChatResponse {
+                text: Some(
+                    "**Done so far:** ran echo.\n**Next steps:** I'll continue from here.".into(),
+                ),
+                tool_calls: vec![],
+                usage: None,
+            }),
+        ]),
         requests: AsyncMutex::new(Vec::new()),
     });
     let mut agent = make_agent_with_builder(
@@ -852,17 +867,115 @@ async fn turn_errors_when_max_tool_iterations_are_exceeded() {
         crate::openhuman::config::ContextConfig::default(),
     );
 
-    let err = agent
+    let reply = agent
         .turn("hello")
         .await
-        .expect_err("turn should stop at configured iteration budget");
-    assert!(err
-        .to_string()
-        .contains("Agent exceeded maximum tool iterations (1)"));
+        .expect("turn should emit a checkpoint at the iteration cap, not error");
+    assert!(
+        reply.contains("Next steps"),
+        "checkpoint should summarize next steps, got: {reply}"
+    );
+    // The tool-call history from the capped iteration is preserved...
     assert!(agent.history.iter().any(|message| matches!(
         message,
         ConversationMessage::AssistantToolCalls { tool_calls, .. } if tool_calls.len() == 1
     )));
+    // ...and the transcript ends on a well-formed assistant message (the
+    // checkpoint), never a dangling tool cycle — this is what stops the
+    // next message from silently wedging the thread.
+    assert!(
+        matches!(
+            agent.history.last(),
+            Some(ConversationMessage::Chat(msg))
+                if msg.role == "assistant" && msg.content.contains("Next steps")
+        ),
+        "history should end on the assistant checkpoint, got: {:?}",
+        agent.history.last()
+    );
+}
+
+#[tokio::test]
+async fn turn_errors_on_empty_provider_response() {
+    // A completion with no text and no tool calls is never a valid final
+    // answer — surface it as an error instead of accepting a blank reply,
+    // which previously rendered as silence and wedged the thread
+    // (bug-report-2026-05-26 A1, defect B).
+    let provider: Arc<dyn Provider> = Arc::new(SequenceProvider {
+        responses: AsyncMutex::new(vec![Ok(ChatResponse {
+            text: Some(String::new()),
+            tool_calls: vec![],
+            usage: None,
+        })]),
+        requests: AsyncMutex::new(Vec::new()),
+    });
+    let mut agent = make_agent_with_builder(
+        provider,
+        vec![],
+        Box::new(FixedMemoryLoader {
+            context: String::new(),
+        }),
+        vec![],
+        crate::openhuman::config::AgentConfig::default(),
+        crate::openhuman::config::ContextConfig::default(),
+    );
+
+    let err = agent
+        .turn("hello")
+        .await
+        .expect_err("an empty provider response should surface as an error");
+    assert!(
+        err.to_string().contains("empty response"),
+        "expected an empty-response error, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn turn_checkpoint_falls_back_to_deterministic_summary_when_model_summary_empty() {
+    // Tool call consumes the single iteration; the checkpoint request then
+    // comes back empty. The harness must fall back to a deterministic
+    // done/next summary so the turn never returns blank — the safety net
+    // that guarantees the thread can't re-wedge (bug-report-2026-05-26 A1).
+    let provider: Arc<dyn Provider> = Arc::new(SequenceProvider {
+        responses: AsyncMutex::new(vec![
+            Ok(ChatResponse {
+                text: Some("<tool_call>{\"name\":\"echo\",\"arguments\":{}}</tool_call>".into()),
+                tool_calls: vec![],
+                usage: None,
+            }),
+            Ok(ChatResponse {
+                text: Some(String::new()),
+                tool_calls: vec![],
+                usage: None,
+            }),
+        ]),
+        requests: AsyncMutex::new(Vec::new()),
+    });
+    let mut agent = make_agent_with_builder(
+        provider,
+        vec![Box::new(EchoTool)],
+        Box::new(FixedMemoryLoader {
+            context: String::new(),
+        }),
+        vec![],
+        crate::openhuman::config::AgentConfig {
+            max_tool_iterations: 1,
+            ..crate::openhuman::config::AgentConfig::default()
+        },
+        crate::openhuman::config::ContextConfig::default(),
+    );
+
+    let reply = agent
+        .turn("hello")
+        .await
+        .expect("empty model checkpoint should fall back, not error");
+    assert!(
+        reply.contains("tool-call limit"),
+        "deterministic fallback summary expected, got: {reply}"
+    );
+    assert!(
+        reply.contains("echo"),
+        "fallback should list the tool that ran, got: {reply}"
+    );
 }
 
 #[tokio::test]

@@ -50,6 +50,41 @@ use anyhow::Result;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+/// Instruction appended (as a synthetic user turn) to the provider
+/// messages when a turn hits the tool-call iteration cap. Asks the model
+/// to wrap up with a resumable checkpoint instead of letting the turn die.
+/// Native tools are disabled for this call so the model produces prose,
+/// not yet another tool call. See bug-report-2026-05-26 A1.
+const MAX_ITER_CHECKPOINT_INSTRUCTION: &str = "\
+You have reached the maximum number of tool calls allowed for this single turn, so you cannot call any more tools right now. \
+Do not attempt another tool call. Instead, write a short progress checkpoint for the user with two clearly labelled parts:\n\
+1. **Done so far** — what you have accomplished in this turn, grounded in the tool results above.\n\
+2. **Next steps** — exactly what you plan to do next.\n\
+Write it so you can pick up seamlessly where you left off when the user replies. Be concise.";
+
+/// Build a deterministic checkpoint summary from this turn's tool-call
+/// records. Used only as a safety net when the model-written checkpoint
+/// call fails or returns empty, so a capped turn can never be left without
+/// a well-formed assistant message — which is what silently wedged the
+/// thread before (bug-report-2026-05-26 A1).
+fn build_deterministic_checkpoint(records: &[ToolCallRecord], max_iterations: usize) -> String {
+    let mut out = format!(
+        "I reached the tool-call limit for this turn ({max_iterations} steps), so I paused here.\n\n**Done so far:**\n"
+    );
+    if records.is_empty() {
+        out.push_str("- (no tools completed yet)\n");
+    } else {
+        for r in records {
+            let status = if r.success { "ok" } else { "failed" };
+            out.push_str(&format!("- `{}` — {}\n", r.name, status));
+        }
+    }
+    out.push_str(
+        "\n**Next steps:** I'll continue from here — just reply (e.g. \"continue\") and I'll pick up where I left off.",
+    );
+    out
+}
+
 impl Agent {
     /// Executes a single interaction "turn" with the agent.
     ///
@@ -745,6 +780,21 @@ impl Agent {
                     } else {
                         text
                     };
+                    // Defense-in-depth (bug-report-2026-05-26 A1): a
+                    // completion with no text *and* no tool calls is never a
+                    // valid final answer — it's a degenerate/poisoned
+                    // response. Surfacing it as an error is visible; the old
+                    // behaviour returned `Ok("")`, which rendered as a blank
+                    // reply and silently wedged the thread.
+                    if final_text.trim().is_empty() {
+                        log::warn!(
+                            "[agent_loop] provider returned an empty final response (i={}, no text, no tool calls) — surfacing as error instead of a silent blank reply",
+                            iteration + 1
+                        );
+                        return Err(anyhow::anyhow!(
+                            "The model returned an empty response. Please try again."
+                        ));
+                    }
                     log::info!(
                         "[agent] no tool calls — returning final response after {} iteration(s)",
                         iteration + 1
@@ -940,26 +990,89 @@ impl Agent {
                 );
             }
 
+            // Tool-call iteration cap reached. Instead of aborting the turn
+            // — which left the persisted transcript on an unterminated tool
+            // cycle and silently wedged the thread on the next message
+            // (bug-report-2026-05-26 A1) — emit a *resumable checkpoint*:
+            // ask the model (tools disabled) to summarize what it did and
+            // what comes next, persist that as the final assistant message,
+            // and return it. The full tool-call history stays in the
+            // transcript, so the user's next message naturally resumes the
+            // task — no heuristic "continue" detection needed.
             log::warn!(
-                "[agent] exceeded max tool iterations ({}) — aborting turn",
+                "[agent_loop] reached max tool iterations max={} — emitting resumable checkpoint instead of aborting",
                 self.config.max_tool_iterations
             );
-            log::warn!(
-                "[agent_loop] exceeded maximum tool iterations max={}",
-                self.config.max_tool_iterations
+
+            let base_messages = last_provider_messages
+                .clone()
+                .unwrap_or_else(|| self.tool_dispatcher.to_provider_messages(&self.history));
+            let checkpoint_iteration = (self.config.max_tool_iterations + 1) as u32;
+            let mut checkpoint = self
+                .summarize_iteration_checkpoint(
+                    &base_messages,
+                    &effective_model,
+                    checkpoint_iteration,
+                )
+                .await;
+            if checkpoint.trim().is_empty() {
+                log::warn!("[agent_loop] checkpoint summary empty — using deterministic fallback");
+                checkpoint = build_deterministic_checkpoint(
+                    &all_tool_records,
+                    self.config.max_tool_iterations,
+                );
+            }
+            log::info!(
+                "[agent_loop] max-iter checkpoint emitted chars={}",
+                checkpoint.chars().count()
             );
-            // Return the typed `AgentError::MaxIterationsExceeded` variant
-            // (boxed through `anyhow::Error`) so `Agent::run_single` can
-            // downcast at the Sentry funnel and suppress emission — this is
-            // a deterministic agent-state outcome, not a bug (OPENHUMAN-
-            // TAURI-99 / -98). The `Display` text is preserved verbatim so
-            // the user-visible chat-rendered "Error: Agent exceeded
-            // maximum tool iterations" string is unchanged.
-            Err(anyhow::Error::new(
-                crate::openhuman::agent::error::AgentError::MaxIterationsExceeded {
-                    max: self.config.max_tool_iterations,
-                },
-            ))
+
+            self.emit_progress(AgentProgress::TurnCompleted {
+                iterations: self.config.max_tool_iterations as u32,
+            })
+            .await;
+
+            self.history
+                .push(ConversationMessage::Chat(ChatMessage::assistant(
+                    checkpoint.clone(),
+                )));
+            self.trim_history();
+
+            // Persist the checkpoint so the transcript ends on a
+            // well-formed assistant message (never a dangling tool cycle).
+            let mut checkpoint_messages = base_messages;
+            checkpoint_messages.push(ChatMessage::assistant(checkpoint.clone()));
+            self.persist_session_transcript(
+                &checkpoint_messages,
+                cumulative_input_tokens,
+                cumulative_output_tokens,
+                cumulative_cached_input_tokens,
+                cumulative_charged_usd,
+                last_turn_usage.as_ref(),
+            );
+
+            self.context.record_tool_calls(all_tool_records.len());
+
+            // Fire post-turn hooks with the checkpoint as the assistant
+            // response (mirrors the normal final-response path).
+            if !self.post_turn_hooks.is_empty() {
+                let ctx = TurnContext {
+                    user_message: user_message.to_string(),
+                    assistant_response: checkpoint.clone(),
+                    tool_calls: all_tool_records,
+                    turn_duration_ms: turn_started.elapsed().as_millis() as u64,
+                    session_id: Some(self.event_session_id.clone())
+                        .filter(|session_id| !session_id.trim().is_empty()),
+                    agent_id: Some(self.agent_definition_id.clone())
+                        .filter(|agent_id| !agent_id.trim().is_empty()),
+                    entrypoint: Some(self.event_channel.clone())
+                        .filter(|entrypoint| !entrypoint.trim().is_empty()),
+                    iteration_count: self.config.max_tool_iterations,
+                };
+                hooks::fire_hooks(&self.post_turn_hooks, ctx);
+            }
+
+            Ok(checkpoint)
         }; // end of `turn_body` async block
 
         // Run the turn body inside the parent-execution-context scope so
@@ -1871,6 +1984,90 @@ impl Agent {
                     "[transcript] no previous transcript found for agent={}",
                     self.agent_definition_name
                 );
+            }
+        }
+    }
+
+    /// Ask the provider for a resumable checkpoint summary when a turn
+    /// hits the tool-call iteration cap, with native tools **disabled** so
+    /// the model returns prose rather than another tool call. Streams text
+    /// deltas to the progress sink (when attached) so the checkpoint
+    /// appears in the UI like any other reply.
+    ///
+    /// Returns the summary text, or an empty string if the provider call
+    /// fails or yields nothing — the caller then falls back to
+    /// [`build_deterministic_checkpoint`] so the thread is never left on an
+    /// unterminated tool cycle (bug-report-2026-05-26 A1).
+    async fn summarize_iteration_checkpoint(
+        &self,
+        base_messages: &[ChatMessage],
+        effective_model: &str,
+        iteration_for_stream: u32,
+    ) -> String {
+        let mut messages = base_messages.to_vec();
+        messages.push(ChatMessage::user(MAX_ITER_CHECKPOINT_INSTRUCTION));
+
+        // Mirror the main loop's streaming sink so the checkpoint renders
+        // incrementally. Only text deltas are relevant here (tools are
+        // disabled for this call).
+        let (delta_tx_opt, delta_forwarder) = if self.on_progress.is_some() {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<ProviderDelta>(128);
+            let progress_tx = self.on_progress.clone();
+            let forwarder = tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    let Some(ref sink) = progress_tx else {
+                        continue;
+                    };
+                    if let ProviderDelta::TextDelta { delta } = event {
+                        if sink
+                            .send(AgentProgress::TextDelta {
+                                delta,
+                                iteration: iteration_for_stream,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            });
+            (Some(tx), Some(forwarder))
+        } else {
+            (None, None)
+        };
+
+        let result = self
+            .provider
+            .chat(
+                ChatRequest {
+                    messages: &messages,
+                    tools: None,
+                    stream: delta_tx_opt.as_ref(),
+                },
+                effective_model,
+                self.temperature,
+            )
+            .await;
+        drop(delta_tx_opt);
+        if let Some(handle) = delta_forwarder {
+            let _ = handle.await;
+        }
+
+        match result {
+            Ok(resp) => {
+                // Strip any stray tool-call XML a text-mode model may have
+                // emitted; keep only the prose.
+                let (text, _calls) = self.tool_dispatcher.parse_response(&resp);
+                if text.trim().is_empty() {
+                    resp.text.unwrap_or_default()
+                } else {
+                    text
+                }
+            }
+            Err(e) => {
+                log::warn!("[agent_loop] checkpoint summary call failed: {e:#}");
+                String::new()
             }
         }
     }

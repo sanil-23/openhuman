@@ -26,6 +26,27 @@ pub(crate) fn parse_arguments_value(raw: Option<&serde_json::Value>) -> serde_js
     }
 }
 
+/// Object keys that may carry the tool **arguments**, in priority order.
+/// Models drift from the canonical `arguments` to `args`/`parameters`/etc.;
+/// accepting these recovers an otherwise well-formed call (with a correct
+/// `name`) instead of dropping it and burning an agent iteration
+/// (bug-report-2026-05-26 A3). The tool **name** is deliberately left
+/// strict — widening it would risk misreading a plain JSON answer as a
+/// tool call in the whole-response parse path.
+const TOOL_ARG_KEYS: &[&str] = &["arguments", "args", "parameters", "params", "input"];
+
+/// Normalized arguments for the first present key among [`TOOL_ARG_KEYS`]
+/// (via [`parse_arguments_value`], which tolerates both stringified and
+/// object JSON). Empty-object default when none are present.
+fn first_args_by_keys(obj: &serde_json::Value) -> serde_json::Value {
+    for key in TOOL_ARG_KEYS {
+        if let Some(v) = obj.get(*key) {
+            return parse_arguments_value(Some(v));
+        }
+    }
+    parse_arguments_value(None)
+}
+
 pub(crate) fn parse_tool_call_value(value: &serde_json::Value) -> Option<ParsedToolCall> {
     if let Some(function) = value.get("function") {
         let name = function
@@ -35,7 +56,7 @@ pub(crate) fn parse_tool_call_value(value: &serde_json::Value) -> Option<ParsedT
             .trim()
             .to_string();
         if !name.is_empty() {
-            let arguments = parse_arguments_value(function.get("arguments"));
+            let arguments = first_args_by_keys(function);
             return Some(ParsedToolCall {
                 name,
                 arguments,
@@ -55,7 +76,7 @@ pub(crate) fn parse_tool_call_value(value: &serde_json::Value) -> Option<ParsedT
         return None;
     }
 
-    let arguments = parse_arguments_value(value.get("arguments"));
+    let arguments = first_args_by_keys(value);
     Some(ParsedToolCall {
         name,
         arguments,
@@ -388,7 +409,13 @@ pub(crate) fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) 
             }
 
             if !parsed_any {
-                tracing::warn!("Malformed <tool_call> JSON: expected tool-call object in tag body");
+                // body_chars only (never the body itself — it may carry tool
+                // arguments with user data). Surfaces how often the model
+                // emits an unparseable tool-call tag (bug-report-2026-05-26 A3).
+                tracing::warn!(
+                    "Malformed <tool_call> JSON: expected tool-call object in tag body (body_chars={})",
+                    inner.chars().count()
+                );
             }
 
             remaining = &after_open[close_idx + close_tag.len()..];

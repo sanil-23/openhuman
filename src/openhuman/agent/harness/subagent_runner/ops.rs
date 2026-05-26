@@ -199,7 +199,7 @@ struct LazyToolkitResolver {
 
 impl LazyToolkitResolver {
     fn resolve(&self, name: &str) -> Option<Box<dyn Tool>> {
-        let action = self.actions.iter().find(|a| a.name == name)?;
+        let action = self.find_action(name)?;
         Some(Box::new(
             crate::openhuman::composio::ComposioActionTool::new(
                 self.config.clone(),
@@ -210,11 +210,69 @@ impl LazyToolkitResolver {
         ))
     }
 
+    /// Match a model-supplied tool name to a real toolkit action, tolerant
+    /// of the near-miss slugs models routinely emit — case differences and
+    /// separator/prefix drift (bug-report-2026-05-26 A2). Tries, in order:
+    /// exact, case-insensitive, then a normalized alphanumeric match
+    /// (accepted only when **unique**, so a fabricated slug can't silently
+    /// resolve to the wrong action — those still fall through to the
+    /// "tool not available" error, which lists `known_slugs` for the model
+    /// to self-correct).
+    fn find_action(
+        &self,
+        name: &str,
+    ) -> Option<&crate::openhuman::context::prompt::ConnectedIntegrationTool> {
+        if let Some(action) = self.actions.iter().find(|a| a.name == name) {
+            return Some(action);
+        }
+        if let Some(action) = self
+            .actions
+            .iter()
+            .find(|a| a.name.eq_ignore_ascii_case(name))
+        {
+            tracing::debug!(
+                requested = %name,
+                matched = %action.name,
+                "[subagent_runner] resolved tool by case-insensitive match"
+            );
+            return Some(action);
+        }
+        let norm = normalize_slug(name);
+        if !norm.is_empty() {
+            let mut matches = self
+                .actions
+                .iter()
+                .filter(|a| normalize_slug(&a.name) == norm);
+            if let Some(action) = matches.next() {
+                if matches.next().is_none() {
+                    tracing::info!(
+                        requested = %name,
+                        matched = %action.name,
+                        "[subagent_runner] resolved tool by normalized-slug match"
+                    );
+                    return Some(action);
+                }
+            }
+        }
+        None
+    }
+
     /// Slugs from the bound toolkit, for inclusion in unknown-tool
     /// errors so the model can self-correct without burning a turn.
     fn known_slugs(&self) -> Vec<&str> {
         self.actions.iter().map(|a| a.name.as_str()).collect()
     }
+}
+
+/// Lowercased, non-alphanumerics stripped — collapses separator/prefix
+/// drift (`GOOGLESLIDES_BATCH_UPDATE` vs `googleslides_batch_update`) so
+/// near-miss tool slugs still resolve, while genuinely different slugs
+/// (e.g. a hallucinated `GMAIL_GET_LAST_3_MESSAGES`) stay distinct.
+fn normalize_slug(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
 }
 
 /// Run a sub-agent based on its definition and a task prompt.

@@ -1,6 +1,44 @@
 use super::*;
 use crate::openhuman::agent::harness::definition::{ModelSpec, ToolScope};
 
+#[test]
+fn lazy_resolver_tolerates_near_miss_slugs() {
+    use crate::openhuman::context::prompt::ConnectedIntegrationTool;
+    let mk = |name: &str| ConnectedIntegrationTool {
+        name: name.into(),
+        description: "d".into(),
+        parameters: None,
+    };
+    let resolver = LazyToolkitResolver {
+        config: std::sync::Arc::new(crate::openhuman::config::Config::default()),
+        actions: vec![mk("GOOGLESLIDES_BATCH_UPDATE"), mk("GMAIL_LIST_MESSAGES")],
+    };
+    // Exact, case-insensitive, and separator/prefix drift all resolve
+    // (bug-report-2026-05-26 A2).
+    assert!(resolver.resolve("GMAIL_LIST_MESSAGES").is_some());
+    assert!(resolver.resolve("gmail_list_messages").is_some());
+    assert!(resolver.resolve("googleslides_batch_update").is_some());
+    // A fabricated slug stays unresolved → routed to the "available tools"
+    // error so the model self-corrects, not silently mis-dispatched.
+    assert!(resolver.resolve("GMAIL_GET_LAST_3_MESSAGES").is_none());
+}
+
+#[test]
+fn normalize_slug_collapses_separators_and_case() {
+    assert_eq!(
+        normalize_slug("GOOGLESLIDES_BATCH_UPDATE"),
+        "googleslidesbatchupdate"
+    );
+    assert_eq!(
+        normalize_slug("googleslides_batch_update"),
+        "googleslidesbatchupdate"
+    );
+    assert_ne!(
+        normalize_slug("GMAIL_GET_LAST_3_MESSAGES"),
+        normalize_slug("GMAIL_LIST_MESSAGES")
+    );
+}
+
 fn make_def_named_tools(names: &[&str]) -> AgentDefinition {
     AgentDefinition {
         id: "test".into(),
