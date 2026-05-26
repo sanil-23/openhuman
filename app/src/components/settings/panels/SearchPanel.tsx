@@ -38,6 +38,9 @@ const SearchPanel = ({ embedded = false }: { embedded?: boolean }) => {
   const [braveKey, setBraveKey] = useState<string>('');
   const [showParallel, setShowParallel] = useState(false);
   const [showBrave, setShowBrave] = useState(false);
+  // Editor text for the allowed-websites host list (one host per line). The
+  // "*" wildcard is represented by the allowAll toggle, not shown here.
+  const [allowedText, setAllowedText] = useState<string>('');
 
   const ENGINES: EngineOption[] = [
     {
@@ -80,7 +83,15 @@ const SearchPanel = ({ embedded = false }: { embedded?: boolean }) => {
     };
   }, []);
 
+  // Reflect the loaded allowlist into the editor (explicit hosts only — the
+  // "*" wildcard is surfaced through the allowAll toggle instead).
+  useEffect(() => {
+    if (!settings) return;
+    setAllowedText(settings.allowed_domains.filter(d => d !== '*').join('\n'));
+  }, [settings]);
+
   const selectedEngine = (settings?.engine as SearchEngineId | undefined) ?? 'managed';
+  const allowAll = settings?.allow_all ?? false;
 
   const persistEngine = async (next: SearchEngineId) => {
     if (!settings || status.kind === 'saving') return;
@@ -109,6 +120,37 @@ const SearchPanel = ({ embedded = false }: { embedded?: boolean }) => {
       setSettings(refreshed.result);
       if (engine === 'parallel') setParallelKey('');
       else setBraveKey('');
+      setStatus({ kind: 'saved' });
+    } catch (err) {
+      setStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const persistAllowAll = async (next: boolean) => {
+    if (!settings || status.kind === 'saving') return;
+    setStatus({ kind: 'saving' });
+    try {
+      await openhumanUpdateSearchSettings({ allow_all: next });
+      const refreshed = await openhumanGetSearchSettings();
+      setSettings(refreshed.result);
+      setStatus({ kind: 'saved' });
+    } catch (err) {
+      setStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  const persistAllowedDomains = async () => {
+    if (!settings || status.kind === 'saving') return;
+    const domains = allowedText
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean);
+    setStatus({ kind: 'saving' });
+    try {
+      // Editing the explicit host list implies "not allow-all".
+      await openhumanUpdateSearchSettings({ allowed_domains: domains, allow_all: false });
+      const refreshed = await openhumanGetSearchSettings();
+      setSettings(refreshed.result);
       setStatus({ kind: 'saved' });
     } catch (err) {
       setStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
@@ -258,6 +300,55 @@ const SearchPanel = ({ embedded = false }: { embedded?: boolean }) => {
                 docUrl="https://brave.com/search/api/"
                 t={t}
               />
+            </div>
+
+            {/* Allowed websites — host allowlist for web_fetch / curl. */}
+            <div className="rounded-xl border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-stone-700 dark:text-neutral-200">
+                  {t('settings.search.allowedSitesLabel')}
+                </label>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={allowAll}
+                  aria-label={t('settings.search.allowAllAria')}
+                  onClick={() => void persistAllowAll(!allowAll)}
+                  disabled={status.kind === 'saving'}
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 ${
+                    allowAll ? 'bg-primary-500' : 'bg-stone-300 dark:bg-neutral-700'
+                  }`}>
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      allowAll ? 'translate-x-4' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
+              </div>
+              <p className="text-[11px] text-stone-500 dark:text-neutral-400 leading-relaxed">
+                {allowAll
+                  ? t('settings.search.allowedSitesAllOn')
+                  : t('settings.search.allowedSitesHint')}
+              </p>
+              {!allowAll && (
+                <>
+                  <textarea
+                    value={allowedText}
+                    onChange={e => setAllowedText(e.target.value)}
+                    rows={4}
+                    spellCheck={false}
+                    placeholder={t('settings.search.allowedSitesPlaceholder')}
+                    className="w-full rounded-lg border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-2 py-1.5 text-xs font-mono text-stone-800 dark:text-neutral-100 focus:outline-none focus-visible:border-primary-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void persistAllowedDomains()}
+                    disabled={status.kind === 'saving'}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-50">
+                    {t('settings.search.allowedSitesSave')}
+                  </button>
+                </>
+              )}
             </div>
 
             <div
