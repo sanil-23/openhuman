@@ -95,4 +95,18 @@ describe('ApprovalRequestCard', () => {
     expect(store.getState().chatRuntime.pendingApprovalByThread[THREAD]).toEqual(approval);
     expect(screen.getByText('Approve')).toBeInTheDocument();
   });
+
+  it('falls back to the generic prompt when the approval has no message', () => {
+    const store = configureStore({ reducer: { chatRuntime: chatRuntimeReducer } });
+    const noMessage: PendingApproval = { ...approval, message: '' };
+    store.dispatch(setPendingApprovalForThread({ threadId: THREAD, approval: noMessage }));
+    render(
+      <Provider store={store}>
+        <ApprovalRequestCard threadId={THREAD} approval={noMessage} />
+      </Provider>
+    );
+    expect(
+      screen.getByText('The agent wants to run an action that needs your approval.')
+    ).toBeInTheDocument();
+  });
 });
