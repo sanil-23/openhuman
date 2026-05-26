@@ -252,6 +252,14 @@ impl LazyToolkitResolver {
                     );
                     return Some(action);
                 }
+                // Ambiguous: 2+ actions normalize to the same slug (e.g.
+                // `read_file` and `ReadFile` → `readfile`). We deliberately
+                // refuse to guess, but log it so the collision is diagnosable.
+                tracing::debug!(
+                    requested = %name,
+                    norm = %norm,
+                    "[subagent_runner] ambiguous normalized-slug match — multiple actions resolve to the same slug; not resolving"
+                );
             }
         }
         None

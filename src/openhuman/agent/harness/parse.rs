@@ -456,11 +456,13 @@ pub(crate) fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) 
 
             if !parsed_any {
                 // body_chars only (never the body itself — it may carry tool
-                // arguments with user data). Surfaces how often the model
-                // emits an unparseable tool-call tag (bug-report-2026-05-26 A3).
+                // arguments with user data). Stable `[agent_parse]` prefix so
+                // it aggregates with the other harness log families. Surfaces
+                // how often the model emits an unparseable tool-call tag
+                // (bug-report-2026-05-26 A3).
                 tracing::warn!(
-                    "Malformed <tool_call> JSON: expected tool-call object in tag body (body_chars={})",
-                    inner.chars().count()
+                    body_chars = inner.chars().count(),
+                    "[agent_parse] malformed <tool_call> JSON: expected tool-call object in tag body"
                 );
             }
 
