@@ -23,6 +23,11 @@ pub struct MigrationStats {
     pub max_response_size_repaired: bool,
 }
 
+/// Returns `anyhow::Result` to match the shared migration-step signature that
+/// [`crate::openhuman::migrations::run_pending`] dispatches (`Ok` → bump +
+/// save, `Err` → log + retry next launch). This step is a pure in-memory
+/// transform and is currently infallible, but keeping the `Result` lets a
+/// future I/O-backed repair slot in without churning the runner or callers.
 pub fn run(config: &mut Config) -> anyhow::Result<MigrationStats> {
     // Source the replacement values from the schema's own defaults so this
     // migration can't drift from `HttpRequestConfig`'s canonical defaults.
