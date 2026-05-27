@@ -35,8 +35,8 @@ pub struct ComposioTool {
     security: Arc<SecurityPolicy>,
     /// Base URL for Composio v3 endpoints (`{base}/tools`). Production
     /// always uses [`COMPOSIO_API_BASE_V3`] via [`Self::new`]; the
-    /// injectable [`Self::new_with_v3_base`] lets unit tests point the
-    /// direct-mode `/tools` listing at a local axum mock — the same
+    /// `#[cfg(test)]` `new_with_v3_base` constructor lets unit tests point
+    /// the direct-mode `/tools` listing at a local axum mock — the same
     /// base-URL injection the backend `ComposioClient` gets through
     /// `IntegrationClient::new` in `client_tests.rs`.
     base_v3: String,
@@ -48,7 +48,8 @@ impl ComposioTool {
         default_entity_id: Option<&str>,
         security: Arc<SecurityPolicy>,
     ) -> Self {
-        Self::new_with_v3_base(
+        // Production always pins the real HTTPS v3 endpoint.
+        Self::new_internal(
             api_key,
             default_entity_id,
             security,
@@ -56,13 +57,29 @@ impl ComposioTool {
         )
     }
 
-    /// Like [`Self::new`] but with an explicit Composio v3 base URL.
+    /// Test-only seam: construct with an explicit Composio v3 base URL so
+    /// unit tests can point the direct `/tools` request — including the
+    /// `tags` filter — at a local mock instead of `backend.composio.dev`.
     ///
-    /// Production code always goes through [`Self::new`] (real endpoint);
-    /// this constructor is the seam unit tests use to exercise the direct
-    /// `/tools` request — including the `tags` filter — end-to-end against
-    /// a local mock server instead of `backend.composio.dev`.
+    /// `#[cfg(test)]`-gated on purpose: `list_tool_schemas_v3` attaches the
+    /// `x-api-key` header to whatever `base_v3` holds, so the only way to
+    /// reach the v3 endpoint in production is [`Self::new`], which always
+    /// uses the HTTPS [`COMPOSIO_API_BASE_V3`] const. An injectable base must
+    /// never carry a non-HTTPS URL outside tests.
+    #[cfg(test)]
     pub(crate) fn new_with_v3_base(
+        api_key: &str,
+        default_entity_id: Option<&str>,
+        security: Arc<SecurityPolicy>,
+        base_v3: String,
+    ) -> Self {
+        Self::new_internal(api_key, default_entity_id, security, base_v3)
+    }
+
+    /// Shared constructor body. Private so the injectable `base_v3` cannot be
+    /// supplied by production callers — they go through [`Self::new`] (real
+    /// HTTPS const) and tests through the `#[cfg(test)]` `new_with_v3_base`.
+    fn new_internal(
         api_key: &str,
         default_entity_id: Option<&str>,
         security: Arc<SecurityPolicy>,
