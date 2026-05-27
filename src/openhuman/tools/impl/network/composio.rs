@@ -179,9 +179,6 @@ impl ComposioTool {
         Ok(body.items)
     }
 
-    /// List v3 tool definitions for one or more toolkits, preserving the
-    /// raw `input_parameters` JSON schema each action carries.
-    ///
     /// Build the query-parameter pairs for the Composio v3 `GET /tools`
     /// listing used by [`Self::list_tool_schemas_v3`].
     ///
@@ -220,6 +217,9 @@ impl ComposioTool {
         params
     }
 
+    /// List v3 tool definitions for one or more toolkits, preserving the
+    /// raw `input_parameters` JSON schema each action carries.
+    ///
     /// Sibling of [`Self::list_actions`] but kept distinct because
     /// `list_actions` flattens to `Vec<ComposioAction>` (no parameters)
     /// for the legacy agent-discovery shape, whereas
