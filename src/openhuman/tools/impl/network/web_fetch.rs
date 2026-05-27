@@ -31,18 +31,40 @@ impl WebFetchTool {
         max_bytes: Option<usize>,
         timeout_secs: Option<u64>,
     ) -> Self {
+        // Treat both `None` and `Some(0)` as "use default": callers wire these
+        // from `[http_request]`, and a 0-byte cap truncates every body to
+        // nothing while a 0-second timeout fails every request instantly.
+        // Stale-zero configs are repaired on load (migration 5→6); this clamp
+        // is the always-on guard at the point of use. `Some(0)` is a genuine
+        // misconfiguration, so log it (grep-friendly, no payload); a bare
+        // `None` is a normal "use default" call and stays quiet.
+        let max_bytes = match max_bytes {
+            Some(0) => {
+                log::warn!(
+                    "[tool.web_fetch] coercing invalid limit field=max_bytes \
+                     from=0 to={DEFAULT_MAX_BYTES} (stale/invalid config — see migration 5→6)"
+                );
+                DEFAULT_MAX_BYTES
+            }
+            Some(n) => n,
+            None => DEFAULT_MAX_BYTES,
+        };
+        let timeout_secs = match timeout_secs {
+            Some(0) => {
+                log::warn!(
+                    "[tool.web_fetch] coercing invalid limit field=timeout_secs \
+                     from=0 to={DEFAULT_TIMEOUT_SECS} (stale/invalid config — see migration 5→6)"
+                );
+                DEFAULT_TIMEOUT_SECS
+            }
+            Some(n) => n,
+            None => DEFAULT_TIMEOUT_SECS,
+        };
         Self {
             security,
             allowed_domains: normalize_allowed_domains(allowed_domains),
-            // Treat both `None` and `Some(0)` as "use default": callers wire
-            // these from `[http_request]`, and a 0-byte cap truncates every
-            // body to nothing while a 0-second timeout fails every request
-            // instantly. Stale-zero configs are repaired on load (migration
-            // 5→6); this clamp is the always-on guard at the point of use.
-            max_bytes: max_bytes.filter(|n| *n > 0).unwrap_or(DEFAULT_MAX_BYTES),
-            timeout_secs: timeout_secs
-                .filter(|n| *n > 0)
-                .unwrap_or(DEFAULT_TIMEOUT_SECS),
+            max_bytes,
+            timeout_secs,
         }
     }
 }

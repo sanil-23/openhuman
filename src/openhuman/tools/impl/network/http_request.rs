@@ -33,21 +33,33 @@ impl HttpRequestTool {
         max_response_size: usize,
         timeout_secs: u64,
     ) -> Self {
+        // Treat `0` as "use default": a 0-byte cap or 0-second timeout is
+        // never a meaningful limit, only a footgun (see migration 5→6). A `0`
+        // here means a stale/invalid config slipped past the migration, so
+        // surface it with a stable, grep-friendly, non-sensitive log line.
+        let max_response_size = if max_response_size == 0 {
+            log::warn!(
+                "[tool.http_request] coercing invalid limit field=max_response_size \
+                 from=0 to={DEFAULT_MAX_RESPONSE_SIZE} (stale/invalid config — see migration 5→6)"
+            );
+            DEFAULT_MAX_RESPONSE_SIZE
+        } else {
+            max_response_size
+        };
+        let timeout_secs = if timeout_secs == 0 {
+            log::warn!(
+                "[tool.http_request] coercing invalid limit field=timeout_secs \
+                 from=0 to={DEFAULT_TIMEOUT_SECS} (stale/invalid config — see migration 5→6)"
+            );
+            DEFAULT_TIMEOUT_SECS
+        } else {
+            timeout_secs
+        };
         Self {
             security,
             allowed_domains: normalize_allowed_domains(allowed_domains),
-            // Treat `0` as "use default": a 0-byte cap or 0-second timeout is
-            // never a meaningful limit, only a footgun (see migration 5→6).
-            max_response_size: if max_response_size == 0 {
-                DEFAULT_MAX_RESPONSE_SIZE
-            } else {
-                max_response_size
-            },
-            timeout_secs: if timeout_secs == 0 {
-                DEFAULT_TIMEOUT_SECS
-            } else {
-                timeout_secs
-            },
+            max_response_size,
+            timeout_secs,
         }
     }
 
