@@ -579,11 +579,13 @@ describe('CoreStateProvider — identity-change cache clearing', () => {
 
     await waitFor(() => expect(screen.getByTestId('ready').textContent).toBe('ready'));
 
-    // First dispatch should clear the session.
+    // First dispatch should clear the session. `reason: 'confirmed'` (a real
+    // 401 / explicit expiry) skips the disk-token corroboration and clears
+    // immediately.
     await act(async () => {
       window.dispatchEvent(
         new CustomEvent('core-rpc-auth-expired', {
-          detail: { method: 'openhuman.team_get_usage', source: 'rpc' },
+          detail: { method: 'openhuman.team_get_usage', source: 'rpc', reason: 'confirmed' },
         })
       );
     });
@@ -605,6 +607,69 @@ describe('CoreStateProvider — identity-change cache clearing', () => {
     });
 
     expect(vi.mocked(tauriCommands.logout)).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT clear the session on an unconfirmed auth-expired when the token is still on disk (restart boot-race guard)', async () => {
+    fetchSnapshot.mockResolvedValue(makeSnapshot({ userId: 'u1', sessionToken: 'tok1' }));
+    listTeams.mockResolvedValue([]);
+    vi.mocked(tauriCommands.logout).mockReset();
+    vi.mocked(tauriCommands.logout).mockResolvedValue(undefined as never);
+    // The cheap disk-only token read still finds the persisted token — this is
+    // the transient "session jwt required" right after the identity-flip
+    // restart (token on disk, just not loaded by the racing RPC), not a real
+    // expiry. The destructive clearSession MUST be skipped.
+    vi.mocked(tauriCommands.getSessionToken).mockReset();
+    vi.mocked(tauriCommands.getSessionToken).mockResolvedValue('tok1');
+
+    render(
+      <CoreStateProvider>
+        <Consumer />
+      </CoreStateProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId('ready').textContent).toBe('ready'));
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent('core-rpc-auth-expired', {
+          detail: { method: 'openhuman.auth_get_me', source: 'rpc', reason: 'unconfirmed' },
+        })
+      );
+    });
+    // Flush the corroboration microtasks.
+    await act(async () => {});
+
+    expect(vi.mocked(tauriCommands.getSessionToken)).toHaveBeenCalled();
+    expect(vi.mocked(tauriCommands.logout)).not.toHaveBeenCalled();
+  });
+
+  it('clears the session on an unconfirmed auth-expired only after corroborating the token is gone', async () => {
+    fetchSnapshot.mockResolvedValue(makeSnapshot({ userId: 'u1', sessionToken: 'tok1' }));
+    listTeams.mockResolvedValue([]);
+    vi.mocked(tauriCommands.logout).mockReset();
+    vi.mocked(tauriCommands.logout).mockResolvedValue(undefined as never);
+    // Disk read confirms the token is genuinely gone → a real sign-out, so the
+    // destructive clearSession is allowed to proceed.
+    vi.mocked(tauriCommands.getSessionToken).mockReset();
+    vi.mocked(tauriCommands.getSessionToken).mockResolvedValue(null);
+
+    render(
+      <CoreStateProvider>
+        <Consumer />
+      </CoreStateProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId('ready').textContent).toBe('ready'));
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent('core-rpc-auth-expired', {
+          detail: { method: 'openhuman.auth_get_me', source: 'rpc', reason: 'unconfirmed' },
+        })
+      );
+    });
+
+    await waitFor(() => expect(vi.mocked(tauriCommands.logout)).toHaveBeenCalledTimes(1), {
+      timeout: 3000,
+    });
   });
 
   it('core-state:suppress-reauth suppresses auth-expired clearSession during deep-link delivery (#2377)', async () => {
@@ -668,7 +733,7 @@ describe('CoreStateProvider — identity-change cache clearing', () => {
     await act(async () => {
       window.dispatchEvent(
         new CustomEvent('core-rpc-auth-expired', {
-          detail: { method: 'openhuman.team_get_usage', source: 'rpc' },
+          detail: { method: 'openhuman.team_get_usage', source: 'rpc', reason: 'confirmed' },
         })
       );
     });

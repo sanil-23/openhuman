@@ -16,6 +16,7 @@ import {
   setCoreStateSnapshot,
 } from '../lib/coreState/store';
 import { syncAnalyticsConsent } from '../services/analytics';
+import type { AuthExpiredReason } from '../services/coreRpcClient';
 import {
   fetchCoreAppSnapshot,
   getTeamInvites,
@@ -30,6 +31,7 @@ import { loadThreads, resetThreadCachesPreservingSelection } from '../store/thre
 import { getActiveUserId, setActiveUserId } from '../store/userScopedStorage';
 import { isLocalSessionToken } from '../utils/localSession';
 import {
+  getSessionToken,
   openhumanUpdateAnalyticsSettings,
   openhumanUpdateMeetSettings,
   restartApp,
@@ -61,6 +63,53 @@ function sanitizeError(error: unknown): { message?: string; code?: string; statu
     };
   }
   return { message: String(error) };
+}
+
+/**
+ * Positively confirm the on-disk session token is gone before an `auth_expired`
+ * signal is allowed to trigger the *destructive* `clearSession` (which calls
+ * `auth_clear_session` → removes the auth profile from disk).
+ *
+ * Reads the cheap disk-only `auth_get_session_token` RPC — no `auth/me` network
+ * call, not subject to `app_state_snapshot`'s 5s/10s timeouts. Right after the
+ * identity-flip restart the token IS on disk, but a token-gated RPC can briefly
+ * report "session jwt required" before the profile finishes loading; a short
+ * retry rides out that boot-load window.
+ *
+ * Returns `true` ONLY when every attempt reads an empty token. A token that is
+ * present, or an RPC failure (inconclusive), returns `false` — biasing toward
+ * keeping the session rather than destroying a valid one.
+ */
+async function confirmSessionTokenGone(): Promise<boolean> {
+  const ATTEMPTS = 3;
+  const RETRY_DELAY_MS = 300;
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    let token: string | null;
+    try {
+      token = await getSessionToken();
+    } catch (err) {
+      log(
+        'auth-expired corroboration inconclusive (attempt %d/%d) — keeping session: %O',
+        attempt,
+        ATTEMPTS,
+        sanitizeError(err)
+      );
+      return false;
+    }
+    if (token && token.trim() !== '') {
+      log(
+        'auth-expired corroboration: session token still on disk (attempt %d/%d) — keeping session',
+        attempt,
+        ATTEMPTS
+      );
+      return false;
+    }
+    if (attempt < ATTEMPTS) {
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+    }
+  }
+  log('auth-expired corroboration: session token confirmed absent after %d attempts', ATTEMPTS);
+  return true;
 }
 
 export function coreStatePollFailureWarningMessage(failureCount: number): string | null {
@@ -664,7 +713,7 @@ export default function CoreStateProvider({ children }: { children: ReactNode })
   // latest closure; `clearSession`'s own deps are stable `useCallback`s,
   // so re-registers are rare.
   useEffect(() => {
-    const runReauth = (method: string, source: string) => {
+    const runReauth = async (method: string, source: string, reason: AuthExpiredReason) => {
       if (isLocalSessionToken(getCoreStateSnapshot().snapshot.sessionToken)) {
         log('auth-expired ignored for local session (method=%s source=%s)', method, source);
         return;
@@ -682,16 +731,44 @@ export default function CoreStateProvider({ children }: { children: ReactNode })
         log('auth-expired debounced (method=%s source=%s)', method, source);
         return;
       }
+      // Claim the debounce slot before the (async) corroboration so a burst of
+      // events in the same frame can't all run the check / clear twice.
       lastReauthAtRef.current = now;
-      log('auth-expired: clearing session (method=%s source=%s)', method, source);
+
+      // An `unconfirmed` reason ("session jwt required" / "no backend session
+      // token") means the core has no token *loaded* — which fires transiently
+      // right after the identity-flip restart, before the on-disk auth profile
+      // is read. `clearSession()` is destructive (auth_clear_session removes the
+      // profile from disk), so corroborate first and only sign out if the token
+      // is genuinely gone. A hard 401 / explicit expiry (`confirmed`) skips this.
+      if (reason === 'unconfirmed') {
+        const gone = await confirmSessionTokenGone();
+        if (!gone) {
+          log(
+            'auth-expired NOT cleared — unconfirmed signal but session token still present (method=%s source=%s)',
+            method,
+            source
+          );
+          return;
+        }
+      }
+
+      log('auth-expired: clearing session (method=%s source=%s reason=%s)', method, source, reason);
       void clearSession().catch(err => {
         log('clearSession failed after auth-expired: %O', sanitizeError(err));
       });
     };
 
     const onRpcExpired = (event: Event) => {
-      const detail = (event as CustomEvent<{ method?: string; source?: string }>).detail;
-      runReauth(detail?.method ?? 'unknown', detail?.source ?? 'core-rpc-auth-expired');
+      const detail = (
+        event as CustomEvent<{ method?: string; source?: string; reason?: AuthExpiredReason }>
+      ).detail;
+      // Default to 'unconfirmed' (corroborate, don't destroy) when no reason is present.
+      void runReauth(
+        detail?.method ?? 'unknown',
+        detail?.source ?? 'core-rpc-auth-expired',
+        detail?.reason ?? 'unconfirmed'
+      );
     };
 
     const onSocketExpired = (event: Event) => {
@@ -703,7 +780,8 @@ export default function CoreStateProvider({ children }: { children: ReactNode })
         typeof (event.detail as { source?: unknown }).source === 'string'
           ? (event.detail as { source: string }).source
           : 'unknown';
-      runReauth('socket.session_expired', source);
+      // The socket `auth:session_expired` push is an explicit backend expiry → confirmed.
+      void runReauth('socket.session_expired', source, 'confirmed');
     };
 
     window.addEventListener('core-rpc-auth-expired', onRpcExpired as EventListener);
