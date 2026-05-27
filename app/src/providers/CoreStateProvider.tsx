@@ -650,6 +650,12 @@ export default function CoreStateProvider({ children }: { children: ReactNode })
   );
 
   const lastReauthAtRef = useRef(0);
+  // Reason that claimed the current debounce slot, and a monotonic attempt id.
+  // Together they let a `confirmed` expiry break through a slot held by an
+  // `unconfirmed` probe, while preventing an in-flight unconfirmed
+  // corroboration from clearing after a newer attempt has superseded it.
+  const lastReauthReasonRef = useRef<AuthExpiredReason | null>(null);
+  const reauthAttemptIdRef = useRef(0);
   const suppressReauthUntilRef = useRef(0);
 
   // Listen for deep-link auth suppression signals so that an in-flight
@@ -727,13 +733,24 @@ export default function CoreStateProvider({ children }: { children: ReactNode })
         );
         return;
       }
-      if (now - lastReauthAtRef.current < 10_000) {
-        log('auth-expired debounced (method=%s source=%s)', method, source);
+      // Debounce coalesces a burst of auth-expired events. EXCEPTION: a
+      // `confirmed` expiry must NOT be suppressed by a slot claimed by an
+      // earlier `unconfirmed` probe (which may have bailed without clearing) —
+      // otherwise a real 401 / `auth:session_expired` landing right after a
+      // transient boot-race signal would be silently dropped for up to 10s,
+      // keeping an actually-expired session alive.
+      const withinDebounce = now - lastReauthAtRef.current < 10_000;
+      const confirmedOverridesUnconfirmed =
+        reason === 'confirmed' && lastReauthReasonRef.current === 'unconfirmed';
+      if (withinDebounce && !confirmedOverridesUnconfirmed) {
+        log('auth-expired debounced (method=%s source=%s reason=%s)', method, source, reason);
         return;
       }
       // Claim the debounce slot before the (async) corroboration so a burst of
       // events in the same frame can't all run the check / clear twice.
+      const attemptId = ++reauthAttemptIdRef.current;
       lastReauthAtRef.current = now;
+      lastReauthReasonRef.current = reason;
 
       // An `unconfirmed` reason ("session jwt required" / "no backend session
       // token") means the core has no token *loaded* — which fires transiently
@@ -743,6 +760,17 @@ export default function CoreStateProvider({ children }: { children: ReactNode })
       // is genuinely gone. A hard 401 / explicit expiry (`confirmed`) skips this.
       if (reason === 'unconfirmed') {
         const gone = await confirmSessionTokenGone();
+        // A newer reauth attempt superseded this one while we were awaiting
+        // (e.g. a `confirmed` 401 broke through the debounce) — don't double-
+        // clear or stomp the newer attempt's outcome.
+        if (attemptId !== reauthAttemptIdRef.current) {
+          log(
+            'auth-expired corroboration superseded by a newer attempt — skipping (method=%s source=%s)',
+            method,
+            source
+          );
+          return;
+        }
         if (!gone) {
           log(
             'auth-expired NOT cleared — unconfirmed signal but session token still present (method=%s source=%s)',
@@ -753,6 +781,10 @@ export default function CoreStateProvider({ children }: { children: ReactNode })
         }
       }
 
+      // Reaching here means we're committing to a real sign-out. Mark the slot
+      // `confirmed` so a follow-up `confirmed` event inside the debounce window
+      // is coalesced (no double-clear) rather than breaking through again.
+      lastReauthReasonRef.current = 'confirmed';
       log('auth-expired: clearing session (method=%s source=%s reason=%s)', method, source, reason);
       void clearSession().catch(err => {
         log('clearSession failed after auth-expired: %O', sanitizeError(err));

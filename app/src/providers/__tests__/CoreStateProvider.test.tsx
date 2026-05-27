@@ -672,6 +672,46 @@ describe('CoreStateProvider — identity-change cache clearing', () => {
     });
   });
 
+  it('lets a confirmed expiry break through a debounce slot claimed by an unconfirmed probe', async () => {
+    fetchSnapshot.mockResolvedValue(makeSnapshot({ userId: 'u1', sessionToken: 'tok1' }));
+    listTeams.mockResolvedValue([]);
+    vi.mocked(tauriCommands.logout).mockReset();
+    vi.mocked(tauriCommands.logout).mockResolvedValue(undefined as never);
+    // Unconfirmed probe still finds the token → bails (keeps session) but would
+    // otherwise hold the 10s debounce slot.
+    vi.mocked(tauriCommands.getSessionToken).mockReset();
+    vi.mocked(tauriCommands.getSessionToken).mockResolvedValue('tok1');
+
+    render(
+      <CoreStateProvider>
+        <Consumer />
+      </CoreStateProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId('ready').textContent).toBe('ready'));
+
+    // 1) Transient unconfirmed signal — must NOT clear, but claims the slot.
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent('core-rpc-auth-expired', {
+          detail: { method: 'openhuman.auth_get_me', source: 'rpc', reason: 'unconfirmed' },
+        })
+      );
+    });
+    await act(async () => {});
+    expect(vi.mocked(tauriCommands.logout)).not.toHaveBeenCalled();
+
+    // 2) A real 401 within the debounce window MUST still sign out.
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent('core-rpc-auth-expired', {
+          detail: { method: 'openhuman.team_get_usage', source: 'rpc', reason: 'confirmed' },
+        })
+      );
+    });
+
+    await waitFor(() => expect(vi.mocked(tauriCommands.logout)).toHaveBeenCalledTimes(1));
+  });
+
   it('core-state:suppress-reauth suppresses auth-expired clearSession during deep-link delivery (#2377)', async () => {
     fetchSnapshot.mockResolvedValue(makeSnapshot({ userId: 'u1', sessionToken: 'tok1' }));
     listTeams.mockResolvedValue([]);
