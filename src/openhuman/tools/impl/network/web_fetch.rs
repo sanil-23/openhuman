@@ -34,8 +34,15 @@ impl WebFetchTool {
         Self {
             security,
             allowed_domains: normalize_allowed_domains(allowed_domains),
-            max_bytes: max_bytes.unwrap_or(DEFAULT_MAX_BYTES),
-            timeout_secs: timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
+            // Treat both `None` and `Some(0)` as "use default": callers wire
+            // these from `[http_request]`, and a 0-byte cap truncates every
+            // body to nothing while a 0-second timeout fails every request
+            // instantly. Stale-zero configs are repaired on load (migration
+            // 5→6); this clamp is the always-on guard at the point of use.
+            max_bytes: max_bytes.filter(|n| *n > 0).unwrap_or(DEFAULT_MAX_BYTES),
+            timeout_secs: timeout_secs
+                .filter(|n| *n > 0)
+                .unwrap_or(DEFAULT_TIMEOUT_SECS),
         }
     }
 }
@@ -193,6 +200,39 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("url")));
+    }
+
+    #[test]
+    fn zero_and_none_limits_fall_back_to_defaults() {
+        // Callers wire these from `[http_request]`; a stale `Some(0)` is a
+        // 0-byte cap (empty bodies) and a 0-second timeout (instant failure).
+        // Both `None` and `Some(0)` must coerce to the module defaults.
+        let from_zero = WebFetchTool::new(
+            test_security(),
+            vec!["example.com".into()],
+            Some(0),
+            Some(0),
+        );
+        assert_eq!(from_zero.max_bytes, DEFAULT_MAX_BYTES);
+        assert_eq!(from_zero.timeout_secs, DEFAULT_TIMEOUT_SECS);
+        assert_ne!(from_zero.timeout_secs, 0);
+        assert_ne!(from_zero.max_bytes, 0);
+
+        let from_none = WebFetchTool::new(test_security(), vec!["example.com".into()], None, None);
+        assert_eq!(from_none.max_bytes, DEFAULT_MAX_BYTES);
+        assert_eq!(from_none.timeout_secs, DEFAULT_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn nonzero_limits_are_preserved() {
+        let tool = WebFetchTool::new(
+            test_security(),
+            vec!["example.com".into()],
+            Some(4096),
+            Some(15),
+        );
+        assert_eq!(tool.max_bytes, 4096);
+        assert_eq!(tool.timeout_secs, 15);
     }
 
     #[tokio::test]

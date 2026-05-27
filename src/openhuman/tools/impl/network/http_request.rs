@@ -6,6 +6,17 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Fallback when a caller passes `0` for the response cap. A literal `0`
+/// would make `truncate_response` clip every body to nothing. Mirrors
+/// `[http_request]`'s schema default (`default_http_max_response_size`).
+const DEFAULT_MAX_RESPONSE_SIZE: usize = 1_000_000;
+/// Fallback when a caller passes `0` for the timeout. `Duration::from_secs(0)`
+/// is an *instant* timeout that fails every request, so `0` must never reach
+/// reqwest. Mirrors `[http_request]`'s schema default. Stale-zero configs are
+/// also repaired on load (migration 5→6), but this guard is the always-on
+/// safety net regardless of how the value got here.
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
+
 /// HTTP request tool for API interactions.
 /// Supports GET, POST, PUT, DELETE methods with configurable security.
 pub struct HttpRequestTool {
@@ -25,8 +36,18 @@ impl HttpRequestTool {
         Self {
             security,
             allowed_domains: normalize_allowed_domains(allowed_domains),
-            max_response_size,
-            timeout_secs,
+            // Treat `0` as "use default": a 0-byte cap or 0-second timeout is
+            // never a meaningful limit, only a footgun (see migration 5→6).
+            max_response_size: if max_response_size == 0 {
+                DEFAULT_MAX_RESPONSE_SIZE
+            } else {
+                max_response_size
+            },
+            timeout_secs: if timeout_secs == 0 {
+                DEFAULT_TIMEOUT_SECS
+            } else {
+                timeout_secs
+            },
         }
     }
 
