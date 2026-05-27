@@ -1,21 +1,11 @@
 use super::url_guard::{normalize_allowed_domains, validate_url_with_dns_check};
+use crate::openhuman::config::HttpRequestConfig;
 use crate::openhuman::security::SecurityPolicy;
 use crate::openhuman::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-
-/// Fallback when a caller passes `0` for the response cap. A literal `0`
-/// would make `truncate_response` clip every body to nothing. Mirrors
-/// `[http_request]`'s schema default (`default_http_max_response_size`).
-const DEFAULT_MAX_RESPONSE_SIZE: usize = 1_000_000;
-/// Fallback when a caller passes `0` for the timeout. `Duration::from_secs(0)`
-/// is an *instant* timeout that fails every request, so `0` must never reach
-/// reqwest. Mirrors `[http_request]`'s schema default. Stale-zero configs are
-/// also repaired on load (migration 5→6), but this guard is the always-on
-/// safety net regardless of how the value got here.
-const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 /// HTTP request tool for API interactions.
 /// Supports GET, POST, PUT, DELETE methods with configurable security.
@@ -33,25 +23,30 @@ impl HttpRequestTool {
         max_response_size: usize,
         timeout_secs: u64,
     ) -> Self {
-        // Treat `0` as "use default": a 0-byte cap or 0-second timeout is
-        // never a meaningful limit, only a footgun (see migration 5→6). A `0`
+        // Treat `0` as "use default": a 0-byte cap or 0-second timeout is never
+        // a meaningful limit, only a footgun (see migration 5→6). Pull the
+        // fallbacks from `HttpRequestConfig::default()` so the tool, the schema
+        // default, and the migration share one source and can't drift. A `0`
         // here means a stale/invalid config slipped past the migration, so
         // surface it with a stable, grep-friendly, non-sensitive log line.
+        let defaults = HttpRequestConfig::default();
         let max_response_size = if max_response_size == 0 {
             log::warn!(
                 "[tool.http_request] coercing invalid limit field=max_response_size \
-                 from=0 to={DEFAULT_MAX_RESPONSE_SIZE} (stale/invalid config — see migration 5→6)"
+                 from=0 to={} (stale/invalid config — see migration 5→6)",
+                defaults.max_response_size
             );
-            DEFAULT_MAX_RESPONSE_SIZE
+            defaults.max_response_size
         } else {
             max_response_size
         };
         let timeout_secs = if timeout_secs == 0 {
             log::warn!(
                 "[tool.http_request] coercing invalid limit field=timeout_secs \
-                 from=0 to={DEFAULT_TIMEOUT_SECS} (stale/invalid config — see migration 5→6)"
+                 from=0 to={} (stale/invalid config — see migration 5→6)",
+                defaults.timeout_secs
             );
-            DEFAULT_TIMEOUT_SECS
+            defaults.timeout_secs
         } else {
             timeout_secs
         };

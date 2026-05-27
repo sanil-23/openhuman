@@ -24,8 +24,9 @@ fn zero_limits_fall_back_to_defaults() {
         ..SecurityPolicy::default()
     });
     let tool = HttpRequestTool::new(security, vec!["example.com".to_string()], 0, 0);
-    assert_eq!(tool.max_response_size, DEFAULT_MAX_RESPONSE_SIZE);
-    assert_eq!(tool.timeout_secs, DEFAULT_TIMEOUT_SECS);
+    let defaults = crate::openhuman::config::HttpRequestConfig::default();
+    assert_eq!(tool.max_response_size, defaults.max_response_size);
+    assert_eq!(tool.timeout_secs, defaults.timeout_secs);
     assert_ne!(tool.timeout_secs, 0);
     assert_ne!(tool.max_response_size, 0);
 }

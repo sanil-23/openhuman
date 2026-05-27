@@ -7,15 +7,13 @@
 //! as text, capped, with a tiny preamble (status + final URL).
 
 use super::url_guard::{normalize_allowed_domains, validate_url_with_dns_check};
+use crate::openhuman::config::HttpRequestConfig;
 use crate::openhuman::security::SecurityPolicy;
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-
-const DEFAULT_MAX_BYTES: usize = 1_000_000;
-const DEFAULT_TIMEOUT_SECS: u64 = 20;
 
 pub struct WebFetchTool {
     security: Arc<SecurityPolicy>,
@@ -35,30 +33,35 @@ impl WebFetchTool {
         // from `[http_request]`, and a 0-byte cap truncates every body to
         // nothing while a 0-second timeout fails every request instantly.
         // Stale-zero configs are repaired on load (migration 5→6); this clamp
-        // is the always-on guard at the point of use. `Some(0)` is a genuine
+        // is the always-on guard at the point of use. Pull the fallbacks from
+        // `HttpRequestConfig::default()` so the tool shares one source with the
+        // schema + migration (no cross-layer drift). `Some(0)` is a genuine
         // misconfiguration, so log it (grep-friendly, no payload); a bare
         // `None` is a normal "use default" call and stays quiet.
+        let defaults = HttpRequestConfig::default();
         let max_bytes = match max_bytes {
             Some(0) => {
                 log::warn!(
                     "[tool.web_fetch] coercing invalid limit field=max_bytes \
-                     from=0 to={DEFAULT_MAX_BYTES} (stale/invalid config — see migration 5→6)"
+                     from=0 to={} (stale/invalid config — see migration 5→6)",
+                    defaults.max_response_size
                 );
-                DEFAULT_MAX_BYTES
+                defaults.max_response_size
             }
             Some(n) => n,
-            None => DEFAULT_MAX_BYTES,
+            None => defaults.max_response_size,
         };
         let timeout_secs = match timeout_secs {
             Some(0) => {
                 log::warn!(
                     "[tool.web_fetch] coercing invalid limit field=timeout_secs \
-                     from=0 to={DEFAULT_TIMEOUT_SECS} (stale/invalid config — see migration 5→6)"
+                     from=0 to={} (stale/invalid config — see migration 5→6)",
+                    defaults.timeout_secs
                 );
-                DEFAULT_TIMEOUT_SECS
+                defaults.timeout_secs
             }
             Some(n) => n,
-            None => DEFAULT_TIMEOUT_SECS,
+            None => defaults.timeout_secs,
         };
         Self {
             security,
@@ -228,21 +231,22 @@ mod tests {
     fn zero_and_none_limits_fall_back_to_defaults() {
         // Callers wire these from `[http_request]`; a stale `Some(0)` is a
         // 0-byte cap (empty bodies) and a 0-second timeout (instant failure).
-        // Both `None` and `Some(0)` must coerce to the module defaults.
+        // Both `None` and `Some(0)` must coerce to the shared schema defaults.
+        let defaults = crate::openhuman::config::HttpRequestConfig::default();
         let from_zero = WebFetchTool::new(
             test_security(),
             vec!["example.com".into()],
             Some(0),
             Some(0),
         );
-        assert_eq!(from_zero.max_bytes, DEFAULT_MAX_BYTES);
-        assert_eq!(from_zero.timeout_secs, DEFAULT_TIMEOUT_SECS);
+        assert_eq!(from_zero.max_bytes, defaults.max_response_size);
+        assert_eq!(from_zero.timeout_secs, defaults.timeout_secs);
         assert_ne!(from_zero.timeout_secs, 0);
         assert_ne!(from_zero.max_bytes, 0);
 
         let from_none = WebFetchTool::new(test_security(), vec!["example.com".into()], None, None);
-        assert_eq!(from_none.max_bytes, DEFAULT_MAX_BYTES);
-        assert_eq!(from_none.timeout_secs, DEFAULT_TIMEOUT_SECS);
+        assert_eq!(from_none.max_bytes, defaults.max_response_size);
+        assert_eq!(from_none.timeout_secs, defaults.timeout_secs);
     }
 
     #[test]
