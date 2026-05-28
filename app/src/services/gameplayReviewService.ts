@@ -216,11 +216,11 @@ export function flattenClipCandidates(
 export function formatSpoilerMode(mode: SpoilerMode): string {
   switch (mode) {
     case 'off':
-      return 'Spoiler-safe';
+      return 'gameplay.spoiler.off';
     case 'full':
-      return 'Full spoilers';
+      return 'gameplay.spoiler.full';
     default:
-      return 'Light spoilers';
+      return 'gameplay.spoiler.light';
   }
 }
 

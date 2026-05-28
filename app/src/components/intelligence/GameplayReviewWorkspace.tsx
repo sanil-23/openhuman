@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useT } from '../../lib/i18n/I18nContext';
 import {
   analyzeGameplaySession,
   askGameplaySession,
@@ -62,6 +63,7 @@ function splitPlatforms(value: string): string[] {
 }
 
 export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProps) {
+  const { t } = useT();
   const [form, setForm] = useState(INITIAL_IMPORT_STATE);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [recentSessions, setRecentSessions] = useState<GameplayReviewSession[]>([]);
@@ -239,7 +241,7 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
           <div className="rounded-xl border border-sage-200 bg-white/80 px-4 py-3 text-sm text-stone-700 shadow-sm">
             <div className="font-semibold text-stone-900">Selected files</div>
             <div>{selectedFiles.length} file(s)</div>
-            <div>{formatSpoilerMode(form.spoilerMode)}</div>
+            <div>{t(formatSpoilerMode(form.spoilerMode))}</div>
           </div>
         </div>
 
@@ -403,7 +405,7 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
                     </div>
                   </div>
                   <div className="text-xs font-medium text-sage-700">
-                    {formatSpoilerMode(activeSession.spoiler_mode)}
+                    {t(formatSpoilerMode(activeSession.spoiler_mode))}
                   </div>
                 </div>
                 {activeSession.analysis?.spoiler_note && (
@@ -570,7 +572,7 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
                       <div className="text-xs text-stone-500">{session.game_id}</div>
                     </div>
                     <div className="text-right text-[11px] text-stone-500">
-                      <div>{formatSpoilerMode(session.spoiler_mode)}</div>
+                      <div>{t(formatSpoilerMode(session.spoiler_mode))}</div>
                       <div>{session.frames.length} frame(s)</div>
                     </div>
                   </div>

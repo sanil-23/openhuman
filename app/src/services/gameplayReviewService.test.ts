@@ -274,9 +274,9 @@ describe('gameplayReviewService', () => {
 
   describe('formatSpoilerMode', () => {
     it('maps each spoiler mode to its label', () => {
-      expect(formatSpoilerMode('off')).toBe('Spoiler-safe');
-      expect(formatSpoilerMode('full')).toBe('Full spoilers');
-      expect(formatSpoilerMode('light')).toBe('Light spoilers');
+      expect(formatSpoilerMode('off')).toBe('gameplay.spoiler.off');
+      expect(formatSpoilerMode('full')).toBe('gameplay.spoiler.full');
+      expect(formatSpoilerMode('light')).toBe('gameplay.spoiler.light');
     });
   });
 
