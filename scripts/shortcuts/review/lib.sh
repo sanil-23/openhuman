@@ -41,7 +41,10 @@ agent_exec() {
   local agent="$1"
   local prompt="$2"
   if [ "${REVIEW_AGENT_SAFE:-0}" = "1" ]; then
-    "$agent" "$prompt"
+    case "$agent" in
+      codex) codex exec "$prompt" ;;
+      *) "$agent" "$prompt" ;;
+    esac
     return
   fi
   case "$agent" in
