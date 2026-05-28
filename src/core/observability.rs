@@ -361,10 +361,17 @@ fn is_disk_full_message(lower: &str) -> bool {
     lower.contains("no space left on device") || lower.contains("not enough space on the disk")
 }
 
-fn is_embedding_backend_auth_failure(lower: &str) -> bool {
-    lower.contains("embedding api error")
-        && lower.contains("401")
-        && lower.contains("invalid token")
+/// Deprecated: the Embedding 401 + `Invalid token` wire shape that this
+/// matched is the OpenHuman backend session-expired envelope
+/// (`{"success":false,"error":"Invalid token"}`) — same shape
+/// `is_session_expired_message` now classifies as `SessionExpired`
+/// (TAURI-RUST-4K5, see #2786). Keeping the BackendUserError arm here
+/// caused two PRs (#2830 vs #2786) to make contradictory assertions for
+/// the same input; the SessionExpired routing is the correct one per
+/// the breadcrumb evidence (`[scheduler_gate] signed_out false -> true`
+/// immediately preceding the 401).
+fn is_embedding_backend_auth_failure(_lower: &str) -> bool {
+    false
 }
 
 /// Detect the memory-store chunk DB's circuit-breaker-open message that
@@ -1840,23 +1847,6 @@ mod tests {
                 expected_error_kind(raw),
                 Some(ExpectedErrorKind::ProviderUserState),
                 "should classify Ollama user-config rejection: {raw}"
-            );
-        }
-    }
-
-    #[test]
-    fn classifies_embedding_backend_auth_failure() {
-        // TAURI-RUST-T (~4k events): OpenHuman backend rejected the
-        // embeddings worker's bearer token. Both the bare-status and
-        // parenthesised wire shapes must classify.
-        for raw in [
-            r#"Embedding API error 401 Unauthorized: {"success":false,"error":"Invalid token"}"#,
-            r#"Embedding API error (401 Unauthorized): {"success":false,"error":"Invalid token"}"#,
-        ] {
-            assert_eq!(
-                expected_error_kind(raw),
-                Some(ExpectedErrorKind::BackendUserError),
-                "should classify embedding backend auth failure: {raw}"
             );
         }
     }
