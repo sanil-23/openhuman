@@ -215,7 +215,12 @@ mod tests {
             let (legacy, target_expr) = entry
                 .split_once(':')
                 .unwrap_or_else(|| panic!("expected legacy alias entry, got `{entry}`"));
-            let legacy = quoted_value(legacy);
+            let legacy_trim = legacy.trim();
+            let legacy = if legacy_trim.starts_with('\'') || legacy_trim.starts_with('"') {
+                quoted_value(legacy_trim)
+            } else {
+                legacy_trim.to_string()
+            };
             let target_expr = target_expr.trim();
             let canonical = if let Some(key) = target_expr.strip_prefix("CORE_RPC_METHODS.") {
                 core_methods
