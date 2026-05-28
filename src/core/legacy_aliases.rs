@@ -235,11 +235,13 @@ mod tests {
             let (legacy, target_expr) = entry
                 .split_once(':')
                 .unwrap_or_else(|| panic!("expected legacy alias entry, got `{entry}`"));
-            let legacy_trim = legacy.trim();
-            let legacy = if legacy_trim.starts_with('\'') || legacy_trim.starts_with('"') {
-                quoted_value(legacy_trim)
+            // Prettier strips quotes from keys that are valid JS identifiers
+            // (e.g. `health_snapshot`), so accept both `'foo':` and bare `foo:`.
+            let legacy_trimmed = legacy.trim();
+            let legacy = if legacy_trimmed.starts_with('\'') || legacy_trimmed.starts_with('"') {
+                quoted_value(legacy)
             } else {
-                legacy_trim.to_string()
+                legacy_trimmed.to_string()
             };
             let target_expr = target_expr.trim();
             let canonical = if let Some(key) = target_expr.strip_prefix("CORE_RPC_METHODS.") {
@@ -347,6 +349,34 @@ mod tests {
         assert_eq!(
             aliases.get("openhuman.legacy_literal").map(String::as_str),
             Some("openhuman.literal_target")
+        );
+    }
+
+    #[test]
+    fn parse_frontend_legacy_aliases_accepts_bare_identifier_keys_and_skips_comments() {
+        // Prettier strips redundant quotes from keys that are valid JS
+        // identifiers, so the canonical form for a simple key like
+        // `health_snapshot` is unquoted. The parser must accept both
+        // `'foo':` and bare `foo:`, and must ignore `//` comment lines
+        // in the LEGACY_METHOD_ALIASES body.
+        let source = "export const CORE_RPC_METHODS = {\n  alphaMethod: 'openhuman.alpha',\n  betaMethod: 'openhuman.beta',\n} as const;\n\nexport const LEGACY_METHOD_ALIASES: Record<string, CoreRpcMethod> = {\n  // legacy aliases for the alpha method\n  'openhuman.legacy_alpha': CORE_RPC_METHODS.alphaMethod,\n  beta_legacy: CORE_RPC_METHODS.betaMethod,\n};\n";
+        let core_methods = parse_core_rpc_methods(source);
+        let aliases = parse_frontend_legacy_aliases(source, &core_methods);
+        assert_eq!(
+            aliases.get("openhuman.legacy_alpha").map(String::as_str),
+            Some("openhuman.alpha"),
+            "quoted-key entry should still resolve"
+        );
+        assert_eq!(
+            aliases.get("beta_legacy").map(String::as_str),
+            Some("openhuman.beta"),
+            "bare-identifier key should resolve (Prettier-normalized form)"
+        );
+        assert!(
+            !aliases
+                .keys()
+                .any(|k| k.contains("//") || k.contains("legacy aliases")),
+            "comment text must not be captured as a key"
         );
     }
 
