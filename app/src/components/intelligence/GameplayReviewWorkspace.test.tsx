@@ -5,6 +5,8 @@ import {
   analyzeGameplaySession,
   askGameplaySession,
   draftGameplayClipMetadata,
+  type GameplayReviewAnalysis,
+  type GameplayReviewSession,
   listGameplaySessions,
   prepareGameplayFrames,
   registerGameplaySession,
@@ -178,5 +180,257 @@ describe('GameplayReviewWorkspace', () => {
     fireEvent.click(screen.getByRole('button', { name: /ask session/i }));
     await waitFor(() => expect(mockedAskGameplaySession).toHaveBeenCalled());
     expect(screen.getByText(/Best clip candidate/)).toBeInTheDocument();
+  });
+
+  const BASE_ANALYSIS: GameplayReviewAnalysis = {
+    recap: 'Solid session recap',
+    highlights: [
+      {
+        id: 'h1',
+        frame_index: 0,
+        captured_at_ms: 123,
+        title: 'Clutch fight',
+        rationale: 'Clean finish',
+        confidence: 0.9,
+        kind: 'highlight',
+      },
+    ],
+    clip_candidates: [
+      {
+        id: 'c1',
+        frame_index: 0,
+        start_label: 'frame-1.png',
+        end_label: 'frame-2.png',
+        rationale: 'Great pacing',
+        confidence: 0.8,
+      },
+    ],
+    draft_metadata: [
+      { platform: 'twitch', title: 'Clip title', description: 'Clip desc', tags: ['apex'] },
+    ],
+    follow_up_questions: ['What was the turning point?'],
+    spoiler_note: 'Endgame results hidden.',
+  };
+
+  function analyzedSession(overrides: Partial<GameplayReviewSession> = {}): GameplayReviewSession {
+    return {
+      session_id: 'session-1',
+      game_id: 'Apex Legends',
+      session_title: 'Ranked climb',
+      source_label: null,
+      spoiler_mode: 'full',
+      preset_id: null,
+      imported_at_ms: 1000,
+      analyzed_at_ms: 2000,
+      frames: [
+        { file_name: 'frame-1.png', image_ref: 'data:image/png;base64,AAA', captured_at_ms: 123 },
+      ],
+      analysis: BASE_ANALYSIS,
+      ...overrides,
+    };
+  }
+
+  function selectFile(container: HTMLElement) {
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File([new Uint8Array([1, 2, 3])], 'frame-1.png', { type: 'image/png' });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+  }
+
+  it('surfaces an error when the initial session fetch fails', async () => {
+    mockedListGameplaySessions.mockRejectedValueOnce(new Error('list failed'));
+
+    render(<GameplayReviewWorkspace />);
+
+    await waitFor(() => expect(screen.getByText('list failed')).toBeInTheDocument());
+  });
+
+  it('validates required fields before importing', async () => {
+    render(<GameplayReviewWorkspace />);
+    await waitFor(() => expect(screen.getByText('No saved sessions yet.')).toBeInTheDocument());
+
+    const importButton = screen.getByRole('button', { name: /import and analyze/i });
+
+    fireEvent.click(importButton);
+    expect(screen.getByText('Game name is required.')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('Apex Legends'), { target: { value: 'Apex' } });
+    fireEvent.click(importButton);
+    expect(screen.getByText('Session title is required.')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('Ranked climb on Friday night'), {
+      target: { value: 'Ranked' },
+    });
+    fireEvent.click(importButton);
+    expect(
+      screen.getByText('Choose a folder or a set of keyframe images first.')
+    ).toBeInTheDocument();
+    expect(mockedPrepareGameplayFrames).not.toHaveBeenCalled();
+  });
+
+  it('errors when no image frames are found and skips preset save without a preset name', async () => {
+    mockedPrepareGameplayFrames.mockResolvedValue([]);
+
+    const { container } = render(<GameplayReviewWorkspace />);
+    await waitFor(() => expect(screen.getByText('No saved sessions yet.')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText('Apex Legends'), { target: { value: 'Apex' } });
+    fireEvent.change(screen.getByPlaceholderText('Ranked climb on Friday night'), {
+      target: { value: 'Ranked' },
+    });
+    selectFile(container);
+
+    fireEvent.click(screen.getByRole('button', { name: /import and analyze/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText('No image frames were found in that folder.')).toBeInTheDocument()
+    );
+    expect(mockedSaveGameplayPreset).not.toHaveBeenCalled();
+    expect(mockedRegisterGameplaySession).not.toHaveBeenCalled();
+  });
+
+  it('reports a toast and inline error when registration fails', async () => {
+    mockedPrepareGameplayFrames.mockResolvedValue([
+      {
+        source_name: 'frame-1.png',
+        file_name: 'frame-1.png',
+        image_ref: 'data:image/png;base64,AAA',
+        captured_at_ms: 123,
+      },
+    ]);
+    mockedRegisterGameplaySession.mockRejectedValue(new Error('register boom'));
+    const onToast = vi.fn();
+
+    const { container } = render(<GameplayReviewWorkspace onToast={onToast} />);
+    await waitFor(() => expect(screen.getByText('No saved sessions yet.')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText('Apex Legends'), { target: { value: 'Apex' } });
+    fireEvent.change(screen.getByPlaceholderText('Ranked climb on Friday night'), {
+      target: { value: 'Ranked' },
+    });
+    selectFile(container);
+
+    fireEvent.click(screen.getByRole('button', { name: /import and analyze/i }));
+
+    await waitFor(() => expect(screen.getByText('register boom')).toBeInTheDocument());
+    expect(onToast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'error', title: 'Gameplay review failed' })
+    );
+  });
+
+  it('renders an analyzed session from history with highlights, clips, drafts, and follow-ups', async () => {
+    mockedListGameplaySessions.mockResolvedValue([analyzedSession()]);
+
+    render(<GameplayReviewWorkspace />);
+
+    await waitFor(() => expect(screen.getByText('Solid session recap')).toBeInTheDocument());
+    expect(screen.getByText('Endgame results hidden.')).toBeInTheDocument();
+    expect(screen.getByText('Clean finish')).toBeInTheDocument();
+    expect(screen.getByText(/through frame-2.png/)).toBeInTheDocument();
+    expect(screen.getByText('Clip title')).toBeInTheDocument();
+    expect(screen.getByText('#apex')).toBeInTheDocument();
+
+    // Clicking a follow-up question seeds the question input.
+    fireEvent.click(screen.getByRole('button', { name: 'What was the turning point?' }));
+    expect(
+      (screen.getByPlaceholderText('What were my best fights?') as HTMLInputElement).value
+    ).toBe('What was the turning point?');
+
+    // Refresh history re-fetches sessions.
+    fireEvent.click(screen.getByRole('button', { name: /refresh history/i }));
+    await waitFor(() => expect(mockedListGameplaySessions).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows empty states when the active session has no analysis', async () => {
+    mockedListGameplaySessions.mockResolvedValue([analyzedSession({ analysis: null })]);
+
+    render(<GameplayReviewWorkspace />);
+
+    await waitFor(() =>
+      expect(screen.getByText('No highlights detected yet.')).toBeInTheDocument()
+    );
+    expect(screen.getByText('No clip candidates yet.')).toBeInTheDocument();
+    expect(screen.getByText('Draft metadata will appear after analysis.')).toBeInTheDocument();
+  });
+
+  it('refreshes clip metadata for the active session', async () => {
+    mockedListGameplaySessions.mockResolvedValue([analyzedSession()]);
+    mockedDraftGameplayClipMetadata.mockResolvedValue([
+      { platform: 'kick', title: 'Refreshed title', description: 'New desc', tags: ['fresh'] },
+    ]);
+
+    render(<GameplayReviewWorkspace />);
+    await waitFor(() => expect(screen.getByText('Clip title')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /refresh clip metadata/i }));
+
+    await waitFor(() => expect(screen.getByText('Refreshed title')).toBeInTheDocument());
+    expect(mockedDraftGameplayClipMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: 'session-1', highlight_id: 'h1' })
+    );
+  });
+
+  it('surfaces an error when refreshing clip metadata fails', async () => {
+    mockedListGameplaySessions.mockResolvedValue([analyzedSession()]);
+    mockedDraftGameplayClipMetadata.mockRejectedValue(new Error('draft boom'));
+
+    render(<GameplayReviewWorkspace />);
+    await waitFor(() => expect(screen.getByText('Clip title')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /refresh clip metadata/i }));
+
+    await waitFor(() => expect(screen.getByText('draft boom')).toBeInTheDocument());
+  });
+
+  it('surfaces an error when asking the session fails', async () => {
+    mockedListGameplaySessions.mockResolvedValue([analyzedSession()]);
+    mockedAskGameplaySession.mockRejectedValue(new Error('ask boom'));
+
+    render(<GameplayReviewWorkspace />);
+    await waitFor(() => expect(screen.getByText('Solid session recap')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /ask session/i }));
+
+    await waitFor(() => expect(screen.getByText('ask boom')).toBeInTheDocument());
+  });
+
+  it('updates spoiler mode, audio feedback, and the question input', async () => {
+    mockedListGameplaySessions.mockResolvedValue([analyzedSession()]);
+
+    const { container } = render(<GameplayReviewWorkspace />);
+    await waitFor(() => expect(screen.getByText('Solid session recap')).toBeInTheDocument());
+
+    const spoilerSelect = container.querySelector('select') as HTMLSelectElement;
+    fireEvent.change(spoilerSelect, { target: { value: 'off' } });
+    expect(spoilerSelect.value).toBe('off');
+
+    const audioCheckbox = container.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    fireEvent.click(audioCheckbox);
+    expect(audioCheckbox.checked).toBe(true);
+
+    const questionInput = screen.getByPlaceholderText(
+      'What were my best fights?'
+    ) as HTMLInputElement;
+    fireEvent.change(questionInput, { target: { value: 'Where did I lose tempo?' } });
+    expect(questionInput.value).toBe('Where did I lose tempo?');
+
+    // The hidden file picker is triggered via the visible button.
+    fireEvent.click(screen.getByRole('button', { name: /choose folder \/ frames/i }));
+  });
+
+  it('switches the active session when picking one from history', async () => {
+    const first = analyzedSession();
+    const second = analyzedSession({
+      session_id: 'session-2',
+      session_title: 'Second session',
+      analysis: { ...BASE_ANALYSIS, recap: 'Second recap' },
+    });
+    mockedListGameplaySessions.mockResolvedValue([first, second]);
+
+    render(<GameplayReviewWorkspace />);
+    await waitFor(() => expect(screen.getByText('Solid session recap')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Second session/ }));
+
+    await waitFor(() => expect(screen.getByText('Second recap')).toBeInTheDocument());
   });
 });
