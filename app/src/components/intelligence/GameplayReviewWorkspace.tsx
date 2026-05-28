@@ -143,7 +143,7 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
         session_title: form.sessionTitle.trim(),
         source_label: form.sourceLabel.trim() || null,
         spoiler_mode: form.spoilerMode,
-        preset_id: form.presetName.trim() || null,
+        preset_id: form.gameId.trim() || null,
         frames: frames.map(
           frame =>
             ({
