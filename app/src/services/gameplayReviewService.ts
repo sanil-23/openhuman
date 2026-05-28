@@ -229,4 +229,3 @@ export function normalizeGameplayError(error: unknown): string {
   if (typeof error === 'string') return error;
   return 'Gameplay review failed';
 }
-
