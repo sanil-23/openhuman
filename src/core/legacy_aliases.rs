@@ -373,7 +373,9 @@ mod tests {
             "bare-identifier key should resolve (Prettier-normalized form)"
         );
         assert!(
-            !aliases.keys().any(|k| k.contains("//") || k.contains("legacy aliases")),
+            !aliases
+                .keys()
+                .any(|k| k.contains("//") || k.contains("legacy aliases")),
             "comment text must not be captured as a key"
         );
     }
