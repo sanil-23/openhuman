@@ -3,7 +3,6 @@ import debug from 'debug';
 import { callCoreRpc } from './coreRpcClient';
 
 const log = debug('gameplay-review');
-const errLog = debug('gameplay-review:error');
 
 export type SpoilerMode = 'off' | 'light' | 'full';
 
@@ -35,6 +34,10 @@ export interface GameplayPresetInput {
   audio_feedback: boolean;
   spoiler_mode: SpoilerMode;
   notes?: string | null;
+}
+
+export interface GameplayReviewPreset extends GameplayPresetInput {
+  updated_at_ms: number;
 }
 
 export interface GameplayReviewQuestionInput {
@@ -174,8 +177,8 @@ export async function saveGameplayPreset(payload: GameplayPresetInput): Promise<
   return callCoreRpc({ method: 'openhuman.gameplay_review_set_preset', params: payload });
 }
 
-export async function listGameplayPresets(): Promise<GameplayPresetInput[]> {
-  return callCoreRpc<GameplayPresetInput[]>({ method: 'openhuman.gameplay_review_list_presets' });
+export async function listGameplayPresets(): Promise<GameplayReviewPreset[]> {
+  return callCoreRpc<GameplayReviewPreset[]>({ method: 'openhuman.gameplay_review_list_presets' });
 }
 
 export async function askGameplaySession(
@@ -227,6 +230,3 @@ export function normalizeGameplayError(error: unknown): string {
   return 'Gameplay review failed';
 }
 
-export function logGameplayError(message: string, error: unknown): void {
-  errLog(message, error);
-}

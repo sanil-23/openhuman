@@ -12,7 +12,6 @@ import {
   type GameplayReviewSession,
   listGameplayPresets,
   listGameplaySessions,
-  logGameplayError,
   normalizeGameplayError,
   prepareGameplayFrames,
   registerGameplaySession,
@@ -295,9 +294,4 @@ describe('gameplayReviewService', () => {
     });
   });
 
-  describe('logGameplayError', () => {
-    it('does not throw when logging an error', () => {
-      expect(() => logGameplayError('context', new Error('x'))).not.toThrow();
-    });
-  });
 });
