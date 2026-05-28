@@ -2,11 +2,31 @@ use super::*;
 
 use crate::openhuman::agent::host_runtime::{NativeRuntime, RuntimeAdapter};
 use crate::openhuman::config::{Config, DelegateAgentConfig};
+use crate::openhuman::javascript::NodeBootstrap;
 use crate::openhuman::memory::Memory;
-use crate::openhuman::node_runtime::NodeBootstrap;
-use crate::openhuman::security::SecurityPolicy;
+use crate::openhuman::security::{AuditLogger, SecurityPolicy};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Derive the browser tool's host allowlist from the unified web-access list
+/// (`http_request.allowed_domains`).
+///
+/// The browser tool shares the single fetch allowlist rather than the
+/// deprecated `[browser].allowed_domains`, but the `"*"` allow-all wildcard is
+/// stripped on purpose: `web_fetch`/`curl` treat `"*"` as "open to all public
+/// sites", whereas the browser (a real Chromium with JS, cookies, and
+/// logged-in sessions) must NOT inherit blanket access from a fetch-side
+/// toggle. Browser allow-all stays gated by `OPENHUMAN_BROWSER_ALLOW_ALL`
+/// (`allow_all_browser_domains()`), and the tool itself stays behind
+/// `browser.enabled`. Net effect is fail-safe: unifying can only ever narrow
+/// the browser's reach, never widen it.
+pub(crate) fn browser_allowed_domains(http_allowed_domains: &[String]) -> Vec<String> {
+    http_allowed_domains
+        .iter()
+        .filter(|domain| domain.as_str() != "*")
+        .cloned()
+        .collect()
+}
 
 /// Create the default tool registry
 pub fn default_tools(security: Arc<SecurityPolicy>) -> Vec<Box<dyn Tool>> {
@@ -14,12 +34,18 @@ pub fn default_tools(security: Arc<SecurityPolicy>) -> Vec<Box<dyn Tool>> {
 }
 
 /// Create the default tool registry with explicit runtime adapter.
+///
+/// Convenience entry point used by tests and the lightweight CLI surface.
+/// Production assembly sites use [`all_tools_with_runtime`] and pass a real
+/// [`AuditLogger`]; this wrapper substitutes [`AuditLogger::disabled`] so
+/// existing test callers do not need to plumb one through.
 pub fn default_tools_with_runtime(
     security: Arc<SecurityPolicy>,
     runtime: Arc<dyn RuntimeAdapter>,
 ) -> Vec<Box<dyn Tool>> {
+    let audit = AuditLogger::disabled();
     vec![
-        Box::new(ShellTool::new(security.clone(), runtime)),
+        Box::new(ShellTool::new(security.clone(), runtime, audit)),
         Box::new(FileReadTool::new(security.clone())),
         Box::new(FileWriteTool::new(security)),
     ]
@@ -30,6 +56,7 @@ pub fn default_tools_with_runtime(
 pub fn all_tools(
     config: Arc<Config>,
     security: &Arc<SecurityPolicy>,
+    audit: Arc<AuditLogger>,
     memory: Arc<dyn Memory>,
     browser_config: &crate::openhuman::config::BrowserConfig,
     http_config: &crate::openhuman::config::HttpRequestConfig,
@@ -41,6 +68,7 @@ pub fn all_tools(
         config,
         security,
         Arc::new(NativeRuntime::new()),
+        audit,
         memory,
         browser_config,
         http_config,
@@ -56,6 +84,7 @@ pub fn all_tools_with_runtime(
     config: Arc<Config>,
     security: &Arc<SecurityPolicy>,
     runtime: Arc<dyn RuntimeAdapter>,
+    audit: Arc<AuditLogger>,
     memory: Arc<dyn Memory>,
     browser_config: &crate::openhuman::config::BrowserConfig,
     http_config: &crate::openhuman::config::HttpRequestConfig,
@@ -89,10 +118,15 @@ pub fn all_tools_with_runtime(
         Box::new(ShellTool::with_node_bootstrap(
             security.clone(),
             Arc::clone(&runtime),
+            Arc::clone(&audit),
             Arc::clone(bootstrap),
         ))
     } else {
-        Box::new(ShellTool::new(security.clone(), Arc::clone(&runtime)))
+        Box::new(ShellTool::new(
+            security.clone(),
+            Arc::clone(&runtime),
+            Arc::clone(&audit),
+        ))
     };
 
     let mut tools: Vec<Box<dyn Tool>> = vec![
@@ -115,26 +149,46 @@ pub fn all_tools_with_runtime(
         // returns a single text result. See
         // `agent::harness::subagent_runner` for the dispatch path.
         Box::new(SpawnSubagentTool::new()),
+        Box::new(SpawnParallelAgentsTool::new()),
         // Coding-harness control flow (issue #1205): a process-global
         // todo registry the agent can rewrite end-to-end, plus the
         // `plan_exit` marker that hands a plan-mode pass off to a
         // build-mode pass. The plan→build mode switch itself is a
         // follow-up; the tool emits a stable marker today.
-        Box::new(TodoWriteTool::new(global_todo_store())),
+        Box::new(TodoTool::new()),
         Box::new(PlanExitTool::new()),
-        Box::new(CheckOnboardingStatusTool::new()),
-        Box::new(CompleteOnboardingTool::new()),
         Box::new(CurrentTimeTool::new()),
+        Box::new(DetectToolsTool::new()),
+        Box::new(InstallToolTool::new(security.clone())),
         Box::new(CronAddTool::new(config.clone(), security.clone())),
         Box::new(CronListTool::new(config.clone())),
         Box::new(CronRemoveTool::new(config.clone())),
         Box::new(CronUpdateTool::new(config.clone(), security.clone())),
         Box::new(CronRunTool::new(config.clone())),
         Box::new(CronRunsTool::new(config.clone())),
+        // Wallet tools — expose wallet operations to the agent tool-call pipeline
+        // so the crypto sub-agent can prepare transfers, check status, etc.
+        Box::new(WalletStatusTool::new()),
+        Box::new(WalletChainStatusTool::new()),
+        Box::new(WalletPrepareTransferTool::new()),
         Box::new(MemoryStoreTool::new(memory.clone(), security.clone())),
         Box::new(MemoryRecallTool::new(memory.clone())),
         Box::new(MemoryForgetTool::new(memory.clone(), security.clone())),
-        Box::new(MemoryTreeTool),
+        Box::new(MemoryQueryTool),
+        Box::new(MemoryQueryWalkTool),
+        // Explicit user-preference pinning — always registered so the model
+        // can save user-stated preferences regardless of whether the full
+        // inference-based learning subsystem is enabled.  The preference
+        // injection into the system prompt is controlled independently by
+        // `config.learning.explicit_preferences_enabled`.
+        Box::new(RememberPreferenceTool::new(
+            memory.clone(),
+            security.clone(),
+        )),
+        // Two-lane explicit preferences (general → system prompt, situational →
+        // per-query recall). Written verbatim to user_pref_{general,situational};
+        // bypasses the inference/stability pipeline. Always registered.
+        Box::new(SavePreferenceTool::new(memory.clone(), security.clone())),
         // WhatsApp data store — read-only agent surface (issue #1341).
         // The matching `whatsapp_data_ingest` write-path stays internal-only
         // (registered in `src/core/all.rs::build_internal_only_controllers`)
@@ -154,18 +208,33 @@ pub fn all_tools_with_runtime(
             security.clone(),
             workspace_dir.to_path_buf(),
         )),
+        Box::new(AudioGeneratePodcastTool::new(
+            config.clone(),
+            security.clone(),
+        )),
+        Box::new(AudioEmailPodcastTool::new(config.clone(), security.clone())),
+        Box::new(AudioGenerateAndEmailPodcastTool::new(
+            config.clone(),
+            security.clone(),
+        )),
+        Box::new(GmailUnsubscribeTool),
     ];
 
     if browser_config.enabled {
+        // Unified web-access allowlist (merge fetch + browser firewalls): the
+        // browser tool shares the single `http_request.allowed_domains` host
+        // list rather than the now-deprecated `[browser].allowed_domains`. See
+        // `browser_allowed_domains` for why the `"*"` wildcard is stripped.
+        let browser_allowed_domains = browser_allowed_domains(&http_config.allowed_domains);
         // Add legacy browser_open tool for simple URL opening
         tools.push(Box::new(BrowserOpenTool::new(
             security.clone(),
-            browser_config.allowed_domains.clone(),
+            browser_allowed_domains.clone(),
         )));
         // Add full browser automation tool (pluggable backend)
         tools.push(Box::new(BrowserTool::new_with_backend(
             security.clone(),
-            browser_config.allowed_domains.clone(),
+            browser_allowed_domains.clone(),
             browser_config.session_name.clone(),
             browser_config.backend.clone(),
             browser_config.native_headless,
@@ -231,15 +300,156 @@ pub fn all_tools_with_runtime(
         tracing::debug!("[gitbooks] registered gitbooks_search + gitbooks_get_page");
     }
 
-    // Web search — always registered. Result/timeout budget
-    // knobs still come from `config.web_search`, but there is no
-    // enable flag: every session needs research as a baseline
-    // capability.
-    tools.push(Box::new(WebSearchTool::new(
-        crate::openhuman::integrations::build_client(root_config),
-        root_config.web_search.max_results,
-        root_config.web_search.timeout_secs,
-    )));
+    // MCP setup-agent tool surface (search/get/request_secret/test/install).
+    // Registered unconditionally — the `mcp_setup` sub-agent filters to just
+    // these via its `[tools] named = [...]` allowlist, and the host agent's
+    // own tool list is wide enough that the extra five entries are negligible.
+    {
+        let cfg = Arc::new(root_config.clone());
+        tools.push(Box::new(McpSetupSearchTool::new(Arc::clone(&cfg))));
+        tools.push(Box::new(McpSetupGetTool::new(Arc::clone(&cfg))));
+        tools.push(Box::new(McpSetupRequestSecretTool::new()));
+        tools.push(Box::new(McpSetupTestConnectionTool::new(Arc::clone(&cfg))));
+        tools.push(Box::new(McpSetupInstallAndConnectTool::new(cfg)));
+        tracing::debug!("[mcp_setup] registered 5 setup-agent tools");
+    }
+
+    // Generic remote MCP bridge tools. These let the agent enumerate
+    // named MCP servers and forward `tools/call` through the core
+    // instead of hardcoding one bespoke MCP integration per server.
+    let mcp_registry =
+        Arc::new(crate::openhuman::mcp_client::McpServerRegistry::from_config(root_config));
+    if !mcp_registry.is_empty() {
+        tools.push(Box::new(McpListServersTool::new(Arc::clone(&mcp_registry))));
+        tools.push(Box::new(McpListToolsTool::new(Arc::clone(&mcp_registry))));
+        tools.push(Box::new(McpCallTool::new(
+            Arc::clone(&mcp_registry),
+            security.clone(),
+        )));
+        tracing::debug!(
+            count = mcp_registry.list().len(),
+            "[mcp_client] registered generic MCP bridge tools"
+        );
+    } else {
+        tracing::debug!("[mcp_client] no MCP servers registered — bridge tools skipped");
+    }
+
+    // ── Unified search engine ───────────────────────────────────────
+    //
+    // Exactly one engine drives `web_search_tool` plus any
+    // engine-specific tools (Parallel research/extract/etc., Brave
+    // news/image/video). Mirrors the LLM-provider API-key model: a
+    // single switch, BYO credentials, layered tool surface.
+    //
+    // Legacy `seltz` / `searxng` config blocks are still parsed but
+    // no longer register tools — they were superseded by this
+    // selector. Use `search.engine = "managed" | "parallel" | "brave"`
+    // instead.
+    {
+        use crate::openhuman::config::SearchEngine;
+        let search = &root_config.search;
+        let max_results = search.max_results.clamp(1, 20);
+        let timeout_secs = search.timeout_secs.max(1);
+        match search.effective_engine() {
+            SearchEngine::Managed => {
+                tracing::debug!(
+                    requested = %search.requested_engine_str(),
+                    "[search] active engine = managed (backend-proxied web_search)"
+                );
+                tools.push(Box::new(WebSearchTool::new(
+                    crate::openhuman::integrations::build_client(root_config),
+                    max_results,
+                    timeout_secs,
+                )));
+            }
+            SearchEngine::Parallel => {
+                tracing::debug!("[search] active engine = parallel (BYO direct API)");
+                // Direct-mode Parallel still goes through the
+                // backend-proxy client today; the BYO key is stored on
+                // the integration client so the upstream tools can
+                // pick it up once direct Parallel routing lands.
+                let client = crate::openhuman::integrations::build_client(root_config);
+                if let Some(client) = client {
+                    tools.push(Box::new(
+                        crate::openhuman::integrations::ParallelSearchTool::new(Arc::clone(
+                            &client,
+                        )),
+                    ));
+                    tools.push(Box::new(
+                        crate::openhuman::integrations::ParallelExtractTool::new(Arc::clone(
+                            &client,
+                        )),
+                    ));
+                    tools.push(Box::new(
+                        crate::openhuman::integrations::ParallelChatTool::new(Arc::clone(&client)),
+                    ));
+                    tools.push(Box::new(
+                        crate::openhuman::integrations::ParallelResearchTool::new(Arc::clone(
+                            &client,
+                        )),
+                    ));
+                    tools.push(Box::new(
+                        crate::openhuman::integrations::ParallelEnrichTool::new(Arc::clone(
+                            &client,
+                        )),
+                    ));
+                    tools.push(Box::new(
+                        crate::openhuman::integrations::ParallelDatasetTool::new(Arc::clone(
+                            &client,
+                        )),
+                    ));
+                    // Layer the unified web_search slot too so the
+                    // agent's default research path keeps working.
+                    tools.push(Box::new(WebSearchTool::new(
+                        Some(Arc::clone(&client)),
+                        max_results,
+                        timeout_secs,
+                    )));
+                } else {
+                    tracing::warn!(
+                        "[search] engine=parallel but no backend client — falling back to managed surface"
+                    );
+                    tools.push(Box::new(WebSearchTool::new(
+                        None,
+                        max_results,
+                        timeout_secs,
+                    )));
+                }
+            }
+            SearchEngine::Brave => {
+                tracing::debug!("[search] active engine = brave (BYO direct API)");
+                let api_key = search.brave.api_key.clone();
+                tools.push(Box::new(
+                    crate::openhuman::integrations::BraveWebSearchTool::new(
+                        api_key.clone(),
+                        max_results,
+                        timeout_secs,
+                    ),
+                ));
+                tools.push(Box::new(
+                    crate::openhuman::integrations::BraveNewsSearchTool::new(
+                        api_key.clone(),
+                        max_results,
+                        timeout_secs,
+                    ),
+                ));
+                tools.push(Box::new(
+                    crate::openhuman::integrations::BraveImageSearchTool::new(
+                        api_key.clone(),
+                        max_results,
+                        timeout_secs,
+                    ),
+                ));
+                tools.push(Box::new(
+                    crate::openhuman::integrations::BraveVideoSearchTool::new(
+                        api_key,
+                        max_results,
+                        timeout_secs,
+                    ),
+                ));
+            }
+        }
+    }
 
     // Managed Node.js exec tools — gated on `root_config.node.enabled`.
     // Both share the same `NodeBootstrap` as ShellTool so the download +
@@ -289,7 +499,7 @@ pub fn all_tools_with_runtime(
         tools.push(Box::new(DelegateTool::new_with_options(
             delegate_agents,
             security.clone(),
-            crate::openhuman::providers::ProviderRuntimeOptions {
+            crate::openhuman::inference::provider::ProviderRuntimeOptions {
                 auth_profile_override: None,
                 openhuman_dir: root_config
                     .config_path
@@ -304,7 +514,7 @@ pub fn all_tools_with_runtime(
     // ── Agent integration tools (backend-proxied) ─────────────────
     if let Some(client) = crate::openhuman::integrations::build_client(root_config) {
         tracing::debug!("[integrations] client built successfully");
-        if root_config.integrations.apify.enabled {
+        if root_config.integrations.apify.is_active() {
             tools.push(Box::new(
                 crate::openhuman::integrations::ApifyRunActorTool::new(Arc::clone(&client)),
             ));
@@ -318,7 +528,7 @@ pub fn all_tools_with_runtime(
         } else {
             tracing::debug!("[integrations] apify disabled — skipping");
         }
-        if root_config.integrations.google_places.enabled {
+        if root_config.integrations.google_places.is_active() {
             tools.push(Box::new(
                 crate::openhuman::integrations::GooglePlacesSearchTool::new(Arc::clone(&client)),
             ));
@@ -329,30 +539,30 @@ pub fn all_tools_with_runtime(
         } else {
             tracing::debug!("[integrations] google_places disabled — skipping");
         }
-        if root_config.integrations.parallel.enabled {
-            tools.push(Box::new(
-                crate::openhuman::integrations::ParallelSearchTool::new(Arc::clone(&client)),
-            ));
-            tools.push(Box::new(
-                crate::openhuman::integrations::ParallelExtractTool::new(Arc::clone(&client)),
-            ));
-            tools.push(Box::new(
-                crate::openhuman::integrations::ParallelChatTool::new(Arc::clone(&client)),
-            ));
-            tools.push(Box::new(
-                crate::openhuman::integrations::ParallelResearchTool::new(Arc::clone(&client)),
-            ));
-            tools.push(Box::new(
-                crate::openhuman::integrations::ParallelEnrichTool::new(Arc::clone(&client)),
-            ));
-            tools.push(Box::new(
-                crate::openhuman::integrations::ParallelDatasetTool::new(Arc::clone(&client)),
-            ));
-            tracing::debug!("[integrations] registered parallel tools");
-        } else {
-            tracing::debug!("[integrations] parallel disabled — skipping");
+        // NOTE: parallel tools moved to the unified [search] engine
+        // selector above. `integrations.parallel` is parsed but no
+        // longer registers tools directly — set
+        // `search.engine = "parallel"` instead.
+        if root_config.integrations.parallel.is_active() {
+            tracing::debug!(
+                "[integrations] parallel toggle is active but tools are governed by search.engine now"
+            );
         }
-        if root_config.integrations.stock_prices.enabled {
+        if root_config.integrations.tinyfish.is_active() {
+            tools.push(Box::new(
+                crate::openhuman::integrations::TinyFishSearchTool::new(Arc::clone(&client)),
+            ));
+            tools.push(Box::new(
+                crate::openhuman::integrations::TinyFishFetchTool::new(Arc::clone(&client)),
+            ));
+            tools.push(Box::new(
+                crate::openhuman::integrations::TinyFishAgentRunTool::new(Arc::clone(&client)),
+            ));
+            tracing::debug!("[integrations] registered tinyfish tools");
+        } else {
+            tracing::debug!("[integrations] tinyfish disabled — skipping");
+        }
+        if root_config.integrations.stock_prices.is_active() {
             tools.push(Box::new(
                 crate::openhuman::integrations::StockQuoteTool::new(Arc::clone(&client)),
             ));
@@ -372,7 +582,7 @@ pub fn all_tools_with_runtime(
         } else {
             tracing::debug!("[integrations] stock_prices disabled — skipping");
         }
-        if root_config.integrations.twilio.enabled {
+        if root_config.integrations.twilio.is_active() {
             tools.push(Box::new(
                 crate::openhuman::integrations::TwilioCallTool::new(Arc::clone(&client)),
             ));
@@ -399,6 +609,16 @@ pub fn all_tools_with_runtime(
         tracing::debug!(
             "[integrations] build_client returned None — integration tools not registered"
         );
+    }
+
+    if root_config.integrations.polymarket.enabled {
+        tools.push(Box::new(PolymarketTool::new(
+            &root_config.integrations.polymarket,
+            security.clone(),
+        )));
+        tracing::debug!("[integrations] registered polymarket tool (read + trading)");
+    } else {
+        tracing::debug!("[integrations] polymarket disabled — skipping");
     }
 
     // Coding-harness `lsp` tool (issue #1205) — capability-gated by the

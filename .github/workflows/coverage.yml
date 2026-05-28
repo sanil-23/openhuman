@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
   pull-requests: read
 
 concurrency:
@@ -65,14 +66,17 @@ jobs:
     runs-on: ubuntu-22.04
     # See test.yml `rust-core-tests` — same shared-singleton flake risk in
     # the lib suite. Coverage instrumentation roughly doubles wall time vs.
-    # the plain test runs, so cap at 30 min (vs. 20 in test.yml) so a
-    # deadlock still surfaces logs without prematurely killing a healthy
-    # coverage build.
-    timeout-minutes: 30
+    # the plain test runs; give it enough headroom for cold/warm cache
+    # variance while still surfacing deadlocks with logs.
+    timeout-minutes: 45
     container:
       image: ghcr.io/tinyhumansai/openhuman_ci:rust-1.93.0
     env:
       CARGO_INCREMENTAL: '0'
+      # Coverage instrumentation makes each test binary link substantially
+      # heavier. Keep the core coverage job's linker work serialized to avoid
+      # intermittent rust-lld bus errors on hosted Linux runners.
+      CARGO_BUILD_JOBS: '1'
       # sccache is incompatible with `-C instrument-coverage` profiles, so we
       # skip it for coverage runs and rely on Swatinem/rust-cache for warmup.
     steps:
@@ -80,6 +84,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
+          persist-credentials: false
           submodules: recursive
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -111,6 +116,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
+          persist-credentials: false
           submodules: recursive
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2

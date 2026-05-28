@@ -25,7 +25,7 @@ The first time you launch OpenHuman, the OS will prompt for the permissions the 
 
 ## 1. Download and install
 
-Get the OpenHuman desktop app from [http://tinyhumans.ai/openhuman](https://openhuman.ai) or via your platform's package manager. Open the app once it's installed.
+Get the OpenHuman desktop app from [http://tinyhumans.ai/openhuman](http://tinyhumans.ai/openhuman) or via your platform's package manager. Open the app once it's installed.
 
 ## 2. Sign in
 
@@ -33,6 +33,10 @@ The first screen is **"Sign in! Let's Cook"**. Multiple sign-in options are avai
 
 {% hint style="info" %}
 **No permanent lock-in.** Signing in does not grant OpenHuman ongoing access to anything. All third-party access requires explicit OAuth approval per integration in the steps below.
+{% endhint %}
+
+{% hint style="warning" %}
+**Know what is local and what is managed.** Your Memory Tree database, Markdown vault, workspace config, and local runtime state live on your machine. The default setup still uses OpenHuman-hosted services for sign-in, model routing, managed integration OAuth/tool calls, and web search proxying. Use the custom setup paths if you want to bring your own model, search, or Composio credentials. Some hosted features and real-time integration triggers still require the managed backend.
 {% endhint %}
 
 ## 3. Run your first request

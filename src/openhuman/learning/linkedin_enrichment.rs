@@ -309,7 +309,7 @@ async fn write_profile_md(
 /// Ask the backend LLM to distil the raw LinkedIn Markdown into a
 /// concise, high-signal profile document suitable for agent context.
 pub async fn summarise_profile_with_llm(config: &Config, raw_md: &str) -> anyhow::Result<String> {
-    use crate::openhuman::providers::ops::{
+    use crate::openhuman::inference::provider::ops::{
         create_backend_inference_provider, ProviderRuntimeOptions,
     };
 
@@ -513,28 +513,50 @@ pub fn render_profile_markdown(url: &str, data: &serde_json::Value) -> String {
 /// `payload.parts[].body.data`. We must decode those parts before
 /// regex-matching; searching the raw JSON alone misses them.
 async fn search_gmail_for_linkedin(config: &Config) -> anyhow::Result<Option<String>> {
-    use crate::openhuman::composio::client::build_composio_client;
+    use crate::openhuman::composio::client::{
+        create_composio_client, direct_execute, ComposioClientKind,
+    };
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
 
-    let client = build_composio_client(config)
-        .ok_or_else(|| anyhow::anyhow!("composio client unavailable"))?;
+    // Resolve through the mode-aware factory so a direct-mode user
+    // with a stored API key can still drive Gmail enrichment from the
+    // personal Composio tenant (#1710 Wave 2). Pre-fix this path used
+    // `build_composio_client` and returned early for any user without
+    // a backend session, silently disabling LinkedIn enrichment for
+    // direct-mode users even when their LinkedIn/Gmail connections
+    // were healthy on app.composio.dev.
+    let client_kind = create_composio_client(config)
+        .map_err(|e| anyhow::anyhow!("composio client unavailable: {e}"))?;
 
     // `comm/in/<username>` — LinkedIn's own notification emails always use
     // this form to refer to the email *recipient's* profile.
     static COMM_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"linkedin\.com/comm/in/([a-zA-Z0-9_-]+)").unwrap());
 
-    let resp = client
-        .execute_tool(
-            "GMAIL_FETCH_EMAILS",
-            Some(json!({
-                "query": "from:linkedin.com",
-                "max_results": 10,
-            })),
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("GMAIL_FETCH_EMAILS failed: {e:#}"))?;
+    let args = json!({
+        "query": "from:linkedin.com",
+        "max_results": 10,
+    });
+    let resp = match &client_kind {
+        ComposioClientKind::Backend(client) => client
+            .execute_tool("GMAIL_FETCH_EMAILS", Some(args))
+            .await
+            .map_err(|e| anyhow::anyhow!("GMAIL_FETCH_EMAILS failed: {e:#}"))?,
+        ComposioClientKind::Direct(direct) => {
+            tracing::debug!(
+                "[linkedin_enrichment][composio-direct] GMAIL_FETCH_EMAILS via direct tenant"
+            );
+            direct_execute(
+                direct,
+                "GMAIL_FETCH_EMAILS",
+                Some(args),
+                &config.composio.entity_id,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("GMAIL_FETCH_EMAILS (direct) failed: {e:#}"))?
+        }
+    };
 
     if !resp.successful {
         let err = resp.error.unwrap_or_else(|| "unknown error".into());
@@ -658,15 +680,15 @@ pub async fn scrape_linkedin_profile(
 }
 
 /// Build a local memory client for profile persistence.
-fn build_memory_client() -> anyhow::Result<crate::openhuman::memory::store::MemoryClient> {
-    crate::openhuman::memory::store::MemoryClient::new_local()
+fn build_memory_client() -> anyhow::Result<crate::openhuman::memory_store::MemoryClient> {
+    crate::openhuman::memory_store::MemoryClient::new_local()
         .map_err(|e| anyhow::anyhow!("memory client unavailable: {e}"))
 }
 
 /// Persist the full scraped LinkedIn profile to the user-profile memory
 /// namespace so the agent has rich context about the user.
 async fn persist_linkedin_profile(
-    memory: &crate::openhuman::memory::store::MemoryClient,
+    memory: &crate::openhuman::memory_store::MemoryClient,
     url: &str,
     data: &serde_json::Value,
 ) -> anyhow::Result<()> {
@@ -698,7 +720,7 @@ async fn persist_linkedin_profile(
 
 /// Fallback: persist just the LinkedIn URL when the full scrape fails.
 async fn persist_linkedin_url_only(
-    memory: &crate::openhuman::memory::store::MemoryClient,
+    memory: &crate::openhuman::memory_store::MemoryClient,
     url: &str,
 ) -> anyhow::Result<()> {
     memory

@@ -47,6 +47,33 @@ const GITHUB_RELEASES_METADATA: Option<CapabilityPrivacy> = Some(CapabilityPriva
     destinations: &["GitHub Releases"],
 });
 
+const SEARXNG_RAW_TO_CONFIGURED_INSTANCE: Option<CapabilityPrivacy> = Some(CapabilityPrivacy {
+    leaves_device: true,
+    data_kind: PrivacyDataKind::Raw,
+    destinations: &["Configured SearXNG instance"],
+});
+
+// Direct-mode Composio: the user's API key and tool arguments leave the
+// device — they are sent to backend.composio.dev, not the OpenHuman backend.
+// LOCAL_CREDENTIALS was incorrect here because leaves_device must be true.
+const COMPOSIO_DIRECT_CREDENTIALS: Option<CapabilityPrivacy> = Some(CapabilityPrivacy {
+    leaves_device: true,
+    data_kind: PrivacyDataKind::Credentials,
+    destinations: &["Composio (backend.composio.dev)"],
+});
+
+const POLYMARKET_MARKET_DATA: Option<CapabilityPrivacy> = Some(CapabilityPrivacy {
+    leaves_device: true,
+    data_kind: PrivacyDataKind::Metadata,
+    destinations: &["Polymarket Gamma API", "Polymarket CLOB API"],
+});
+
+const POLYMARKET_TRADING_DATA: Option<CapabilityPrivacy> = Some(CapabilityPrivacy {
+    leaves_device: true,
+    data_kind: PrivacyDataKind::Derived,
+    destinations: &["Polymarket CLOB API"],
+});
+
 const CAPABILITIES: &[Capability] = &[
     Capability {
         id: "conversation.create",
@@ -139,6 +166,16 @@ const CAPABILITIES: &[Capability] = &[
         privacy: None,
     },
     Capability {
+        id: "conversation.subagent_mascots",
+        name: "Subagent Mascots",
+        domain: "conversation",
+        category: CapabilityCategory::Conversation,
+        description: "Show delegated sub-agents as colored companion mascots with compact activity bubbles and running, completed, or failed states.",
+        how_to: "Human > ask the assistant to delegate work to sub-agents",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
         id: "conversation.label_filter",
         name: "Thread Label Filters",
         domain: "conversation",
@@ -209,6 +246,21 @@ const CAPABILITIES: &[Capability] = &[
         privacy: None,
     },
     Capability {
+        id: "intelligence.agentmemory_backend",
+        name: "agentmemory Memory Backend",
+        domain: "intelligence",
+        category: CapabilityCategory::Intelligence,
+        description: "Opt-in Memory trait backend that delegates every store/recall/get/list/forget \
+            call to a locally-running agentmemory REST server. Selected via \
+            `memory.backend = \"agentmemory\"` in config.toml. Allows users who self-host \
+            agentmemory across Claude Code, Cursor, Codex, and OpenCode to share a single durable \
+            memory store. Default backend remains sqlite; selecting agentmemory is non-breaking.",
+        how_to: "Set `memory.backend = \"agentmemory\"` in config.toml. \
+            See gitbooks/features/obsidian-wiki/agentmemory-backend.md for setup and config keys.",
+        status: CapabilityStatus::Beta,
+        privacy: LOCAL_RAW,
+    },
+    Capability {
         id: "intelligence.memory_workspace",
         name: "Memory Workspace",
         domain: "intelligence",
@@ -243,6 +295,36 @@ const CAPABILITIES: &[Capability] = &[
         privacy: LOCAL_RAW,
     },
     Capability {
+        id: "intelligence.mcp_server",
+        name: "MCP Server",
+        domain: "intelligence",
+        category: CapabilityCategory::Intelligence,
+        description: "Expose a curated OpenHuman tool surface over stdio MCP or Streamable HTTP/SSE for MCP-compatible clients.",
+        how_to: "Run `openhuman-core mcp` (stdio) or `openhuman-core mcp --transport http --port 9300` for remote clients.",
+        status: CapabilityStatus::Beta,
+        privacy: LOCAL_RAW,
+    },
+    Capability {
+        id: "intelligence.searxng_search",
+        name: "SearXNG Search",
+        domain: "intelligence",
+        category: CapabilityCategory::Intelligence,
+        description: "Search a configured self-hosted SearXNG instance from agent and MCP tools, returning normalized title, URL, snippet, and source results.",
+        how_to: "Set `[searxng] enabled = true` and `base_url` in config.toml, or use OPENHUMAN_SEARXNG_* environment variables.",
+        status: CapabilityStatus::Beta,
+        privacy: SEARXNG_RAW_TO_CONFIGURED_INSTANCE,
+    },
+    Capability {
+        id: "intelligence.tool_registry",
+        name: "Tool Registry",
+        domain: "intelligence",
+        category: CapabilityCategory::Intelligence,
+        description: "Discover OpenHuman's MCP stdio tools and controller-backed tools from one local registry, including versions, routes, input/output schemas, allowed agents, and health state.",
+        how_to: "Call openhuman.tool_registry_list over core JSON-RPC, or openhuman.tool_registry_get with a tool_id such as memory.search.",
+        status: CapabilityStatus::Beta,
+        privacy: LOCAL_RAW,
+    },
+    Capability {
         id: "intelligence.orchestrator_worker_thread",
         name: "Worker Thread Delegation",
         domain: "intelligence",
@@ -259,6 +341,16 @@ const CAPABILITIES: &[Capability] = &[
         category: CapabilityCategory::Intelligence,
         description: "Backfill the last 6 days of Slack history into the memory tree and keep it up to date by flushing each closed 6-hour UTC bucket. Driven by an authenticated Slack connection (OAuth via Composio).",
         how_to: "Settings > Messaging Channels > Slack",
+        status: CapabilityStatus::Beta,
+        privacy: LOCAL_RAW,
+    },
+    Capability {
+        id: "intelligence.clickup_memory_ingest",
+        name: "ClickUp Memory Ingestion",
+        domain: "intelligence",
+        category: CapabilityCategory::Intelligence,
+        description: "Incrementally sync ClickUp tasks assigned to the authenticated user into the Memory Tree on a 30-minute cadence, with an initial backfill on first connect. Only tasks the user is directly assigned to are ingested. Driven by an authenticated ClickUp connection (OAuth via Composio).",
+        how_to: "Settings > Connections > ClickUp",
         status: CapabilityStatus::Beta,
         privacy: LOCAL_RAW,
     },
@@ -353,6 +445,17 @@ const CAPABILITIES: &[Capability] = &[
         privacy: None,
     },
     Capability {
+        id: "skills.tinyfish_web_automation",
+        name: "TinyFish Web Automation",
+        domain: "skills",
+        category: CapabilityCategory::Skills,
+        description:
+            "Search the web, render JavaScript-heavy pages, and run goal-based browser automations through TinyFish.",
+        how_to: "Conversations > Ask the assistant to search, fetch, or automate a website with TinyFish",
+        status: CapabilityStatus::Beta,
+        privacy: DERIVED_TO_BACKEND,
+    },
+    Capability {
         id: "skills.toggle_enabled",
         name: "Enable or Disable Skills",
         domain: "skills",
@@ -370,6 +473,43 @@ const CAPABILITIES: &[Capability] = &[
         description: "Browse the dedicated connections hub for external skill-backed integrations.",
         how_to: "Settings > Connections",
         status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    // ── Composio direct mode (BYO API key) ──────────────────────────
+    //
+    // Composio shipped with two integration paths:
+    //   1. Backend-proxied (default) — calls through api.tinyhumans.ai;
+    //      backend owns the Composio API key, billing, allowlist, and
+    //      HMAC-verified trigger fan-out via socket.io.
+    //   2. Direct (BYO key) — core calls backend.composio.dev directly
+    //      with the user's own key. Sovereign / offline-friendly, but
+    //      tool execution only — real-time trigger webhooks are NOT
+    //      routed in direct mode (they still require the backend).
+    Capability {
+        id: "composio.direct_mode",
+        name: "Composio Direct Mode (BYO API Key)",
+        domain: "skills",
+        category: CapabilityCategory::Skills,
+        description:
+            "Route Composio tool calls directly to backend.composio.dev with your own API key, \
+             bypassing the OpenHuman backend proxy. Tool execution only — trigger webhooks still \
+             require backend mode.",
+        how_to: "Settings > Skills > Composio > Direct mode",
+        status: CapabilityStatus::Beta,
+        privacy: COMPOSIO_DIRECT_CREDENTIALS,
+    },
+    Capability {
+        id: "composio.direct_mode_triggers_gap",
+        name: "Composio Triggers (Direct Mode — Limited)",
+        domain: "skills",
+        category: CapabilityCategory::Skills,
+        description:
+            "Composio real-time trigger webhooks (Gmail new-message, Slack new-message, …) \
+             currently arrive over wss://api.tinyhumans.ai/socket.io and require backend mode. \
+             Direct-mode users get synchronous tool execution but not async trigger push in \
+             this release.",
+        how_to: "Switch to Backend mode to receive triggers, or wait for the direct trigger sink follow-up",
+        status: CapabilityStatus::ComingSoon,
         privacy: None,
     },
     Capability {
@@ -423,6 +563,26 @@ const CAPABILITIES: &[Capability] = &[
         privacy: None,
     },
     Capability {
+        id: "skills.polymarket_readonly",
+        name: "Polymarket Read-Only Browse",
+        domain: "skills",
+        category: CapabilityCategory::Skills,
+        description: "Browse Polymarket markets, events, orderbooks, and prices via Gamma + CLOB APIs.",
+        how_to: "Conversations > ask the assistant to browse Polymarket (tool: polymarket).",
+        status: CapabilityStatus::Beta,
+        privacy: POLYMARKET_MARKET_DATA,
+    },
+    Capability {
+        id: "skills.polymarket_trading",
+        name: "Polymarket Trading",
+        domain: "skills",
+        category: CapabilityCategory::Skills,
+        description: "Place and cancel Polymarket limit orders with EIP-712 signing, authenticated account reads, and explicit approval for writes.",
+        how_to: "Conversations > ask the assistant to trade on Polymarket (tool: polymarket; set `approved=true` for write actions).",
+        status: CapabilityStatus::Beta,
+        privacy: POLYMARKET_TRADING_DATA,
+    },
+    Capability {
         id: "local_ai.download_model",
         name: "Download Local Models",
         domain: "local_ai",
@@ -433,12 +593,32 @@ const CAPABILITIES: &[Capability] = &[
         privacy: MODEL_DOWNLOAD,
     },
     Capability {
+        id: "local_ai.configure_provider",
+        name: "Configure Local Provider",
+        domain: "local_ai",
+        category: CapabilityCategory::LocalAI,
+        description: "Select Ollama or LM Studio as the local model provider and configure the local server endpoint.",
+        how_to: "Settings > Local AI Model",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
         id: "local_ai.manage_model_assets",
         name: "Manage Model Assets",
         domain: "local_ai",
         category: CapabilityCategory::LocalAI,
         description: "Inspect asset status and download specific chat, vision, embedding, STT, or TTS assets.",
         how_to: "Settings > Local AI Model > Advanced > Capability Assets",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
+        id: "local_ai.model_context_check",
+        name: "Model Context Requirement Check",
+        domain: "local_ai",
+        category: CapabilityCategory::LocalAI,
+        description: "Diagnostics report each installed Ollama model's native context window and reject any model below the minimum the memory layer requires (so short-context models can't silently truncate and corrupt recall).",
+        how_to: "Settings > Local AI Model > Run Diagnostics",
         status: CapabilityStatus::Beta,
         privacy: None,
     },
@@ -454,21 +634,27 @@ const CAPABILITIES: &[Capability] = &[
     },
     Capability {
         id: "local_ai.speech_to_text",
-        name: "Speech Recognition",
+        name: "Speech Recognition (Local)",
         domain: "local_ai",
         category: CapabilityCategory::LocalAI,
-        description: "Transcribe audio into text using local speech recognition.",
-        how_to: "Settings > Local AI Model > Advanced > Test Voice Input",
+        description:
+            "Transcribe audio into text using local whisper.cpp via the voice STT factory. \
+             Pick the model size (tiny / base / small / medium / large-v3-turbo) in \
+             Settings > Voice; the factory routes through WHISPER_BIN or the in-process engine.",
+        how_to: "Settings > Voice > STT Provider = Whisper",
         status: CapabilityStatus::Beta,
         privacy: None,
     },
     Capability {
         id: "local_ai.text_to_speech",
-        name: "Text to Speech",
+        name: "Text to Speech (Local)",
         domain: "local_ai",
         category: CapabilityCategory::LocalAI,
-        description: "Synthesize speech from text using local voice models.",
-        how_to: "Settings > Local AI Model > Advanced > Test Voice Output",
+        description:
+            "Synthesize speech locally with Piper via the voice TTS factory. PIPER_BIN points \
+             at the binary; the voice .onnx ships with the installer. Returns a synthetic \
+             viseme timeline (full forced-alignment lives behind the cloud provider for now).",
+        how_to: "Settings > Voice > TTS Provider = Piper",
         status: CapabilityStatus::Beta,
         privacy: None,
     },
@@ -491,6 +677,45 @@ const CAPABILITIES: &[Capability] = &[
         how_to: "Settings > Local AI Model > Advanced > Test Custom Prompt",
         status: CapabilityStatus::Beta,
         privacy: None,
+    },
+    Capability {
+        id: "local_ai.whisper_installer",
+        name: "Whisper Installer (Local STT)",
+        domain: "local_ai",
+        category: CapabilityCategory::LocalAI,
+        description:
+            "One-click download of the whisper.cpp GGML model (and on Windows the whisper-cli \
+             binary) into the workspace so local Speech-to-Text runs without manual setup. \
+             Streams to disk via a .part file + atomic rename so a crash never leaves a corrupt \
+             model behind.",
+        how_to: "Settings > Voice > Voice Providers > Install Whisper",
+        status: CapabilityStatus::Beta,
+        privacy: MODEL_DOWNLOAD,
+    },
+    Capability {
+        id: "local_ai.piper_installer",
+        name: "Piper Installer (Local TTS)",
+        domain: "local_ai",
+        category: CapabilityCategory::LocalAI,
+        description:
+            "One-click download of the Piper binary archive and the bundled en_US-lessac-medium \
+             voice (.onnx + .onnx.json) into the workspace so local Text-to-Speech runs without \
+             manual setup. Atomic rename guarantees no half-written voice files are ever read \
+             by the runtime.",
+        how_to: "Settings > Voice > Voice Providers > Install Piper",
+        status: CapabilityStatus::Beta,
+        privacy: MODEL_DOWNLOAD,
+    },
+    Capability {
+        id: "local_ai.python_runtime_installer",
+        name: "Managed Python Runtime",
+        domain: "runtime_python",
+        category: CapabilityCategory::LocalAI,
+        description:
+            "Download and reuse an OpenHuman-managed CPython runtime for Python-backed local integrations such as MCP servers, with a system-Python override reserved for development.",
+        how_to: "Configured by the core `runtime_python` module; future UI surfaces can expose install state and overrides.",
+        status: CapabilityStatus::Beta,
+        privacy: MODEL_DOWNLOAD,
     },
     Capability {
         id: "team.create",
@@ -743,6 +968,17 @@ const CAPABILITIES: &[Capability] = &[
         privacy: None,
     },
     Capability {
+        id: "channels.telegram_remote_control",
+        name: "Telegram Remote Control",
+        domain: "channels",
+        category: CapabilityCategory::Channels,
+        description:
+            "Operate OpenHuman from Telegram with slash commands: /status, /sessions, /new, and /help.",
+        how_to: "Settings > Messaging Channels > Telegram (connect), then message the bot",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
         id: "channels.disconnect_platform",
         name: "Disconnect Messaging Platforms",
         domain: "channels",
@@ -783,6 +1019,50 @@ const CAPABILITIES: &[Capability] = &[
         privacy: LOCAL_RAW,
     },
     Capability {
+        id: "channels.mcp_registry_browse",
+        name: "Browse MCP Server Registry",
+        domain: "channels",
+        category: CapabilityCategory::Channels,
+        description: "Search and discover MCP servers from the Smithery.ai public registry.",
+        how_to: "Channels > MCP Servers > Browse Registry",
+        status: CapabilityStatus::Beta,
+        privacy: Some(CapabilityPrivacy {
+            leaves_device: true,
+            data_kind: PrivacyDataKind::Metadata,
+            destinations: &["Smithery.ai registry API"],
+        }),
+    },
+    Capability {
+        id: "channels.mcp_server_install",
+        name: "Install MCP Servers",
+        domain: "channels",
+        category: CapabilityCategory::Channels,
+        description: "Install MCP servers locally. Required env vars are stored encrypted and never included in logs or responses.",
+        how_to: "Channels > MCP Servers > Install",
+        status: CapabilityStatus::Beta,
+        privacy: LOCAL_CREDENTIALS,
+    },
+    Capability {
+        id: "channels.mcp_server_connect",
+        name: "Connect / Disconnect MCP Servers",
+        domain: "channels",
+        category: CapabilityCategory::Channels,
+        description: "Spawn and manage MCP server subprocesses via the stdio JSON-RPC protocol.",
+        how_to: "Channels > MCP Servers > Connect",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
+        id: "channels.mcp_tool_call",
+        name: "Invoke MCP Server Tools",
+        domain: "channels",
+        category: CapabilityCategory::Channels,
+        description: "Call tools exposed by connected MCP servers. Results are surfaced to the agent.",
+        how_to: "Human > ask the assistant to use a tool from a connected MCP server",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
         id: "settings.configure_ai",
         name: "Configure AI",
         domain: "settings",
@@ -790,6 +1070,16 @@ const CAPABILITIES: &[Capability] = &[
         description: "Adjust AI-related settings and agent behavior preferences.",
         how_to: "Settings > Developer Options > AI Configuration",
         status: CapabilityStatus::Stable,
+        privacy: None,
+    },
+    Capability {
+        id: "settings.persona_pack",
+        name: "Persona Pack",
+        domain: "settings",
+        category: CapabilityCategory::Settings,
+        description: "Personalize the assistant as one identity: set a display name and description, edit or reset the SOUL.md personality prompt, and reach mascot avatar and voice settings — all from a single Persona surface.",
+        how_to: "Settings > Persona",
+        status: CapabilityStatus::Beta,
         privacy: None,
     },
     Capability {
@@ -938,14 +1228,19 @@ const CAPABILITIES: &[Capability] = &[
         privacy: None,
     },
     Capability {
-        id: "automation.welcome_agent",
-        name: "Welcome Message",
+        id: "automation.crypto_agent",
+        name: "Crypto Agent",
         domain: "automation",
         category: CapabilityCategory::Automation,
-        description: "Conversational onboarding agent that learns about the user's intent and daily tools before guiding them through personalized setup.",
-        how_to: "Automatic — triggered once after onboarding.",
+        description: "Dedicated wallet & market specialist sub-agent. The orchestrator \
+                      routes transfers, swaps, contract calls, balance lookups, and \
+                      exchange trading requests here. The agent enforces a read → \
+                      simulate → confirm → execute flow, refuses to fabricate chain ids \
+                      or token addresses, and gates every write call behind explicit \
+                      user confirmation.",
+        how_to: "Automatic — invoked by the orchestrator when a crypto wallet or market action is requested. Connect a wallet via Settings > Recovery Phrase first.",
         status: CapabilityStatus::Beta,
-        privacy: None,
+        privacy: LOCAL_CREDENTIALS,
     },
     // ── Update ──────────────────────────────────────────────────────────────
     // ── Meet ────────────────────────────────────────────────────────────────
@@ -985,6 +1280,47 @@ const CAPABILITIES: &[Capability] = &[
             destinations: &["Google Meet", "ElevenLabs (STT/TTS via hosted backend)"],
         }),
     },
+    // ── Mobile (iOS client) ─────────────────────────────────────────────────
+    Capability {
+        id: "mobile.device_pairing",
+        name: "Device Pairing",
+        domain: "devices",
+        category: CapabilityCategory::Mobile,
+        description: "Pair iOS phones with the desktop core via QR code. The desktop generates a \
+                      short-lived pairing token; the iOS app scans the QR, completes an X25519 \
+                      key agreement, and stores the session for reconnects.",
+        how_to: "Settings > Devices > Pair iPhone",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
+        id: "mobile.ios_client",
+        name: "iOS Client",
+        domain: "devices",
+        category: CapabilityCategory::Mobile,
+        description: "iOS app for chatting with your assistant on the go. Connects to the desktop \
+                      core via LAN HTTP, an E2E-encrypted socket.io tunnel, or a cloud HTTP \
+                      fallback — no Rust core ships on the device.",
+        how_to: "Pair via Settings > Devices, then open the OpenHuman iOS app.",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
+        id: "mobile.push_to_talk",
+        name: "Push-to-Talk",
+        domain: "devices",
+        category: CapabilityCategory::Mobile,
+        description: "Hold-to-talk voice input on iOS. Activates AVAudioEngine and \
+                      SFSpeechRecognizer on the device; partial transcripts appear while \
+                      speaking and the final transcript is sent as a chat message.",
+        how_to: "Hold the microphone button on the iOS mascot screen.",
+        status: CapabilityStatus::Beta,
+        privacy: Some(CapabilityPrivacy {
+            leaves_device: false,
+            data_kind: PrivacyDataKind::Raw,
+            destinations: &[],
+        }),
+    },
     // ── Update ──────────────────────────────────────────────────────────────
     Capability {
         id: "update.check",
@@ -1011,6 +1347,90 @@ const CAPABILITIES: &[Capability] = &[
         how_to: "Settings > Developer Options > Apply Update, or confirm an in-chat update prompt from the orchestrator.",
         status: CapabilityStatus::Beta,
         privacy: GITHUB_RELEASES_METADATA,
+    },
+    // ── Desktop Companion ────────────────────────────────────────────
+    Capability {
+        id: "companion.session",
+        name: "Desktop Companion Session",
+        domain: "desktop_companion",
+        category: CapabilityCategory::ScreenIntelligence,
+        description: "Start a Clicky-style companion session that ties hotkey activation, \
+                      microphone capture, screen context, LLM reasoning, speech synthesis, \
+                      and visual pointing into a single interaction loop.",
+        how_to: "Settings > Companion, or activate via the configured hotkey.",
+        status: CapabilityStatus::Beta,
+        privacy: DERIVED_TO_BACKEND,
+    },
+    Capability {
+        id: "companion.pointing",
+        name: "Visual Pointing",
+        domain: "desktop_companion",
+        category: CapabilityCategory::ScreenIntelligence,
+        description: "The companion LLM can embed [POINT:x,y:label:screenN] tags to \
+                      visually point at UI elements on screen via the overlay.",
+        how_to: "Automatic during companion sessions when the LLM identifies a UI target.",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
+        id: "filesystem.access_mode",
+        name: "Agent OS Access Mode",
+        domain: "security",
+        category: CapabilityCategory::Settings,
+        description: "Choose how much filesystem and shell access the agent has: Read-Only, \
+                      Workspace, Trusted Roots (grant specific folders outside the workspace), \
+                      or Full Access. Credential stores stay blocked in every mode.",
+        how_to: "Settings → Agent OS access",
+        status: CapabilityStatus::Stable,
+        privacy: None,
+    },
+    Capability {
+        id: "security.always_allow_tool",
+        name: "Always Allow a Tool",
+        domain: "security",
+        category: CapabilityCategory::Settings,
+        description: "On an approval prompt, choose \"Always allow\" to stop being asked for that \
+                      tool. The choice is saved to your allow-list and persists across restarts; \
+                      remove it any time under Settings → Agent OS access to be prompted again. \
+                      Policy still blocks forbidden paths and high-risk commands regardless.",
+        how_to: "Click \"Always allow\" on an approval prompt; manage the list in Settings → Agent OS access.",
+        status: CapabilityStatus::Stable,
+        privacy: None,
+    },
+    Capability {
+        id: "tool.detect_tools",
+        name: "Detect Installed Tools",
+        domain: "tools",
+        category: CapabilityCategory::Settings,
+        description: "Probe the host PATH to report which developer tools and language \
+                      runtimes are installed (node, python, cargo, docker, git, …).",
+        how_to: "Used by the agent automatically; gated by the tool toggle list.",
+        status: CapabilityStatus::Stable,
+        privacy: None,
+    },
+    Capability {
+        id: "tool.install_tool",
+        name: "Install OS Packages",
+        domain: "tools",
+        category: CapabilityCategory::Settings,
+        description: "Install OS or language packages (apt/dnf/brew/winget/pipx/npm/cargo). \
+                      High impact: only available when Full access / tool installation is enabled.",
+        how_to: "Enable in Settings → Agent OS access (Full access mode).",
+        status: CapabilityStatus::Beta,
+        privacy: None,
+    },
+    Capability {
+        id: "intelligence.remember_preferences",
+        name: "Remember Preferences",
+        domain: "memory",
+        category: CapabilityCategory::Intelligence,
+        description: "Remember preferences you state in chat and apply them automatically — \
+                      general preferences shape every reply (tone, language, standing habits); \
+                      situational ones surface only when relevant to your current message.",
+        how_to: "State a preference in chat, e.g. \"always reply in British English\" or \
+                 \"when writing Rust, prefer Result over unwrap\".",
+        status: CapabilityStatus::Stable,
+        privacy: LOCAL_RAW,
     },
 ];
 

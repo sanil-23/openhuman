@@ -95,18 +95,6 @@ pub(crate) fn build_text_mode_tool_instructions(_specs: &[ToolSpec]) -> String {
 
 // ── Tool filtering ──────────────────────────────────────────────────────
 
-/// Tools that must never be visible to any agent except `welcome`.
-///
-/// `complete_onboarding` flips the onboarding-complete flag in
-/// workspace config and is the terminal step of the welcome flow;
-/// every other agent must route the user back to the welcome agent
-/// rather than call it directly. Central list here so both the main
-/// agent builder ([`crate::openhuman::agent::harness::session::builder`])
-/// and the subagent runner apply the same guard.
-pub(crate) fn is_welcome_only_tool(name: &str) -> bool {
-    matches!(name, "complete_onboarding")
-}
-
 /// Tools that spawn a new sub-agent turn. A sub-agent must never be
 /// able to invoke any of these — only the top-level orchestrator
 /// delegates. Nested spawns would create a recursion tree the harness
@@ -195,14 +183,24 @@ pub(crate) fn load_prompt_source(
             // Try the workspace's `agent/prompts/` first (so users can
             // override built-in prompts), then fall back to the crate's
             // own bundled prompts via `include_str!`-style lookup.
-            let workspace_path = workspace_dir.join("agent").join("prompts").join(path);
+            let prompt_root = workspace_dir.join("agent").join("prompts");
+            let workspace_path = prompt_root.join(path);
             if workspace_path.is_file() {
-                return std::fs::read_to_string(&workspace_path).map_err(|e| {
-                    SubagentRunError::PromptLoad {
-                        path: workspace_path.display().to_string(),
-                        source: e,
-                    }
-                });
+                if let Ok(resolved) = crate::openhuman::security::validate_path_within_root(
+                    &workspace_path,
+                    &prompt_root,
+                ) {
+                    return std::fs::read_to_string(&resolved).map_err(|e| {
+                        SubagentRunError::PromptLoad {
+                            path: resolved.display().to_string(),
+                            source: e,
+                        }
+                    });
+                }
+                tracing::warn!(
+                    "[subagent_runner] prompt path escapes workspace, skipping: {}",
+                    workspace_path.display()
+                );
             }
             // Built-in prompt fallback. The agent prompts directory is
             // already shipped at `src/openhuman/agent/prompts/` and
@@ -216,12 +214,21 @@ pub(crate) fn load_prompt_source(
             // back to a generic role hint).
             let workspace_root_path = workspace_dir.join(path);
             if workspace_root_path.is_file() {
-                return std::fs::read_to_string(&workspace_root_path).map_err(|e| {
-                    SubagentRunError::PromptLoad {
-                        path: workspace_root_path.display().to_string(),
-                        source: e,
-                    }
-                });
+                if let Ok(resolved) = crate::openhuman::security::validate_path_within_root(
+                    &workspace_root_path,
+                    workspace_dir,
+                ) {
+                    return std::fs::read_to_string(&resolved).map_err(|e| {
+                        SubagentRunError::PromptLoad {
+                            path: resolved.display().to_string(),
+                            source: e,
+                        }
+                    });
+                }
+                tracing::warn!(
+                    "[subagent_runner] fallback prompt path escapes workspace, skipping: {}",
+                    workspace_root_path.display()
+                );
             }
             tracing::warn!(
                 path = %path,

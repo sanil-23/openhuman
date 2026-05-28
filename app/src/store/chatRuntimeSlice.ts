@@ -7,6 +7,7 @@ import type {
   PersistedSubagentToolCall,
   PersistedToolTimelineEntry,
   PersistedTurnState,
+  TaskBoard,
 } from '../types/turnState';
 import { resetUserScopedState } from './resetActions';
 
@@ -117,6 +118,22 @@ export interface SessionTokenUsage {
 }
 
 /**
+ * A `Prompt`-class tool call parked on the ApprovalGate, awaiting the user's
+ * decision. Surfaced from the `approval_request` socket event; cleared when the
+ * user answers (`openhuman.approval_decide`) or the turn ends / is cancelled.
+ */
+export interface PendingApproval {
+  requestId: string;
+  toolName: string;
+  message: string;
+  /**
+   * The exact command/target being requested (shell command, file path, URL),
+   * extracted from the event's redacted args for display. Empty if unavailable.
+   */
+  command?: string;
+}
+
+/**
  * Per-thread UI state for an in-flight agent turn (socket events while the user
  * may navigate away from Conversations). The thread slice keeps `activeThreadId`
  * in sync for cross-thread guards; it is cleared from `ChatRuntimeProvider` on
@@ -126,7 +143,9 @@ interface ChatRuntimeState {
   inferenceStatusByThread: Record<string, InferenceStatus>;
   streamingAssistantByThread: Record<string, StreamingAssistantState>;
   toolTimelineByThread: Record<string, ToolTimelineEntry[]>;
+  taskBoardByThread: Record<string, TaskBoard>;
   inferenceTurnLifecycleByThread: Record<string, InferenceTurnLifecycle>;
+  pendingApprovalByThread: Record<string, PendingApproval>;
   sessionTokenUsage: SessionTokenUsage;
 }
 
@@ -134,7 +153,9 @@ const initialState: ChatRuntimeState = {
   inferenceStatusByThread: {},
   streamingAssistantByThread: {},
   toolTimelineByThread: {},
+  taskBoardByThread: {},
   inferenceTurnLifecycleByThread: {},
+  pendingApprovalByThread: {},
   sessionTokenUsage: { inputTokens: 0, outputTokens: 0, turns: 0, lastUpdated: 0 },
 };
 
@@ -209,6 +230,24 @@ const chatRuntimeSlice = createSlice({
     clearToolTimelineForThread: (state, action: PayloadAction<{ threadId: string }>) => {
       delete state.toolTimelineByThread[action.payload.threadId];
     },
+    setTaskBoardForThread: (
+      state,
+      action: PayloadAction<{ threadId: string; board: TaskBoard }>
+    ) => {
+      state.taskBoardByThread[action.payload.threadId] = action.payload.board;
+    },
+    clearTaskBoardForThread: (state, action: PayloadAction<{ threadId: string }>) => {
+      delete state.taskBoardByThread[action.payload.threadId];
+    },
+    setPendingApprovalForThread: (
+      state,
+      action: PayloadAction<{ threadId: string; approval: PendingApproval }>
+    ) => {
+      state.pendingApprovalByThread[action.payload.threadId] = action.payload.approval;
+    },
+    clearPendingApprovalForThread: (state, action: PayloadAction<{ threadId: string }>) => {
+      delete state.pendingApprovalByThread[action.payload.threadId];
+    },
     beginInferenceTurn: (state, action: PayloadAction<{ threadId: string }>) => {
       state.inferenceTurnLifecycleByThread[action.payload.threadId] = 'started';
     },
@@ -224,13 +263,17 @@ const chatRuntimeSlice = createSlice({
       delete state.inferenceStatusByThread[action.payload.threadId];
       delete state.streamingAssistantByThread[action.payload.threadId];
       delete state.toolTimelineByThread[action.payload.threadId];
+      delete state.taskBoardByThread[action.payload.threadId];
       delete state.inferenceTurnLifecycleByThread[action.payload.threadId];
+      delete state.pendingApprovalByThread[action.payload.threadId];
     },
     clearAllChatRuntime: state => {
       state.inferenceStatusByThread = {};
       state.streamingAssistantByThread = {};
       state.toolTimelineByThread = {};
+      state.taskBoardByThread = {};
       state.inferenceTurnLifecycleByThread = {};
+      state.pendingApprovalByThread = {};
     },
     recordChatTurnUsage: (
       state,
@@ -258,6 +301,12 @@ const chatRuntimeSlice = createSlice({
       const threadId = snapshot.threadId;
 
       state.inferenceTurnLifecycleByThread[threadId] = snapshot.lifecycle;
+      // Snapshots don't carry pending-approval payloads; drop any stale in-memory
+      // approval so the card reflects the rehydrated core truth, not pre-drift state.
+      delete state.pendingApprovalByThread[threadId];
+      if (snapshot.taskBoard) {
+        state.taskBoardByThread[threadId] = snapshot.taskBoard;
+      }
 
       // Interrupted turns have no live driver — surface only the
       // lifecycle so the UI renders a retry affordance instead of
@@ -307,6 +356,10 @@ export const {
   clearStreamingAssistantForThread,
   setToolTimelineForThread,
   clearToolTimelineForThread,
+  setTaskBoardForThread,
+  clearTaskBoardForThread,
+  setPendingApprovalForThread,
+  clearPendingApprovalForThread,
   beginInferenceTurn,
   markInferenceTurnStreaming,
   endInferenceTurn,

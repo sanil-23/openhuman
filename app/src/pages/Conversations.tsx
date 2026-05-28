@@ -1,31 +1,36 @@
 import { convertFileSrc } from '@tauri-apps/api/core';
+import debugFactory from 'debug';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { type ChatSendError, chatSendError } from '../chat/chatSendError';
 import { checkPromptInjection, promptGuardMessage } from '../chat/promptInjectionGuard';
+import ApprovalRequestCard from '../components/chat/ApprovalRequestCard';
 import TokenUsagePill from '../components/chat/TokenUsagePill';
 import { ConfirmationModal } from '../components/intelligence/ConfirmationModal';
 import PillTabBar from '../components/PillTabBar';
 import UpsellBanner from '../components/upsell/UpsellBanner';
 import { dismissBanner, shouldShowBanner } from '../components/upsell/upsellDismissState';
-import UsageLimitModal from '../components/upsell/UsageLimitModal';
-import MicCloudComposer from '../features/human/MicCloudComposer';
-// [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-// import { ONBOARDING_WELCOME_THREAD_LABEL } from '../constants/onboardingChat';
+import MicComposer from '../features/human/MicComposer';
 import { useStickToBottom } from '../hooks/useStickToBottom';
 import { useUsageState } from '../hooks/useUsageState';
+import { useT } from '../lib/i18n/I18nContext';
 import { trackEvent } from '../services/analytics';
-// [#1123] getCoreStateSnapshot and isWelcomeLocked commented out — welcome-agent onboarding replaced by Joyride walkthrough
-// import { getCoreStateSnapshot, isWelcomeLocked } from '../lib/coreState/store';
-// [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-// import { useCoreState } from '../providers/CoreStateProvider';
+import { threadApi } from '../services/api/threadApi';
 import { chatCancel, chatSend, useRustChat } from '../services/chatService';
 import { store } from '../store';
+import {
+  loadAgentProfiles,
+  selectActiveAgentProfileId,
+  selectAgentProfile,
+  selectAgentProfiles,
+  upsertAgentProfile,
+} from '../store/agentProfileSlice';
 import {
   beginInferenceTurn,
   clearRuntimeForThread,
   fetchAndHydrateTurnState,
+  setTaskBoardForThread,
   setToolTimelineForThread,
 } from '../store/chatRuntimeSlice';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
@@ -40,9 +45,12 @@ import {
   setActiveThread,
   setSelectedThread,
   THREAD_NOT_FOUND_MESSAGE,
+  updateThreadTitle,
 } from '../store/threadSlice';
+import type { AgentProfile } from '../types/agentProfile';
 import type { ConfirmationModal as ConfirmationModalType } from '../types/intelligence';
 import type { ThreadMessage } from '../types/thread';
+import type { TaskBoardCard, TaskBoardCardStatus } from '../types/turnState';
 import { splitAgentMessageIntoBubbles } from '../utils/agentMessageBubbles';
 import { BILLING_DASHBOARD_URL } from '../utils/links';
 import { openUrl } from '../utils/openUrl';
@@ -59,6 +67,7 @@ import { formatTimelineEntry } from '../utils/toolTimelineFormatting';
 import { AgentMessageBubble, BubbleMarkdown } from './conversations/components/AgentMessageBubble';
 import { CitationChips, type MessageCitation } from './conversations/components/CitationChips';
 import { LimitPill } from './conversations/components/LimitPill';
+import { TaskKanbanBoard } from './conversations/components/TaskKanbanBoard';
 import { ToolTimelineBlock } from './conversations/components/ToolTimelineBlock';
 import {
   evaluateComposerSend,
@@ -72,6 +81,7 @@ import {
   formatResetTime,
   getInlineCompletionSuffix,
 } from './conversations/utils/format';
+import { isThreadVisibleInTab, WORKERS_TAB_VALUE } from './conversations/utils/threadFilter';
 
 // Chat uses the reasoning model; `agentic-v1` is reserved for sub-agents
 // that execute tool calls, not the primary user-facing conversation.
@@ -85,6 +95,13 @@ type InputMode = 'text' | 'voice';
 type ReplyMode = 'text' | 'voice';
 const AUTOCOMPLETE_POLL_DEBOUNCE_MS = 320;
 const AUTOCOMPLETE_MIN_CONTEXT_CHARS = 3;
+const debug = debugFactory('conversations');
+const DEFAULT_PROFILE_DRAFT = {
+  name: '',
+  agentId: 'orchestrator',
+  systemPromptSuffix: '',
+  allowedTools: '',
+};
 
 interface ConversationsProps {
   /**
@@ -106,10 +123,27 @@ interface ConversationsProps {
 
 export function isComposerInteractionBlocked(args: {
   activeThreadId: string | null;
-  welcomePending: boolean;
   rustChat: boolean;
 }): boolean {
-  return !args.rustChat || Boolean(args.activeThreadId) || args.welcomePending;
+  return !args.rustChat || Boolean(args.activeThreadId);
+}
+
+interface ImeKeyboardEventLike {
+  isComposing?: boolean;
+  keyCode?: number;
+  which?: number;
+  nativeEvent?: { isComposing?: boolean; keyCode?: number; which?: number };
+}
+
+export function isImeCompositionKeyEvent(event: ImeKeyboardEventLike): boolean {
+  return (
+    event.isComposing === true ||
+    event.nativeEvent?.isComposing === true ||
+    event.nativeEvent?.keyCode === 229 ||
+    event.nativeEvent?.which === 229 ||
+    event.keyCode === 229 ||
+    event.which === 229
+  );
 }
 
 /**
@@ -130,66 +164,27 @@ export function formatThreadLoadError(err: unknown): string {
   return String(err);
 }
 
-// [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-// function WelcomeThinkingTypewriter() {
-//   const text = 'Your agent is thinking...';
-//   const [visibleChars, setVisibleChars] = useState(0);
-//
-//   useEffect(() => {
-//     const isComplete = visibleChars >= text.length;
-//     const delayMs = isComplete ? 950 : 42;
-//     const timeoutId = window.setTimeout(() => {
-//       setVisibleChars(current => (current >= text.length ? 0 : current + 1));
-//     }, delayMs);
-//
-//     return () => window.clearTimeout(timeoutId);
-//   }, [text.length, visibleChars]);
-//
-//   return (
-//     <p className="flex items-center text-sm text-stone-600 font-mono tracking-tight">
-//       <span>{text.slice(0, visibleChars)}</span>
-//       <span
-//         aria-hidden="true"
-//         className="ml-0.5 inline-block h-4 w-px bg-stone-400 animate-pulse"
-//       />
-//     </p>
-//   );
-// }
+function formatAgentProfileAgentLabel(agentId: string): string {
+  return agentId
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
 
-const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsProps = {}) => {
+const Conversations = ({
+  variant = 'page',
+  composer: composerProp = 'text',
+}: ConversationsProps = {}) => {
+  const [composerOverride, setComposerOverride] = useState<'mic-cloud' | 'text' | null>(null);
+  const composer = composerOverride ?? composerProp;
+  const { t } = useT();
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
-  const {
-    threads,
-    selectedThreadId,
-    messages,
-    isLoadingMessages,
-    messagesError,
-    activeThreadId,
-    // [#1123] welcomeThreadId commented out — welcome-agent onboarding replaced by Joyride walkthrough
-    // welcomeThreadId,
-  } = useAppSelector(state => state.thread);
+  const { threads, selectedThreadId, messages, isLoadingMessages, messagesError, activeThreadId } =
+    useAppSelector(state => state.thread);
 
-  // [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-  // const { snapshot } = useCoreState();
-  // const welcomeLocked = isWelcomeLocked(snapshot);
-
-  // [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-  // While the proactive welcome agent is running and hasn't published its
-  // first message yet, hide the composer (and a few other non-message
-  // chrome bits) so the user just sees the "Your agent is thinking..."
-  // loader. Flips off the moment the first agent message arrives.
-  // const welcomePending =
-  //   !!welcomeThreadId && selectedThreadId === welcomeThreadId && messages.length === 0;
-  // const chatOnboardingCompleted = snapshot.chatOnboardingCompleted;
-  // const previousChatOnboardingCompletedRef = useRef<boolean | null>(null);
-  // Guard against the mount-time `loadThreads()` promise resolving AFTER
-  // the welcome-lock unlock transition creates a fresh thread. Without
-  // this, the stale `.then(...)` would re-select the old welcome thread
-  // and clobber the auto-created one (#883 CodeRabbit feedback).
-  // const skipInitialThreadSelectionRef = useRef(false);
-
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [inputMode, setInputMode] = useState<InputMode>('text');
@@ -202,10 +197,24 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
   const [inlineSuggestionValue, setInlineSuggestionValue] = useState('');
   const [sendError, setSendError] = useState<ChatSendError | null>(null);
   const [sendAdvisory, setSendAdvisory] = useState<string | null>(null);
+  const [pendingSendingThreadId, setPendingSendingThreadId] = useState<string | null>(null);
+  const [profileDraftOpen, setProfileDraftOpen] = useState(false);
+  const [profileDraft, setProfileDraft] = useState(DEFAULT_PROFILE_DRAFT);
   const socketStatus = useAppSelector(selectSocketStatus);
+  const agentProfiles = useAppSelector(selectAgentProfiles);
+  const selectedAgentProfileId = useAppSelector(selectActiveAgentProfileId);
+  // Optional chain because narrow test stores (e.g. Conversations.test
+  // bootstraps without the locale slice) shouldn't crash here. `'en'`
+  // matches the no-locale-directive branch in the core, so legacy
+  // behaviour stays intact.
+  const uiLocale = useAppSelector(state => state.locale?.current ?? 'en');
   const toolTimelineByThread = useAppSelector(state => state.chatRuntime.toolTimelineByThread);
+  const taskBoardByThread = useAppSelector(state => state.chatRuntime.taskBoardByThread);
   const inferenceStatusByThread = useAppSelector(
     state => state.chatRuntime.inferenceStatusByThread
+  );
+  const pendingApprovalByThread = useAppSelector(
+    state => state.chatRuntime.pendingApprovalByThread
   );
   const streamingAssistantByThread = useAppSelector(
     state => state.chatRuntime.streamingAssistantByThread
@@ -215,21 +224,19 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
   );
   const rustChat = useRustChat();
   const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [editTitleValue, setEditTitleValue] = useState('');
+  const editTitleInputRef = useRef<HTMLInputElement>(null);
 
   const {
     teamUsage,
     isLoading: isLoadingBudget,
     isAtLimit,
-    isBudgetExhausted,
-    isRateLimited,
     isNearLimit,
     isFreeTier,
     shouldShowBudgetCompletedMessage,
-    usagePct10h,
-    usagePct7d,
-    currentTier,
+    usagePct,
   } = useUsageState();
-  const [showLimitModal, setShowLimitModal] = useState(false);
   const [deleteModal, setDeleteModal] = useState<ConfirmationModalType>({
     isOpen: false,
     title: '',
@@ -237,8 +244,33 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
     onConfirm: () => {},
     onCancel: () => {},
   });
+  const agentProfileAgentOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const options: Array<{ id: string; label: string }> = [];
+    for (const profile of agentProfiles) {
+      const id = profile.agentId.trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      options.push({
+        id,
+        label: profile.builtIn ? profile.name : formatAgentProfileAgentLabel(id),
+      });
+    }
+    if (profileDraft.agentId && !seen.has(profileDraft.agentId)) {
+      options.push({
+        id: profileDraft.agentId,
+        label: formatAgentProfileAgentLabel(profileDraft.agentId),
+      });
+    }
+    if (options.length === 0) {
+      options.push({ id: 'orchestrator', label: t('chat.agentProfile.defaultAgentLabel') });
+    }
+    return options;
+  }, [agentProfiles, profileDraft.agentId, t]);
 
   const textInputRef = useRef<HTMLTextAreaElement>(null);
+  const isComposingTextRef = useRef(false);
+  const pendingSendRef = useRef<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -271,27 +303,74 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
     void dispatch(loadThreadMessages(thread.id));
   };
 
+  const handleStartEditTitle = () => {
+    if (!selectedThreadId) return;
+    const thr = threads.find(t => t.id === selectedThreadId);
+    setEditTitleValue(thr?.title ?? '');
+    setEditingTitle(true);
+    window.requestAnimationFrame(() => {
+      editTitleInputRef.current?.select();
+    });
+  };
+
+  const handleCommitTitle = () => {
+    const trimmed = editTitleValue.trim();
+    setEditingTitle(false);
+    if (!selectedThreadId || !trimmed) return;
+    void dispatch(updateThreadTitle({ threadId: selectedThreadId, title: trimmed }));
+  };
+
+  const handleSelectAgentProfile = async (profileId: string) => {
+    try {
+      await dispatch(selectAgentProfile(profileId)).unwrap();
+    } catch (error) {
+      debug('agent profile select failed: %o', error);
+    }
+  };
+
+  const handleCreateAgentProfile = async () => {
+    const name = profileDraft.name.trim();
+    if (!name) return;
+    const duplicate = agentProfiles.some(
+      profile => profile.name.trim().toLowerCase() === name.toLowerCase()
+    );
+    if (duplicate) {
+      setSendAdvisory(t('chat.agentProfile.exists').replace('{name}', name));
+      return;
+    }
+    const id = `profile-${globalThis.crypto.randomUUID().slice(0, 8)}`;
+    const allowedTools = profileDraft.allowedTools
+      .split(',')
+      .map(tool => tool.trim())
+      .filter(Boolean);
+    const profile: AgentProfile = {
+      id,
+      name,
+      description: t('chat.agentProfile.customDescription'),
+      agentId: profileDraft.agentId,
+      systemPromptSuffix: profileDraft.systemPromptSuffix.trim() || null,
+      allowedTools: allowedTools.length > 0 ? allowedTools : null,
+      builtIn: false,
+    };
+    try {
+      await dispatch(upsertAgentProfile(profile)).unwrap();
+      await dispatch(selectAgentProfile(id)).unwrap();
+      setProfileDraftOpen(false);
+      setProfileDraft(DEFAULT_PROFILE_DRAFT);
+      setSendAdvisory(null);
+    } catch (error) {
+      debug('agent profile create failed: %o', error);
+      setSendAdvisory(t('chat.agentProfile.createFailed'));
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
 
     void dispatch(loadThreads())
       .unwrap()
       .then(data => {
-        // [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-        // if (cancelled || skipInitialThreadSelectionRef.current) return;
         if (cancelled) return;
-        // [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-        // Always prefer the welcome thread during lockdown regardless of
-        // whether the server list is empty or not. Without this guard the
-        // stale `.then` could select a pre-existing thread from a prior
-        // session and pull the user out of the welcome conversation.
-        // const snapForSelect = getCoreStateSnapshot().snapshot;
-        // const threadStateForSelect = store.getState().thread;
-        // if (isWelcomeLocked(snapForSelect) && threadStateForSelect.welcomeThreadId) {
-        //   dispatch(setSelectedThread(threadStateForSelect.welcomeThreadId));
-        //   void dispatch(loadThreadMessages(threadStateForSelect.welcomeThreadId));
-        //   return;
-        // }
         const threadStateForSelect = store.getState().thread;
         // Worker/subagent threads are hidden from the conversation list
         // (see tinyhumansai/openhuman#1624). Match the sidebar filter here so
@@ -317,7 +396,7 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
       })
       .catch(err => {
         if (cancelled) return;
-        console.warn('[conversations] loadThreads failed on mount:', formatThreadLoadError(err));
+        debug('loadThreads failed on mount: %s', formatThreadLoadError(err));
       });
 
     return () => {
@@ -330,31 +409,26 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
     if (selectedThreadId) {
       void dispatch(loadThreadMessages(selectedThreadId));
       void dispatch(fetchAndHydrateTurnState(selectedThreadId));
+      void threadApi
+        .getTaskBoard(selectedThreadId)
+        .then(board => {
+          if (board) {
+            dispatch(setTaskBoardForThread({ threadId: selectedThreadId, board }));
+          }
+        })
+        .catch(error => {
+          debug('getTaskBoard failed: %o', error);
+        });
     }
   }, [selectedThreadId, dispatch]);
 
-  // [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-  // Welcome lockdown unlock (#883) — when `chatOnboardingCompleted`
-  // transitions from `false` → `true` (the welcome agent just called
-  // `complete_onboarding(action: "complete")`), open a fresh thread so
-  // the user starts their first "real" conversation with the orchestrator
-  // instead of continuing the welcome thread. Ref-tracked one-shot so
-  // the 2s snapshot poll cannot re-fire this.
-  // useEffect(() => {
-  //   const prev = previousChatOnboardingCompletedRef.current;
-  //   previousChatOnboardingCompletedRef.current = chatOnboardingCompleted;
-  //   if (prev === false && chatOnboardingCompleted === true) {
-  //     // Signal the mount-time `loadThreads()` promise to bail if it is
-  //     // still pending — otherwise its stale resolution would overwrite
-  //     // our freshly created thread selection.
-  //     skipInitialThreadSelectionRef.current = true;
-  //     console.debug('[welcome-lock] chat onboarding completed — opening new thread');
-  //     void handleCreateNewThread();
-  //   }
-  //   // handleCreateNewThread is stable for the component lifetime (only
-  //   // uses `dispatch`); the ref guards against duplicate fires.
-  //   // eslint-disable-next-line react-hooks/exhaustive-deps
-  // }, [chatOnboardingCompleted]);
+  useEffect(() => {
+    void dispatch(loadAgentProfiles())
+      .unwrap()
+      .catch(error => {
+        debug('agent profiles load failed: %o', error);
+      });
+  }, [dispatch]);
 
   const location = useLocation();
   const { containerRef: messagesContainerRef, endRef: messagesEndRef } = useStickToBottom(
@@ -400,17 +474,14 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
     if (sendingTimeoutRef.current) clearTimeout(sendingTimeoutRef.current);
     sendingThreadIdRef.current = threadId;
     sendingTimeoutRef.current = setTimeout(() => {
-      console.warn('[chat] silence timeout: no inference signal for 120s');
-      setSendError(
-        chatSendError(
-          'safety_timeout',
-          'No response from the agent after 2 minutes. Try again or check your connection.'
-        )
-      );
+      debug('armSilenceTimer: no inference signal for 120s — clearing runtime');
+      setSendError(chatSendError('safety_timeout', t('chat.safetyTimeout')));
       dispatch(clearRuntimeForThread({ threadId }));
       dispatch(setActiveThread(null));
       sendingTimeoutRef.current = null;
       sendingThreadIdRef.current = null;
+      pendingSendRef.current = null;
+      setPendingSendingThreadId(null);
     }, 120_000);
   };
 
@@ -525,7 +596,7 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
   }, [inputMode, rustChat]);
 
   const handleSlashCommand = (command: string): boolean => {
-    const decision = handleComposerSlashCommand(command, false);
+    const decision = handleComposerSlashCommand(command);
     if (decision.kind === 'not_handled') return false;
 
     setInputValue('');
@@ -534,6 +605,8 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
   };
 
   const handleSendMessage = async (text?: string) => {
+    if (pendingSendRef.current) return;
+
     const normalized = text ?? inputValue;
     const trimmedInput = normalized.trim();
 
@@ -565,9 +638,6 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
 
     if (!sendDecision.shouldSend) {
       const blockedFeedback = getComposerBlockedSendFeedback(sendDecision.blockReason);
-      if (blockedFeedback?.showLimitModal) {
-        setShowLimitModal(true);
-      }
       if (blockedFeedback) {
         setSendError(chatSendError(blockedFeedback.error.code, blockedFeedback.error.message));
       }
@@ -576,6 +646,8 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
 
     const sendingThreadId = selectedThreadId;
     if (!sendingThreadId) return;
+    pendingSendRef.current = sendingThreadId;
+    setPendingSendingThreadId(sendingThreadId);
     const userMessage: ThreadMessage = {
       id: `msg_${globalThis.crypto.randomUUID()}`,
       content: trimmed,
@@ -594,10 +666,14 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
       // unrelated errors whose `.toString()` happens to equal the sentinel.
       if (error === THREAD_NOT_FOUND_MESSAGE) {
         setSendError(null);
+        pendingSendRef.current = null;
+        setPendingSendingThreadId(null);
         return;
       }
       const msg = error instanceof Error ? error.message : String(error);
       setSendError(chatSendError('cloud_send_failed', msg));
+      pendingSendRef.current = null;
+      setPendingSendingThreadId(null);
       return;
     }
     setInputValue('');
@@ -618,8 +694,19 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
     // Local model (Ollama) is used only for supplementary features
     // (auto-react, autocomplete, etc.) — never as a primary chat path.
     try {
-      await chatSend({ threadId: sendingThreadId, message: trimmed, model: CHAT_MODEL_ID });
+      await chatSend({
+        threadId: sendingThreadId,
+        message: trimmed,
+        model: CHAT_MODEL_ID,
+        profileId: selectedAgentProfileId,
+        locale: uiLocale,
+      });
       trackEvent('chat_message_sent');
+      // Backend accepted the send; lifecycle ('started' → 'streaming') now
+      // owns the `isSending` UI lock. Release the pending guard so the next
+      // user turn isn't blocked by a stale ref/state.
+      pendingSendRef.current = null;
+      setPendingSendingThreadId(null);
 
       // Active-thread reset happens in the global ChatRuntimeProvider events.
     } catch (err) {
@@ -643,6 +730,8 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
       }
       dispatch(clearRuntimeForThread({ threadId: sendingThreadId }));
       dispatch(setActiveThread(null));
+      pendingSendRef.current = null;
+      setPendingSendingThreadId(null);
     }
   };
 
@@ -817,6 +906,8 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
   }, [messages, replyMode, rustChat]);
 
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isComposingTextRef.current || isImeCompositionKeyEvent(e)) return;
+
     const inlineSuffix = getInlineCompletionSuffix(inputValue, inlineSuggestionValue);
     const textarea = e.currentTarget;
     const caretAtEnd =
@@ -873,6 +964,8 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
   const selectedThreadToolTimeline = selectedThreadId
     ? (toolTimelineByThread[selectedThreadId] ?? [])
     : [];
+  const selectedTaskBoard = selectedThreadId ? (taskBoardByThread[selectedThreadId] ?? null) : null;
+  const hasTaskBoard = Boolean(selectedTaskBoard?.cards.length);
   const visibleMessages = messages.filter(msg => !msg.extraMetadata?.hidden);
   const hasVisibleMessages = visibleMessages.length > 0;
   const latestVisibleMessage = visibleMessages[visibleMessages.length - 1] ?? null;
@@ -892,15 +985,9 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
     ? (streamingAssistantByThread[selectedThreadId] ?? null)
     : null;
   const inlineCompletionSuffix = getInlineCompletionSuffix(inputValue, inlineSuggestionValue);
-  // Blocks all composer interaction while a turn is in-flight, the
-  // proactive welcome opener is pending, or Rust chat is unavailable.
+  // Blocks all composer interaction while a turn is in-flight or Rust chat is unavailable.
   // isSending: the *selected* thread is in-flight (drives selected-thread UI only).
-  // [#1123] welcomePending removed — welcome-agent onboarding replaced by Joyride walkthrough
-  const composerInteractionBlocked = isComposerInteractionBlocked({
-    activeThreadId,
-    welcomePending: false,
-    rustChat,
-  });
+  const composerInteractionBlocked = isComposerInteractionBlocked({ activeThreadId, rustChat });
   // Auto-focus the composer when a thread becomes selected and the composer
   // isn't blocked. Without this, navigating into a thread from elsewhere in
   // the app (e.g. acting on a subconscious reflection in the Intelligence
@@ -938,33 +1025,55 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
   }, [selectedThreadId, composerInteractionBlocked, inputMode]);
   const isSending = Boolean(
     selectedThreadId &&
-    (inferenceTurnLifecycleByThread[selectedThreadId] === 'started' ||
+    (pendingSendingThreadId === selectedThreadId ||
+      inferenceTurnLifecycleByThread[selectedThreadId] === 'started' ||
       inferenceTurnLifecycleByThread[selectedThreadId] === 'streaming')
   );
   const shouldRenderTimelineBeforeLatestAgentMessage =
     selectedThreadToolTimeline.length > 0 && !isSending && Boolean(latestVisibleAgentMessage);
 
+  const handleMoveTaskCard = async (
+    card: TaskBoardCard,
+    nextStatus: TaskBoardCardStatus
+  ): Promise<void> => {
+    if (!selectedThreadId || !selectedTaskBoard) return;
+    const now = new Date().toISOString();
+    const nextBoard = {
+      ...selectedTaskBoard,
+      cards: selectedTaskBoard.cards.map(existing =>
+        existing.id === card.id ? { ...existing, status: nextStatus, updatedAt: now } : existing
+      ),
+      updatedAt: now,
+    };
+    dispatch(setTaskBoardForThread({ threadId: selectedThreadId, board: nextBoard }));
+    try {
+      const saved = await threadApi.putTaskBoard(selectedThreadId, nextBoard.cards);
+      if (!saved) {
+        throw new Error('Task board update returned no board');
+      }
+      dispatch(setTaskBoardForThread({ threadId: selectedThreadId, board: saved }));
+    } catch (error) {
+      debug('putTaskBoard failed: %o', error);
+      setSendAdvisory('Could not move task; changes were not saved.');
+      dispatch(setTaskBoardForThread({ threadId: selectedThreadId, board: selectedTaskBoard }));
+    }
+  };
+
   const filteredThreads = useMemo(() => {
-    const base = threads.filter(t => {
-      // Hide worker/subagent threads from the conversation list. They are
-      // currently surfaced inline inside the parent thread via WorkerThreadRefCard.
-      // A dedicated showcase is tracked in tinyhumansai/openhuman#1624.
-      if (t.parentThreadId) return false;
-      if (selectedLabel === 'all') return true;
-      return t.labels?.includes(selectedLabel);
-    });
-    // [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-    // if (!welcomeLocked) return base;
-    // // During welcome lockdown only the onboarding welcome thread should
-    // // appear — not stray blank threads from races or proactive:* handling.
-    // if (welcomeThreadId) {
-    //   return base.filter(t => t.id === welcomeThreadId);
-    // }
-    // // Fallback: welcomeThreadId not yet set but the server already returned the
-    // // thread (e.g. hot-reload). Keep only onboarding-labelled threads so the
-    // // welcome thread is visible rather than hidden behind the empty-state message.
-    // return base.filter(t => (t.labels ?? []).includes(ONBOARDING_WELCOME_THREAD_LABEL));
-    return base;
+    // Worker/subagent threads (any thread with `parentThreadId`) are
+    // surfaced through two intentional paths (issue #1624):
+    //   1. The dedicated `Workers` tab in the sidebar — pick that tab to
+    //      see only background work and jump into a worker transcript.
+    //   2. Inline inside the parent thread via `WorkerThreadRefCard`,
+    //      which now also renders a live running/completed/failed badge
+    //      derived from the parent timeline entry's status.
+    // The default ("All") and label-scoped tabs hide them so the main
+    // sidebar is dominated by user-initiated conversations rather than
+    // background reasoning threads. The actual rule lives in
+    // `isThreadVisibleInTab` so it is pure, unit-testable, and stays
+    // in lockstep with the sidebar tab definition (`labelTabs` below)
+    // via the shared `WORKERS_TAB_VALUE` sentinel.
+    return threads.filter(t => isThreadVisibleInTab(t, selectedLabel));
   }, [threads, selectedLabel]);
 
   const sortedThreads = useMemo(() => {
@@ -975,36 +1084,47 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
 
   // Fixed tab set so categories don't disappear when empty and the active
   // filter state remains unambiguous regardless of what threads exist.
+  // The `workers` tab (issue #1624) is the deliberate UI surface for
+  // background sub-agent / worker threads — selecting it inverts the
+  // default `parentThreadId` filter in `filteredThreads` above so only
+  // worker threads show. Without this tab the only way into a worker
+  // transcript is the inline `WorkerThreadRefCard` inside the parent.
   const labelTabs = [
-    { label: 'All', value: 'all' },
-    { label: 'Work', value: 'work' },
-    { label: 'Briefing', value: 'briefing' },
-    { label: 'Notification', value: 'notification' },
+    { label: t('chat.filter.all'), value: 'all' },
+    { label: t('chat.filter.work'), value: 'work' },
+    { label: t('chat.filter.briefing'), value: 'briefing' },
+    { label: t('chat.filter.notification'), value: 'notification' },
+    { label: t('chat.filter.workers'), value: WORKERS_TAB_VALUE },
   ];
 
   const isSidebar = variant === 'sidebar';
-  // [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-  // During welcome lockdown keep the sidebar forced open so the user always
-  // sees the single onboarding thread entry and cannot accidentally close the
-  // panel via the toggle (leaving themselves with no thread list).
-  // const effectiveShowSidebar = welcomeLocked ? true : showSidebar;
   const effectiveShowSidebar = showSidebar;
 
   // Stable title resolver used by both the sidebar thread list and the header.
-  // [#1123] welcome-lock title override removed — Joyride walkthrough replaced welcome-agent
   const resolveThreadDisplayTitle = (threadId: string | null): string => {
-    if (!threadId) return 'Select a thread';
-    const t = threads.find(thr => thr.id === threadId);
-    // [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-    // if (
-    //   welcomeLocked &&
-    //   t?.id === welcomeThreadId &&
-    //   (t?.labels ?? []).includes(ONBOARDING_WELCOME_THREAD_LABEL)
-    // ) {
-    //   return 'Onboarding';
-    // }
-    return t?.title ?? 'Select a thread';
+    if (!threadId) return t('chat.selectThread');
+    const thr = threads.find(th => th.id === threadId);
+    return thr?.title ?? t('chat.selectThread');
   };
+
+  // Resolve the parent of the currently-selected thread, if any. Used to
+  // render the back-to-parent breadcrumb in the chat header so a user who
+  // dropped into a worker thread (via `WorkerThreadRefCard` or the
+  // `Workers` sidebar tab) can return to the conversation that spawned it
+  // — issue #1624 acceptance criterion "Parent ↔ worker navigation is
+  // bidirectional". Returns `null` when the active thread is a top-level
+  // conversation (no parent), so the header stays unchanged in the
+  // non-worker case.
+  const selectedThreadParent = useMemo(() => {
+    if (!selectedThreadId) return null;
+    const current = threads.find(thr => thr.id === selectedThreadId);
+    const parentId = current?.parentThreadId;
+    if (!parentId) return null;
+    const parent = threads.find(thr => thr.id === parentId);
+    return parent
+      ? { id: parent.id, title: parent.title || t('chat.parentThread') }
+      : { id: parentId, title: t('chat.parentThread') };
+  }, [threads, selectedThreadId, t]);
 
   return (
     <div
@@ -1018,14 +1138,16 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
           During welcome lockdown the sidebar is always open (effectiveShowSidebar
           is clamped to true) so the single onboarding thread is always visible. */}
       {!isSidebar && effectiveShowSidebar && (
-        <div className="w-64 flex-shrink-0 flex flex-col bg-white rounded-2xl shadow-soft border border-stone-200 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100">
-            <h2 className="text-sm font-semibold text-stone-700">Threads</h2>
-            {/* [#1123] welcomeLocked guard removed — always show new thread button */}
+        <div className="w-64 flex-shrink-0 flex flex-col bg-white dark:bg-neutral-900 rounded-2xl shadow-soft border border-stone-200 dark:border-neutral-800 overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100 dark:border-neutral-800">
+            <h2 className="text-sm font-semibold text-stone-700 dark:text-neutral-200">
+              {t('chat.threads')}
+            </h2>
             <button
+              data-testid="new-thread-sidebar-button"
               onClick={() => void handleCreateNewThread()}
-              className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-stone-100 text-stone-500 hover:text-stone-700 transition-colors"
-              title="New thread">
+              className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-stone-100 dark:hover:bg-neutral-800 dark:bg-neutral-800 dark:hover:bg-neutral-800/60 text-stone-500 dark:text-neutral-400 hover:text-stone-700 dark:hover:text-neutral-200 dark:text-neutral-200 dark:hover:text-neutral-200 transition-colors"
+              title={t('chat.newThread')}>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   strokeLinecap="round"
@@ -1036,8 +1158,7 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
               </svg>
             </button>
           </div>
-          {/* [#1123] welcomeLocked guard removed — always show label filter */}
-          <div className="px-4 py-2 border-b border-stone-50">
+          <div className="px-4 py-2 border-b border-stone-50 dark:border-neutral-800">
             <PillTabBar
               items={labelTabs}
               selected={selectedLabel}
@@ -1047,13 +1168,18 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
           </div>
           <div className="flex-1 overflow-y-auto">
             {sortedThreads.length === 0 ? (
-              <p className="px-4 py-6 text-xs text-stone-400 text-center">
-                {selectedLabel === 'all' ? 'No threads yet' : `No "${selectedLabel}" threads`}
+              <p className="px-4 py-6 text-xs text-stone-400 dark:text-neutral-500 text-center">
+                {selectedLabel === 'all'
+                  ? t('chat.noThreads')
+                  : selectedLabel === WORKERS_TAB_VALUE
+                    ? t('chat.noWorkerThreads')
+                    : t('chat.noLabelThreads').replace('{label}', selectedLabel)}
               </p>
             ) : (
               sortedThreads.map(thread => (
                 <div
                   key={thread.id}
+                  data-testid={`thread-row-${thread.id}`}
                   role="button"
                   tabIndex={0}
                   onClick={() => {
@@ -1068,30 +1194,32 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                       void dispatch(loadThreadMessages(thread.id));
                     }
                   }}
-                  className={`w-full text-left px-4 py-3 border-b border-stone-50 transition-colors group cursor-pointer ${
+                  className={`w-full text-left px-4 py-3 border-b border-stone-50 dark:border-neutral-800 transition-colors group cursor-pointer ${
                     selectedThreadId === thread.id
-                      ? 'bg-primary-50 border-l-2 border-l-primary-500'
-                      : 'hover:bg-stone-50'
+                      ? 'bg-primary-50 dark:bg-primary-900/30 border-l-2 border-l-primary-500'
+                      : 'hover:bg-stone-50 dark:hover:bg-neutral-800/60'
                   }`}>
                   <div className="flex items-center justify-between">
                     <p
                       className={`text-sm truncate flex-1 ${
                         selectedThreadId === thread.id
-                          ? 'font-medium text-primary-700'
-                          : 'text-stone-700'
+                          ? 'font-medium text-primary-700 dark:text-primary-200'
+                          : 'text-stone-700 dark:text-neutral-200'
                       }`}>
                       {resolveThreadDisplayTitle(thread.id)}
                     </p>
-                    {/* [#1123] welcomeLocked guard removed — always show delete button */}
                     <button
                       onClick={e => {
                         e.stopPropagation();
                         setDeleteModal({
                           isOpen: true,
-                          title: 'Delete thread',
-                          message: `Are you sure you want to delete "${thread.title || 'Untitled thread'}"? This cannot be undone.`,
-                          confirmText: 'Delete',
-                          cancelText: 'Cancel',
+                          title: t('chat.deleteThread'),
+                          message: t('chat.deleteThreadConfirm').replace(
+                            '{title}',
+                            thread.title || t('chat.untitledThread')
+                          ),
+                          confirmText: t('common.delete'),
+                          cancelText: t('common.cancel'),
                           destructive: true,
                           onConfirm: () => {
                             void dispatch(deleteThread(thread.id));
@@ -1099,8 +1227,8 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                           onCancel: () => {},
                         });
                       }}
-                      className="ml-2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-stone-200 text-stone-400 hover:text-coral-500 transition-all flex-shrink-0"
-                      title="Delete thread">
+                      className="ml-2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-stone-200 dark:bg-neutral-800 dark:hover:bg-neutral-800 text-stone-400 dark:text-neutral-500 hover:text-coral-500 transition-all flex-shrink-0"
+                      title={t('chat.deleteThread')}>
                       <svg
                         className="w-3 h-3"
                         fill="none"
@@ -1116,11 +1244,11 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                     </button>
                   </div>
                   {/* <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-[10px] text-stone-400">
+                    <span className="text-[10px] text-stone-400 dark:text-neutral-500">
                       {formatRelativeTime(thread.lastMessageAt)}
                     </span>
                     {thread.messageCount > 0 && (
-                      <span className="text-[10px] text-stone-400">
+                      <span className="text-[10px] text-stone-400 dark:text-neutral-500">
                         {thread.messageCount} msg{thread.messageCount !== 1 ? 's' : ''}
                       </span>
                     )}
@@ -1136,8 +1264,8 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
       <div
         className={
           isSidebar
-            ? 'flex-1 flex flex-col min-w-0 bg-white border-l border-stone-200 overflow-hidden'
-            : 'flex-1 flex flex-col min-w-0 max-w-2xl bg-white rounded-2xl shadow-soft border border-stone-200 overflow-hidden'
+            ? 'flex-1 flex flex-col min-w-0 bg-white dark:bg-neutral-900 border-l border-stone-200 dark:border-neutral-800 overflow-hidden'
+            : 'flex-1 flex flex-col min-w-0 max-w-2xl bg-white dark:bg-neutral-900 rounded-2xl shadow-soft border border-stone-200 dark:border-neutral-800 overflow-hidden'
         }>
         {/* Chat header — only shown in page mode; the sidebar embed uses the
             parent page's chrome instead. Hidden entirely during welcome
@@ -1145,12 +1273,12 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
             with no chrome around it. */}
         {!isSidebar && (
           <div
-            className="flex items-center gap-2 px-4 py-2.5 border-b border-stone-100"
+            className="flex items-center gap-2 px-4 py-2.5 border-b border-stone-100 dark:border-neutral-800"
             data-walkthrough="chat-agent-panel">
             <button
               onClick={() => setShowSidebar(prev => !prev)}
-              className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-stone-100 text-stone-500 hover:text-stone-700 transition-colors"
-              title={effectiveShowSidebar ? 'Hide sidebar' : 'Show sidebar'}>
+              className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-stone-100 dark:hover:bg-neutral-800 dark:bg-neutral-800 dark:hover:bg-neutral-800/60 text-stone-500 dark:text-neutral-400 hover:text-stone-700 dark:hover:text-neutral-200 dark:text-neutral-200 dark:hover:text-neutral-200 transition-colors"
+              title={effectiveShowSidebar ? t('chat.hideSidebar') : t('chat.showSidebar')}>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   strokeLinecap="round"
@@ -1160,28 +1288,170 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                 />
               </svg>
             </button>
-            <h3 className="text-sm font-medium text-stone-700 truncate flex-1">
-              {resolveThreadDisplayTitle(selectedThreadId)}
-            </h3>
-            {/* [#1123] welcomeLocked guard removed — always show token usage + new thread button */}
+            <div className="flex flex-col min-w-0 flex-1">
+              {selectedThreadParent ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    dispatch(setSelectedThread(selectedThreadParent.id));
+                    void dispatch(loadThreadMessages(selectedThreadParent.id));
+                  }}
+                  className="self-start flex items-center gap-1 text-[11px] font-medium text-primary-600 hover:text-primary-700 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-300 rounded -mx-1 px-1"
+                  data-testid="worker-thread-back-to-parent">
+                  <span aria-hidden="true">←</span>
+                  <span className="truncate max-w-[16rem]">
+                    {t('chat.backToThread').replace('{title}', selectedThreadParent.title)}
+                  </span>
+                </button>
+              ) : null}
+              {editingTitle ? (
+                <input
+                  ref={editTitleInputRef}
+                  value={editTitleValue}
+                  onChange={e => setEditTitleValue(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleCommitTitle();
+                    } else if (e.key === 'Escape') {
+                      setEditingTitle(false);
+                    }
+                  }}
+                  onBlur={handleCommitTitle}
+                  aria-label={t('chat.editThreadTitle')}
+                  className="h-5 text-sm font-medium text-stone-700 dark:text-neutral-200 bg-transparent border-b border-primary-400 outline-none w-full min-w-0 leading-none py-0"
+                  autoFocus
+                />
+              ) : (
+                <div className="flex items-center gap-1 group/title min-w-0">
+                  <h3 className="text-sm font-medium text-stone-700 dark:text-neutral-200 truncate">
+                    {resolveThreadDisplayTitle(selectedThreadId)}
+                  </h3>
+                  {selectedThreadId && (
+                    <button
+                      type="button"
+                      onClick={handleStartEditTitle}
+                      aria-label={t('chat.editThreadTitle')}
+                      title={t('chat.editThreadTitle')}
+                      className="opacity-0 group-hover/title:opacity-100 flex-shrink-0 w-5 h-5 flex items-center justify-center rounded hover:bg-stone-100 dark:hover:bg-neutral-800 text-stone-400 dark:text-neutral-500 hover:text-stone-600 dark:hover:text-neutral-300 transition-all">
+                      <svg
+                        className="w-3 h-3"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+                        />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
             <>
+              <div className="flex items-center gap-1">
+                <select
+                  aria-label={t('chat.agentProfile.label')}
+                  value={selectedAgentProfileId}
+                  onChange={event => void handleSelectAgentProfile(event.target.value)}
+                  className="h-7 max-w-[120px] rounded-lg border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2 text-xs text-stone-700 dark:text-neutral-200 outline-none transition-colors focus:border-primary-400">
+                  {agentProfiles.map(profile => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setProfileDraftOpen(prev => !prev)}
+                  className="h-7 w-7 rounded-lg text-xs font-medium text-stone-500 dark:text-neutral-400 transition-colors hover:bg-stone-100 dark:hover:bg-neutral-800 dark:bg-neutral-800 dark:hover:bg-neutral-800/60 hover:text-stone-700 dark:hover:text-neutral-200 dark:text-neutral-200 dark:hover:text-neutral-200"
+                  title={t('chat.agentProfile.create')}
+                  aria-label={t('chat.agentProfile.create')}>
+                  +
+                </button>
+              </div>
               <TokenUsagePill />
               <button
+                data-testid="new-thread-button"
                 onClick={() => void handleCreateNewThread()}
                 className="px-2.5 py-1 rounded-lg text-xs font-medium text-primary-600 hover:bg-primary-50 transition-colors"
-                title="New thread (/new)">
-                + New
+                title={t('chat.newThreadShortcut')}>
+                {t('chat.new')}
               </button>
             </>
           </div>
         )}
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-5 py-4 bg-[#f6f6f6]">
+        {!isSidebar && profileDraftOpen && (
+          <div className="border-b border-stone-100 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 py-3">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_140px]">
+              <input
+                value={profileDraft.name}
+                onChange={event => setProfileDraft(prev => ({ ...prev, name: event.target.value }))}
+                placeholder={t('chat.agentProfile.namePlaceholder')}
+                className="h-8 rounded-lg border border-stone-200 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200 px-3 text-xs outline-none focus:border-primary-400"
+              />
+              <select
+                value={profileDraft.agentId}
+                onChange={event =>
+                  setProfileDraft(prev => ({ ...prev, agentId: event.target.value }))
+                }
+                className="h-8 rounded-lg border border-stone-200 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200 px-2 text-xs outline-none focus:border-primary-400">
+                {agentProfileAgentOptions.map(agent => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <textarea
+              value={profileDraft.systemPromptSuffix}
+              onChange={event =>
+                setProfileDraft(prev => ({ ...prev, systemPromptSuffix: event.target.value }))
+              }
+              placeholder={t('chat.agentProfile.promptStylePlaceholder')}
+              rows={2}
+              className="mt-2 w-full resize-none rounded-lg border border-stone-200 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200 px-3 py-2 text-xs outline-none focus:border-primary-400"
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                value={profileDraft.allowedTools}
+                onChange={event =>
+                  setProfileDraft(prev => ({ ...prev, allowedTools: event.target.value }))
+                }
+                placeholder={t('chat.agentProfile.allowedToolsPlaceholder')}
+                className="h-8 min-w-0 flex-1 rounded-lg border border-stone-200 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200 px-3 text-xs outline-none focus:border-primary-400"
+              />
+              <button
+                type="button"
+                onClick={() => void handleCreateAgentProfile()}
+                disabled={!profileDraft.name.trim()}
+                className="h-8 rounded-lg bg-primary-500 px-3 text-xs font-medium text-white transition-colors hover:bg-primary-600 disabled:opacity-40">
+                {t('common.save')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setProfileDraft(DEFAULT_PROFILE_DRAFT);
+                  setProfileDraftOpen(false);
+                }}
+                className="h-8 rounded-lg border border-stone-200 dark:border-neutral-800 px-3 text-xs font-medium text-stone-600 dark:text-neutral-300 transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800/60">
+                {t('common.cancel')}
+              </button>
+            </div>
+          </div>
+        )}
+        <div
+          ref={messagesContainerRef}
+          className="flex-1 overflow-y-auto px-5 py-4 bg-[#f6f6f6] dark:bg-neutral-950">
           {isLoadingMessages ? (
             <div className="space-y-4">
               {Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className={`flex ${i % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
                   <div
-                    className={`h-12 rounded-2xl animate-pulse bg-stone-100 ${
+                    className={`h-12 rounded-2xl animate-pulse bg-stone-100 dark:bg-neutral-800 ${
                       i % 2 === 0 ? 'w-2/3' : 'w-1/2'
                     }`}
                   />
@@ -1202,16 +1472,29 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                   d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
                 />
               </svg>
-              <p className="text-sm text-stone-400 mb-1">Failed to load messages</p>
-              <p className="text-xs text-stone-600 mb-3 text-center">{messagesError}</p>
+              <p className="text-sm text-stone-400 dark:text-neutral-500 mb-1">
+                {t('chat.failedToLoadMessages')}
+              </p>
+              <p className="text-xs text-stone-600 dark:text-neutral-300 mb-3 text-center">
+                {messagesError}
+              </p>
               <button
                 onClick={() => window.location.reload()}
                 className="text-xs text-primary-400 hover:text-primary-300 transition-colors">
-                Reload
+                {t('common.reload')}
               </button>
             </div>
-          ) : hasVisibleMessages ? (
+          ) : hasVisibleMessages || hasTaskBoard ? (
             <div className="space-y-3">
+              {selectedTaskBoard && hasTaskBoard && (
+                <TaskKanbanBoard
+                  board={selectedTaskBoard}
+                  disabled={!selectedThreadId}
+                  onMove={(card, status) => {
+                    void handleMoveTaskCard(card, status);
+                  }}
+                />
+              )}
               {visibleMessages.map(msg => (
                 <div key={msg.id}>
                   {shouldRenderTimelineBeforeLatestAgentMessage &&
@@ -1259,7 +1542,7 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                             return <CitationChips citations={citations} />;
                           })()}
                           {latestVisibleMessage?.id === msg.id && (
-                            <p className="px-1 text-[10px] text-stone-400">
+                            <p className="px-1 text-[10px] text-stone-400 dark:text-neutral-500">
                               {formatRelativeTime(msg.createdAt)}
                             </p>
                           )}
@@ -1276,8 +1559,8 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                       )}
                       <button
                         onClick={() => handleCopyMessage(msg.id, msg.content)}
-                        className={`absolute -top-1 ${msg.sender === 'user' ? '-left-8' : '-right-8'} p-1 rounded-md opacity-0 group-hover/msg:opacity-100 hover:bg-stone-100 text-stone-400 hover:text-stone-600 transition-all`}
-                        title="Copy message">
+                        className={`absolute -top-1 ${msg.sender === 'user' ? '-left-8' : '-right-8'} p-1 rounded-md opacity-0 group-hover/msg:opacity-100 hover:bg-stone-100 dark:hover:bg-neutral-800 dark:bg-neutral-800 dark:hover:bg-neutral-800 text-stone-400 dark:text-neutral-500 hover:text-stone-600 dark:hover:text-neutral-300 transition-all`}
+                        title={t('chat.copyResponse')}>
                         {copiedMessageId === msg.id ? (
                           <svg
                             className="w-3.5 h-3.5 text-sage-500"
@@ -1329,13 +1612,13 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                                   )
                                 }
                                 className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-primary-100 border border-primary-200 text-xs transition-colors hover:bg-primary-200"
-                                title={`Remove ${emoji}`}>
+                                title={t('chat.removeReaction').replace('{emoji}', emoji)}>
                                 {emoji}
                               </button>
                             ))}
                             {msg.sender === 'agent' &&
                               (reactionPickerMsgId === msg.id ? (
-                                <div className="flex items-center gap-0.5 px-1 py-0.5 rounded-full bg-stone-100">
+                                <div className="flex items-center gap-0.5 px-1 py-0.5 rounded-full bg-stone-100 dark:bg-neutral-800">
                                   {['👍', '❤️', '😂', '🔥', '👀', '🎯'].map(emoji => (
                                     <button
                                       key={emoji}
@@ -1358,15 +1641,15 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                                   ))}
                                   <button
                                     onClick={() => setReactionPickerMsgId(null)}
-                                    className="ml-0.5 text-stone-600 hover:text-stone-400 text-xs px-0.5">
+                                    className="ml-0.5 text-stone-600 dark:text-neutral-300 hover:text-stone-400 dark:hover:text-neutral-500 text-xs px-0.5">
                                     ✕
                                   </button>
                                 </div>
                               ) : (
                                 <button
                                   onClick={() => setReactionPickerMsgId(msg.id)}
-                                  className="opacity-0 group-hover/msg:opacity-100 flex items-center px-1.5 py-0.5 rounded-full bg-stone-50 hover:bg-stone-200 text-stone-500 hover:text-stone-300 text-xs transition-all"
-                                  title="Add reaction">
+                                  className="opacity-0 group-hover/msg:opacity-100 flex items-center px-1.5 py-0.5 rounded-full bg-stone-50 dark:bg-neutral-800/60 hover:bg-stone-200 dark:bg-neutral-800 dark:hover:bg-neutral-800 text-stone-500 dark:text-neutral-400 hover:text-stone-300 dark:hover:text-neutral-600 text-xs transition-all"
+                                  title={t('chat.addReaction')}>
                                   +
                                 </button>
                               ))}
@@ -1387,11 +1670,11 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                   (selectedStreamingAssistant?.thinking.length ?? 0) > 0
                 ) && (
                   <div className="flex justify-start">
-                    <div className="bg-stone-200/80 rounded-2xl rounded-bl-md px-4 py-3">
+                    <div className="bg-stone-200/80 dark:bg-neutral-800 rounded-2xl rounded-bl-md px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-stone-500 animate-bounce [animation-delay:0ms]" />
-                        <span className="w-1.5 h-1.5 rounded-full bg-stone-500 animate-bounce [animation-delay:150ms]" />
-                        <span className="w-1.5 h-1.5 rounded-full bg-stone-500 animate-bounce [animation-delay:300ms]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-stone-50 dark:bg-neutral-800/600 animate-bounce [animation-delay:0ms]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-stone-50 dark:bg-neutral-800/600 animate-bounce [animation-delay:150ms]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-stone-50 dark:bg-neutral-800/600 animate-bounce [animation-delay:300ms]" />
                       </div>
                     </div>
                   </div>
@@ -1406,21 +1689,23 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                   <div className="flex justify-start">
                     <div className="relative w-fit max-w-[75%]">
                       {selectedStreamingAssistant.thinking.length > 0 && (
-                        <details className="mb-1.5 bg-stone-100 rounded-lg px-3 py-1.5 text-xs text-stone-600 open:bg-stone-100">
+                        <details className="mb-1.5 bg-stone-100 dark:bg-neutral-800 rounded-lg px-3 py-1.5 text-xs text-stone-600 dark:text-neutral-300 open:bg-stone-100 dark:bg-neutral-800 dark:open:bg-neutral-800">
                           <summary className="cursor-pointer select-none flex items-center gap-1.5">
                             <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary-400 animate-pulse" />
-                            <span>Thinking…</span>
+                            <span>{t('chat.thinking')}</span>
                           </summary>
-                          <pre className="whitespace-pre-wrap break-words mt-1.5 font-sans text-[11px] text-stone-500">
+                          <pre className="whitespace-pre-wrap break-words mt-1.5 font-sans text-[11px] text-stone-500 dark:text-neutral-400">
                             {selectedStreamingAssistant.thinking.slice(-STREAMING_PREVIEW_CHARS)}
                           </pre>
                         </details>
                       )}
                       {selectedStreamingAssistant.content.length > 0 && (
-                        <div className="rounded-2xl rounded-bl-md px-3 py-1.5 bg-stone-200/80 text-stone-900">
-                          <p className="text-xs text-stone-700 font-mono whitespace-pre-wrap break-words leading-snug">
+                        <div className="rounded-2xl rounded-bl-md px-3 py-1.5 bg-stone-200/80 dark:bg-neutral-800 text-stone-900 dark:text-neutral-100">
+                          <p className="text-xs text-stone-700 dark:text-neutral-200 font-mono whitespace-pre-wrap break-words leading-snug">
                             {selectedStreamingAssistant.content.length >
-                              STREAMING_PREVIEW_CHARS && <span className="text-stone-400">…</span>}
+                              STREAMING_PREVIEW_CHARS && (
+                              <span className="text-stone-400 dark:text-neutral-500">…</span>
+                            )}
                             {selectedStreamingAssistant.content.slice(-STREAMING_PREVIEW_CHARS)}
                             <span className="inline-block w-1 h-3 ml-0.5 align-middle bg-primary-400 animate-pulse" />
                           </p>
@@ -1431,13 +1716,16 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                 )}
               {/* Inference status indicator */}
               {selectedInferenceStatus && (
-                <div className="flex items-center gap-2 px-1 py-1.5 text-xs text-stone-500">
+                <div className="flex items-center gap-2 px-1 py-1.5 text-xs text-stone-500 dark:text-neutral-400">
                   <span className="inline-block w-2 h-2 rounded-full bg-primary-400 animate-pulse" />
                   <span>
                     {selectedInferenceStatus.phase === 'thinking' &&
                       (selectedInferenceStatus.iteration > 0
-                        ? `Thinking (iteration ${selectedInferenceStatus.iteration})...`
-                        : 'Thinking...')}
+                        ? t('chat.thinkingIteration').replace(
+                            '{n}',
+                            String(selectedInferenceStatus.iteration)
+                          )
+                        : t('chat.thinkingDots'))}
                     {selectedInferenceStatus.phase === 'tool_use' &&
                       `${
                         formatTimelineEntry(
@@ -1474,36 +1762,21 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                     onClick={() => {
                       if (selectedThreadId) void chatCancel(selectedThreadId);
                     }}
-                    className="text-xs text-stone-500 hover:text-stone-700 transition-colors">
-                    Cancel
+                    className="text-xs text-stone-500 dark:text-neutral-400 hover:text-stone-700 dark:hover:text-neutral-200 dark:text-neutral-200 dark:hover:text-neutral-200 transition-colors">
+                    {t('common.cancel')}
                   </button>
                 </div>
               )}
               <div ref={messagesEndRef} />
             </div>
           ) : (
-            // [#1123] Commented out — welcome-agent onboarding replaced by Joyride walkthrough
-            // ) : welcomeThreadId && selectedThreadId === welcomeThreadId ? (
-            //   // Welcome thread, no messages yet — the proactive welcome agent
-            //   // is running in the background. Show a friendly loader until
-            //   // the first agent message lands (which flips us into the
-            //   // `hasVisibleMessages` branch above).
-            //   <div className="flex-1 flex flex-col items-center justify-center h-full gap-3">
-            //     <div className="flex items-center gap-1">
-            //       <span className="w-2 h-2 rounded-full bg-stone-500 animate-bounce [animation-delay:0ms]" />
-            //       <span className="w-2 h-2 rounded-full bg-stone-500 animate-bounce [animation-delay:150ms]" />
-            //       <span className="w-2 h-2 rounded-full bg-stone-500 animate-bounce [animation-delay:300ms]" />
-            //     </div>
-            //     <WelcomeThinkingTypewriter />
-            //   </div>
             <div className="flex-1 flex items-center justify-center h-full">
-              <p className="text-sm text-stone-600">No messages yet</p>
+              <p className="text-sm text-stone-600 dark:text-neutral-300">{t('chat.noMessages')}</p>
             </div>
           )}
         </div>
 
-        <div className="flex-shrink-0 border-t border-stone-200 px-4 py-3">
-          {/* [#1123] welcomeLocked and welcomePending guards removed — Joyride walkthrough replaced welcome-agent */}
+        <div className="flex-shrink-0 border-t border-stone-200 dark:border-neutral-800 px-4 py-3">
           <>
             {isNearLimit &&
               !isAtLimit &&
@@ -1512,9 +1785,12 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                 <div className="mb-3">
                   <UpsellBanner
                     variant="warning"
-                    title="Approaching usage limit"
-                    message={`You've used ${Math.round(Math.max(usagePct10h, usagePct7d) * 100)}% of your inference budget. Upgrade for higher limits.`}
-                    ctaLabel="Upgrade"
+                    title={t('chat.approachingLimit')}
+                    message={t('chat.approachingLimitMsg').replace(
+                      '{pct}',
+                      String(Math.round(usagePct * 100))
+                    )}
+                    ctaLabel={t('chat.upgrade')}
                     onCtaClick={() => {
                       void openUrl(BILLING_DASHBOARD_URL);
                     }}
@@ -1523,7 +1799,7 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                   />
                 </div>
               )}
-            {teamUsage && (shouldShowBudgetCompletedMessage || isRateLimited) && (
+            {teamUsage && shouldShowBudgetCompletedMessage && (
               <div className="mb-3 p-3 rounded-xl bg-coral-50 border border-coral-200 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 min-w-0">
                   <svg
@@ -1539,83 +1815,50 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                     />
                   </svg>
                   <p className="text-xs text-coral-600 truncate">
-                    {shouldShowBudgetCompletedMessage
-                      ? teamUsage.cycleBudgetUsd > 0
-                        ? `You've hit your weekly limit.${teamUsage.cycleEndsAt ? ` Resets ${formatResetTime(teamUsage.cycleEndsAt)}.` : ''} Top up to continue.`
-                        : 'Your included budget is complete. Add credits or upgrade to continue.'
-                      : `10-hour rate limit reached.${teamUsage.fiveHourResetsAt ? ` Resets ${formatResetTime(teamUsage.fiveHourResetsAt)}.` : ''}`}
+                    {teamUsage.cycleBudgetUsd > 0
+                      ? `${t('chat.weeklyLimitHit')}${teamUsage.cycleEndsAt ? ` ${t('chat.resets')} ${formatResetTime(teamUsage.cycleEndsAt)}.` : ''} ${t('chat.topUpToContinue')}`
+                      : t('chat.budgetComplete')}
                   </p>
                 </div>
-                {shouldShowBudgetCompletedMessage && (
-                  <button
-                    onClick={() => {
-                      void openUrl(BILLING_DASHBOARD_URL);
-                    }}
-                    className="flex-shrink-0 px-3 py-1.5 rounded-lg bg-coral-500 hover:bg-coral-400 text-white text-xs font-medium transition-colors">
-                    Top Up
-                  </button>
-                )}
+                <button
+                  onClick={() => {
+                    void openUrl(BILLING_DASHBOARD_URL);
+                  }}
+                  className="flex-shrink-0 px-3 py-1.5 rounded-lg bg-coral-500 hover:bg-coral-400 text-white text-xs font-medium transition-colors">
+                  {t('chat.topUp')}
+                </button>
               </div>
             )}
 
-            {/* Quota / usage pills — hidden during welcome lockdown so the
-                  onboarding chat doesn't surface billing affordances. */}
+            {/* Cycle usage pill. Backend PR #790 dropped rate-limit gating —
+                  only budget-based pressure is surfaced here now. */}
             <div className="flex items-center justify-end gap-2 mb-2">
               {(isLoadingBudget || teamUsage) && (
                 <div className="relative group">
                   {teamUsage ? (
-                    <div className="flex items-center gap-2">
-                      {!teamUsage.bypassCycleLimit && (
-                        <LimitPill
-                          label="5h"
-                          usedPct={
-                            teamUsage.fiveHourCapUsd > 0
-                              ? Math.min(1, teamUsage.cycleLimit5hr / teamUsage.fiveHourCapUsd)
-                              : 0
-                          }
-                        />
-                      )}
-                      <LimitPill
-                        label="7d"
-                        usedPct={
-                          teamUsage.cycleBudgetUsd > 0
-                            ? Math.min(
-                                1,
-                                (teamUsage.cycleBudgetUsd - teamUsage.remainingUsd) /
-                                  teamUsage.cycleBudgetUsd
-                              )
-                            : 0
-                        }
-                      />
-                    </div>
+                    <LimitPill label={t('chat.cycle')} usedPct={usagePct} />
                   ) : (
-                    <span className="text-[10px] text-stone-400 animate-pulse">loading…</span>
+                    <span className="text-[10px] text-stone-400 dark:text-neutral-500 animate-pulse">
+                      {t('common.loading')}
+                    </span>
                   )}
                   {teamUsage && (
                     <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block z-50">
                       <div className="bg-stone-900 text-white text-[10px] rounded-lg px-3 py-2 shadow-lg whitespace-nowrap space-y-1.5">
-                        {!teamUsage.bypassCycleLimit && (
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="text-stone-400">5-hour limit</span>
-                            <span>
-                              ${(teamUsage.cycleLimit5hr ?? 0).toFixed(2)} / $
-                              {(teamUsage.fiveHourCapUsd ?? 0).toFixed(2)}
-                              {teamUsage.fiveHourResetsAt && (
-                                <span className="text-stone-400 ml-1">
-                                  — resets {formatResetTime(teamUsage.fiveHourResetsAt)}
-                                </span>
-                              )}
-                            </span>
-                          </div>
-                        )}
                         <div className="flex items-center justify-between gap-4">
-                          <span className="text-stone-400">Weekly limit</span>
+                          <span className="text-stone-400">{t('chat.cycleSpent')}</span>
                           <span>
-                            ${(teamUsage.remainingUsd ?? 0).toFixed(2)} / $
-                            {(teamUsage.cycleBudgetUsd ?? 0).toFixed(2)} left
+                            ${(teamUsage.cycleSpentUsd ?? 0).toFixed(2)} / $
+                            {(teamUsage.cycleBudgetUsd ?? 0).toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-4">
+                          <span className="text-stone-400">{t('chat.cycleRemaining')}</span>
+                          <span>
+                            ${(teamUsage.remainingUsd ?? 0).toFixed(2)} {t('chat.left')}
                             {teamUsage.cycleEndsAt && (
-                              <span className="text-stone-400 ml-1">
-                                — resets {formatResetTime(teamUsage.cycleEndsAt)}
+                              <span className="text-stone-400 dark:text-neutral-500 ml-1">
+                                — {t('chat.resets')} {formatResetTime(teamUsage.cycleEndsAt)}
                               </span>
                             )}
                           </span>
@@ -1635,8 +1878,8 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
               </p>
               <button
                 onClick={() => setSendAdvisory(null)}
-                className="text-xs text-stone-500 hover:text-stone-700 transition-colors ml-2">
-                Dismiss
+                className="text-xs text-stone-500 dark:text-neutral-400 hover:text-stone-700 dark:hover:text-neutral-200 dark:text-neutral-200 dark:hover:text-neutral-200 transition-colors ml-2">
+                {t('common.dismiss')}
               </button>
             </div>
           )}
@@ -1648,63 +1891,116 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
               </p>
               <div className="flex items-center gap-2 flex-shrink-0 ml-2">
                 {(sendError.code === 'stt_not_ready' ||
-                  sendError.code === 'voice_transcription') && (
+                  sendError.code === 'voice_transcription' ||
+                  sendError.code === 'tts_not_ready' ||
+                  sendError.code === 'voice_synthesis') && (
                   <button
                     onClick={() => {
                       setSendError(null);
-                      navigate('/settings/local-model');
+                      // STT/TTS provider settings live on the Voice panel
+                      // since PR 2; the legacy local-model route was for
+                      // back when speech assets were lumped with Ollama.
+                      navigate('/settings/voice');
                     }}
                     className="text-xs text-primary-500 hover:text-primary-600 font-medium transition-colors">
-                    Set up
+                    {t('chat.setup')}
                   </button>
                 )}
                 <button
                   onClick={() => setSendError(null)}
-                  className="text-xs text-stone-500 hover:text-stone-700 transition-colors">
-                  Dismiss
+                  className="text-xs text-stone-500 dark:text-neutral-400 hover:text-stone-700 dark:hover:text-neutral-200 dark:text-neutral-200 dark:hover:text-neutral-200 transition-colors">
+                  {t('common.dismiss')}
                 </button>
               </div>
             </div>
           )}
 
+          {(() => {
+            // Surface a parked ApprovalGate request for the shown thread just
+            // above the composer, so it stays visible regardless of scroll.
+            const approvalThreadId = selectedThreadId ?? activeThreadId;
+            const pendingApproval = approvalThreadId
+              ? pendingApprovalByThread[approvalThreadId]
+              : undefined;
+            return pendingApproval && approvalThreadId ? (
+              <div className="mb-2">
+                <ApprovalRequestCard threadId={approvalThreadId} approval={pendingApproval} />
+              </div>
+            ) : null;
+          })()}
+
           {composer === 'mic-cloud' ? (
-            <MicCloudComposer
-              // Without `!selectedThreadId`, a mic submit before a thread is
-              // ready hits `handleSendMessage`'s early return and the
-              // transcript is silently dropped — the user spoke into the void.
-              disabled={composerInteractionBlocked || !selectedThreadId}
-              onSubmit={text => handleSendMessage(text)}
-              onError={message => setSendError(chatSendError('voice_transcription', message))}
-              showDeviceSelector
-            />
+            <div className="flex flex-col items-center gap-3 py-1">
+              <MicComposer
+                // Without `!selectedThreadId`, a mic submit before a thread is
+                // ready hits `handleSendMessage`'s early return and the
+                // transcript is silently dropped — the user spoke into the void.
+                disabled={composerInteractionBlocked || isSending || !selectedThreadId}
+                onSubmit={text => handleSendMessage(text)}
+                onError={message => setSendError(chatSendError('voice_transcription', message))}
+                showDeviceSelector
+                onSwitchToText={() => setComposerOverride('text')}
+              />
+            </div>
           ) : inputMode === 'text' ? (
             <div className="flex items-end gap-3">
-              <div className="relative flex flex-1 items-center justify-center rounded-xl border border-stone-200 bg-white transition-all focus-within:border-primary-500/50 focus-within:ring-1 focus-within:ring-primary-500/50">
+              <div className="relative flex flex-1 items-center justify-center rounded-xl border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 transition-all focus-within:border-primary-500/50 focus-within:ring-1 focus-within:ring-primary-500/50">
                 <div
                   aria-hidden
                   className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-4 py-2.5 text-sm leading-normal font-sans">
                   <span className="invisible">{inputValue}</span>
-                  <span className="text-stone-500/50">{inlineCompletionSuffix}</span>
+                  <span className="text-stone-500 dark:text-neutral-400/50">
+                    {inlineCompletionSuffix}
+                  </span>
                 </div>
                 <textarea
                   ref={textInputRef}
                   value={inputValue}
                   onChange={e => setInputValue(e.target.value)}
+                  onCompositionStart={() => {
+                    isComposingTextRef.current = true;
+                  }}
+                  onCompositionEnd={() => {
+                    isComposingTextRef.current = false;
+                  }}
                   onKeyDown={handleInputKeyDown}
-                  placeholder="Type a message..."
+                  placeholder={t('chat.typeMessage')}
                   rows={1}
-                  disabled={composerInteractionBlocked}
-                  className="relative z-10 w-full resize-none border-0 bg-transparent pl-4 pr-10 py-2.5 text-sm leading-normal whitespace-pre-wrap break-words font-sans text-stone-900 placeholder:text-stone-400 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 max-h-32 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={composerInteractionBlocked || isSending}
+                  className="relative z-10 w-full resize-none border-0 bg-transparent pl-4 pr-10 py-2.5 text-sm leading-normal whitespace-pre-wrap break-words font-sans text-stone-900 dark:text-neutral-100 placeholder:text-stone-400 dark:placeholder:text-neutral-500 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 max-h-32 disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 {/* Voice input mic hidden per #717 (inputMode='voice' path retained). */}
               </div>
               <button
-                aria-label="Send message"
-                title="Send message"
+                type="button"
+                aria-label={t('mic.startRecording')}
+                title={t('mic.startRecording')}
+                onClick={() => setComposerOverride('mic-cloud')}
+                disabled={composerInteractionBlocked || isSending}
+                className="w-10 h-10 flex items-center justify-center rounded-full border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-stone-500 dark:text-neutral-400 hover:text-primary-500 dark:hover:text-primary-400 hover:border-primary-300 dark:hover:border-primary-700 transition-colors flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"
+                  />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 10v2a7 7 0 01-14 0v-2M12 19v4m-4 0h8"
+                  />
+                </svg>
+              </button>
+              <button
+                data-testid="send-message-button"
+                aria-label={t('chat.send')}
+                title={t('chat.send')}
                 onClick={() => {
                   void handleSendMessage();
                 }}
-                disabled={!inputValue.trim() || composerInteractionBlocked}
+                disabled={!inputValue.trim() || composerInteractionBlocked || isSending}
                 className="w-10 h-10 flex items-center justify-center rounded-full bg-primary-500 hover:bg-primary-600 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
                 {isSending ? (
                   <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -1740,8 +2036,8 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                 type="button"
                 onClick={() => setInputMode('text')}
                 disabled={isRecording || isTranscribing}
-                className="w-10 h-10 flex items-center justify-center rounded-full border border-stone-200 bg-white text-stone-500 hover:text-stone-700 hover:border-stone-300 transition-colors disabled:opacity-40"
-                title="Switch to text input">
+                className="w-10 h-10 flex items-center justify-center rounded-full border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-stone-500 dark:text-neutral-400 hover:text-stone-700 dark:hover:text-neutral-200 dark:text-neutral-200 dark:hover:text-neutral-200 hover:border-stone-300 dark:hover:border-neutral-700 transition-colors disabled:opacity-40"
+                title={t('chat.switchToText')}>
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
                     strokeLinecap="round"
@@ -1762,27 +2058,24 @@ const Conversations = ({ variant = 'page', composer = 'text' }: ConversationsPro
                     ? 'bg-coral-500 hover:bg-coral-400 text-white'
                     : 'bg-primary-600 hover:bg-primary-500 text-white'
                 } disabled:opacity-40 disabled:cursor-not-allowed`}>
-                {isTranscribing ? 'Transcribing…' : isRecording ? 'Stop & Send' : 'Start Talking'}
+                {isTranscribing
+                  ? t('chat.transcribing')
+                  : isRecording
+                    ? t('chat.stopAndSend')
+                    : t('chat.startTalking')}
               </button>
-              <p className="text-xs text-stone-400 truncate">
+              <p className="text-xs text-stone-400 dark:text-neutral-500 truncate">
                 {voiceStatus ??
                   (isPlayingReply && replyMode === 'voice'
-                    ? 'Playing voice reply…'
+                    ? t('chat.playingVoiceReply')
                     : canUseMicrophoneApi
-                      ? 'Click "Start Talking" to speak to the agent.'
-                      : 'Microphone input is not available in this runtime.')}
+                      ? t('chat.voiceHint')
+                      : t('chat.micUnavailable'))}
               </p>
             </div>
           )}
         </div>
       </div>
-      <UsageLimitModal
-        open={showLimitModal}
-        onClose={() => setShowLimitModal(false)}
-        isBudgetExhausted={isBudgetExhausted}
-        resetTime={isBudgetExhausted ? teamUsage?.cycleEndsAt : teamUsage?.fiveHourResetsAt}
-        currentTier={currentTier}
-      />
       <ConfirmationModal
         modal={deleteModal}
         onClose={() => setDeleteModal(prev => ({ ...prev, isOpen: false }))}

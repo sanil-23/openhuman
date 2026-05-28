@@ -291,8 +291,15 @@ fn handle_status(_params: Map<String, Value>) -> ControllerFuture {
             })
             .map_err(|e| e.to_string())?;
 
+        let provider_unavailable_reason = if hb.enabled && hb.inference_enabled {
+            super::engine::subconscious_provider_unavailable_reason(&config)
+        } else {
+            None
+        };
         let status = super::types::SubconsciousStatus {
             enabled: hb.enabled && hb.inference_enabled,
+            provider_available: provider_unavailable_reason.is_none(),
+            provider_unavailable_reason,
             interval_minutes: hb.interval_minutes.max(5),
             last_tick_at,
             total_ticks,
@@ -558,9 +565,9 @@ fn handle_reflections_act(params: Map<String, Value>) -> ControllerFuture {
             }
         };
         let now_iso = chrono::Utc::now().to_rfc3339();
-        crate::openhuman::memory::conversations::ensure_thread(
+        crate::openhuman::memory_conversations::ensure_thread(
             config.workspace_dir.clone(),
-            crate::openhuman::memory::conversations::CreateConversationThread {
+            crate::openhuman::memory_conversations::CreateConversationThread {
                 id: thread_id.clone(),
                 title: thread_title,
                 created_at: now_iso.clone(),
@@ -593,7 +600,7 @@ fn handle_reflections_act(params: Map<String, Value>) -> ControllerFuture {
             "source_refs": reflection.source_refs,
             "origin": "subconscious_reflection",
         });
-        let seed_message = crate::openhuman::memory::conversations::ConversationMessage {
+        let seed_message = crate::openhuman::memory_conversations::ConversationMessage {
             id: uuid::Uuid::new_v4().to_string(),
             content: body_md,
             message_type: "text".to_string(),
@@ -601,7 +608,7 @@ fn handle_reflections_act(params: Map<String, Value>) -> ControllerFuture {
             sender: "assistant".to_string(),
             created_at: now_iso,
         };
-        crate::openhuman::memory::conversations::append_message(
+        crate::openhuman::memory_conversations::append_message(
             config.workspace_dir.clone(),
             &thread_id,
             seed_message,

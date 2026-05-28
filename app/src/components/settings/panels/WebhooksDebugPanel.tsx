@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useBackendUrl } from '../../../hooks/useBackendUrl';
+import { useT } from '../../../lib/i18n/I18nContext';
 import { tunnelsApi } from '../../../services/api/tunnelsApi';
-import { getCoreHttpBaseUrl } from '../../../services/coreRpcClient';
+import {
+  buildWebhookEventsUrl,
+  getCoreHttpBaseUrl,
+  getCoreRpcToken,
+} from '../../../services/coreRpcClient';
 import {
   openhumanWebhooksClearLogs,
   openhumanWebhooksListLogs,
@@ -39,6 +44,7 @@ function prettyJson(value: unknown): string {
 }
 
 const WebhooksDebugPanel = () => {
+  const { t } = useT();
   const { navigateBack, breadcrumbs } = useSettingsNavigation();
   const backendUrl = useBackendUrl();
   const [registrations, setRegistrations] = useState<WebhookDebugRegistration[]>([]);
@@ -66,12 +72,12 @@ const WebhooksDebugPanel = () => {
       );
     } catch (loadError) {
       setError(
-        loadError instanceof Error ? loadError.message : 'Failed to load webhook debug data'
+        loadError instanceof Error ? loadError.message : t('webhooks.failedToLoadDebugData')
       );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void loadData();
@@ -83,9 +89,20 @@ const WebhooksDebugPanel = () => {
 
     const connect = async () => {
       try {
-        const baseUrl = await getCoreHttpBaseUrl();
+        const [baseUrl, coreRpcToken] = await Promise.all([
+          getCoreHttpBaseUrl(),
+          getCoreRpcToken(),
+        ]);
         if (cancelled) return;
-        eventSource = new EventSource(`${baseUrl}/events/webhooks`);
+
+        const url = buildWebhookEventsUrl(baseUrl, coreRpcToken);
+        if (!url) {
+          // No bearer available — skip rather than open an unauth request
+          // that the server will 401 and EventSource will reconnect to forever.
+          setIsLive(false);
+          return;
+        }
+        eventSource = new EventSource(url);
 
         eventSource.addEventListener('webhooks_debug', event => {
           setIsLive(true);
@@ -122,7 +139,7 @@ const WebhooksDebugPanel = () => {
   );
 
   const handleClearLogs = useCallback(async () => {
-    const confirmed = window.confirm('Clear all captured webhook debug logs?');
+    const confirmed = window.confirm(t('webhooks.clearLogsConfirm'));
     if (!confirmed) return;
 
     setClearing(true);
@@ -131,16 +148,16 @@ const WebhooksDebugPanel = () => {
       await openhumanWebhooksClearLogs();
       await loadData();
     } catch (clearError) {
-      setError(clearError instanceof Error ? clearError.message : 'Failed to clear webhook logs');
+      setError(clearError instanceof Error ? clearError.message : t('webhooks.failedToClearLogs'));
     } finally {
       setClearing(false);
     }
-  }, [loadData]);
+  }, [loadData, t]);
 
   return (
-    <div>
+    <div data-testid="webhooks-debug-panel">
       <SettingsHeader
-        title="Webhooks Debug"
+        title={t('webhooks.debugTitle')}
         showBackButton={true}
         onBack={navigateBack}
         breadcrumbs={breadcrumbs}
@@ -153,65 +170,76 @@ const WebhooksDebugPanel = () => {
             type="button"
             onClick={() => void loadData()}
             disabled={loading}
-            className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-50">
-            {loading ? 'Loading...' : 'Refresh'}
+            className="rounded-lg border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-3 py-1.5 font-medium text-stone-700 dark:text-neutral-200 hover:bg-stone-100 dark:hover:bg-neutral-800 dark:bg-neutral-800 dark:hover:bg-neutral-800 dark:bg-neutral-800 disabled:opacity-50">
+            {loading ? t('webhooks.loading') : t('webhooks.refresh')}
           </button>
           <button
             type="button"
             onClick={() => void handleClearLogs()}
             disabled={clearing || logs.length === 0}
-            className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-50">
-            {clearing ? 'Clearing...' : 'Clear Logs'}
+            className="rounded-lg border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-3 py-1.5 font-medium text-stone-700 dark:text-neutral-200 hover:bg-stone-100 dark:hover:bg-neutral-800 dark:bg-neutral-800 dark:hover:bg-neutral-800 dark:bg-neutral-800 disabled:opacity-50">
+            {clearing ? t('webhooks.clearing') : t('webhooks.clearLogs')}
           </button>
-          <span className="text-stone-500">
-            {registrations.length} registered &middot; {logs.length} captured &middot;{' '}
-            <span className={isLive ? 'text-sage-600' : 'text-stone-400'}>
-              {isLive ? 'live' : 'disconnected'}
+          <span className="text-stone-500 dark:text-neutral-400">
+            {registrations.length} {t('webhooks.registered')} &middot; {logs.length}{' '}
+            {t('webhooks.captured')} &middot;{' '}
+            <span
+              className={
+                isLive ? 'text-sage-600 dark:text-sage-300' : 'text-stone-400 dark:text-neutral-500'
+              }>
+              {isLive ? t('webhooks.live') : t('webhooks.disconnected')}
             </span>
           </span>
         </div>
 
         {error && (
-          <div className="rounded-lg border border-coral-200 bg-coral-50 px-3 py-2 text-xs text-coral-700">
+          <div className="rounded-lg border border-coral-200 dark:border-coral-500/30 bg-coral-50 dark:bg-coral-500/10 px-3 py-2 text-xs text-coral-700 dark:text-coral-300">
             {error}
           </div>
         )}
 
         {lastEvent && (
-          <div className="text-xs text-stone-500">
-            Last event: <span className="font-medium text-stone-700">{lastEvent.event_type}</span>{' '}
-            at {formatDateTime(lastEvent.timestamp)}
+          <div className="text-xs text-stone-500 dark:text-neutral-400">
+            {t('webhooks.lastEvent')}:{' '}
+            <span className="font-medium text-stone-700 dark:text-neutral-200">
+              {lastEvent.event_type}
+            </span>{' '}
+            {t('webhooks.at')} {formatDateTime(lastEvent.timestamp)}
           </div>
         )}
 
         {/* Registrations */}
         <section className="space-y-2">
-          <h3 className="text-sm font-semibold text-stone-900">Registered Webhooks</h3>
+          <h3 className="text-sm font-semibold text-stone-900 dark:text-neutral-100">
+            {t('webhooks.registeredWebhooks')}
+          </h3>
           {registrations.length === 0 ? (
-            <p className="text-xs text-stone-400">No active registrations.</p>
+            <p className="text-xs text-stone-400 dark:text-neutral-500">
+              {t('webhooks.noActiveRegistrations')}
+            </p>
           ) : (
             <div className="space-y-2">
               {registrations.map(registration => (
                 <div
                   key={registration.tunnel_uuid}
-                  className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+                  className="rounded-xl border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-stone-900">
+                    <span className="text-xs font-semibold text-stone-900 dark:text-neutral-100">
                       {registration.tunnel_name || registration.tunnel_uuid}
                     </span>
                     <div className="flex gap-1 text-[10px]">
-                      <span className="rounded-full bg-stone-200 px-2 py-0.5 text-stone-600">
+                      <span className="rounded-full bg-stone-200 dark:bg-neutral-800 px-2 py-0.5 text-stone-600 dark:text-neutral-300">
                         {registration.target_kind}
                       </span>
-                      <span className="rounded-full bg-stone-200 px-2 py-0.5 text-stone-600">
+                      <span className="rounded-full bg-stone-200 dark:bg-neutral-800 px-2 py-0.5 text-stone-600 dark:text-neutral-300">
                         {registration.skill_id}
                       </span>
                     </div>
                   </div>
-                  <div className="mt-1 text-[11px] text-stone-500 font-mono break-all">
+                  <div className="mt-1 text-[11px] text-stone-500 dark:text-neutral-400 font-mono break-all">
                     {backendUrl
                       ? tunnelsApi.ingressUrl(backendUrl, registration.tunnel_uuid)
-                      : 'Resolving backend URL…'}
+                      : t('webhooks.resolvingBackendUrl')}
                   </div>
                 </div>
               ))}
@@ -221,9 +249,13 @@ const WebhooksDebugPanel = () => {
 
         {/* Captured Requests */}
         <section className="space-y-2">
-          <h3 className="text-sm font-semibold text-stone-900">Captured Requests</h3>
+          <h3 className="text-sm font-semibold text-stone-900 dark:text-neutral-100">
+            {t('webhooks.capturedRequests')}
+          </h3>
           {logs.length === 0 ? (
-            <p className="text-xs text-stone-400">No webhook requests captured yet.</p>
+            <p className="text-xs text-stone-400 dark:text-neutral-500">
+              {t('webhooks.noRequestsCaptured')}
+            </p>
           ) : (
             <div className="space-y-2">
               {logs.map(entry => (
@@ -233,73 +265,79 @@ const WebhooksDebugPanel = () => {
                   onClick={() => setSelectedCorrelationId(entry.correlation_id)}
                   className={`w-full rounded-xl border p-3 text-left transition-colors ${
                     selectedLog?.correlation_id === entry.correlation_id
-                      ? 'border-primary-300 bg-primary-50'
-                      : 'border-stone-200 bg-stone-50 hover:bg-stone-100'
+                      ? 'border-primary-300 dark:border-primary-500/40 bg-primary-50 dark:bg-primary-500/10'
+                      : 'border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 hover:bg-stone-100 dark:hover:bg-neutral-800 dark:bg-neutral-800 dark:hover:bg-neutral-800 dark:bg-neutral-800'
                   }`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-stone-900">
+                    <span className="text-xs font-semibold text-stone-900 dark:text-neutral-100">
                       {entry.method} {entry.path}
                     </span>
-                    <span className="text-[10px] text-stone-500">{entry.status_code ?? '...'}</span>
+                    <span className="text-[10px] text-stone-500 dark:text-neutral-400">
+                      {entry.status_code ?? '...'}
+                    </span>
                   </div>
-                  <div className="mt-1 text-[11px] text-stone-500">
-                    {entry.tunnel_name} {entry.skill_id ? `· ${entry.skill_id}` : '· unrouted'} ·{' '}
+                  <div className="mt-1 text-[11px] text-stone-500 dark:text-neutral-400">
+                    {entry.tunnel_name}{' '}
+                    {entry.skill_id ? `· ${entry.skill_id}` : `· ${t('webhooks.unrouted')}`} ·{' '}
                     {formatDateTime(entry.updated_at)}
                   </div>
                 </button>
               ))}
 
               {selectedLog && (
-                <div className="rounded-xl border border-stone-200 bg-stone-50 p-3 space-y-3">
+                <div className="rounded-xl border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 p-3 space-y-3">
                   <div>
-                    <div className="text-xs font-semibold text-stone-900">
+                    <div className="text-xs font-semibold text-stone-900 dark:text-neutral-100">
                       {selectedLog.method} {selectedLog.path}
                     </div>
-                    <div className="text-[10px] text-stone-400 font-mono">
+                    <div className="text-[10px] text-stone-400 dark:text-neutral-500 font-mono">
                       {selectedLog.correlation_id}
                     </div>
                   </div>
 
                   <div className="flex flex-wrap gap-1 text-[10px]">
-                    <span className="rounded-full bg-stone-200 px-2 py-0.5 text-stone-600">
+                    <span className="rounded-full bg-stone-200 dark:bg-neutral-800 px-2 py-0.5 text-stone-600 dark:text-neutral-300">
                       {selectedLog.stage}
                     </span>
-                    <span className="rounded-full bg-stone-200 px-2 py-0.5 text-stone-600">
-                      {selectedLog.status_code ?? 'pending'}
+                    <span className="rounded-full bg-stone-200 dark:bg-neutral-800 px-2 py-0.5 text-stone-600 dark:text-neutral-300">
+                      {selectedLog.status_code ?? t('webhooks.pending')}
                     </span>
-                    <span className="rounded-full bg-stone-200 px-2 py-0.5 text-stone-600">
-                      {selectedLog.skill_id || 'unrouted'}
+                    <span className="rounded-full bg-stone-200 dark:bg-neutral-800 px-2 py-0.5 text-stone-600 dark:text-neutral-300">
+                      {selectedLog.skill_id || t('webhooks.unrouted')}
                     </span>
                   </div>
 
                   {selectedLog.error_message && (
-                    <div className="rounded-lg border border-coral-200 bg-coral-50 px-3 py-2 text-xs text-coral-700">
+                    <div className="rounded-lg border border-coral-200 dark:border-coral-500/30 bg-coral-50 dark:bg-coral-500/10 px-3 py-2 text-xs text-coral-700 dark:text-coral-300">
                       {selectedLog.error_message}
                     </div>
                   )}
 
                   <PayloadBlock
-                    title="Request Headers"
+                    title={t('webhooks.requestHeaders')}
                     value={prettyJson(selectedLog.request_headers)}
                   />
                   <PayloadBlock
-                    title="Query Params"
+                    title={t('webhooks.queryParams')}
                     value={prettyJson(selectedLog.request_query)}
                   />
                   <PayloadBlock
-                    title="Request Body"
-                    value={decodeBase64Preview(selectedLog.request_body) || '[empty]'}
+                    title={t('webhooks.requestBody')}
+                    value={decodeBase64Preview(selectedLog.request_body) || t('webhooks.empty')}
                   />
                   <PayloadBlock
-                    title="Response Headers"
+                    title={t('webhooks.responseHeaders')}
                     value={prettyJson(selectedLog.response_headers)}
                   />
                   <PayloadBlock
-                    title="Response Body"
-                    value={decodeBase64Preview(selectedLog.response_body) || '[empty]'}
+                    title={t('webhooks.responseBody')}
+                    value={decodeBase64Preview(selectedLog.response_body) || t('webhooks.empty')}
                   />
                   {selectedLog.raw_payload != null && (
-                    <PayloadBlock title="Raw Payload" value={prettyJson(selectedLog.raw_payload)} />
+                    <PayloadBlock
+                      title={t('webhooks.rawPayload')}
+                      value={prettyJson(selectedLog.raw_payload)}
+                    />
                   )}
                 </div>
               )}
@@ -314,10 +352,10 @@ const WebhooksDebugPanel = () => {
 function PayloadBlock({ title, value }: { title: string; value: string }) {
   return (
     <details className="text-xs">
-      <summary className="cursor-pointer font-semibold text-stone-500 uppercase tracking-wide text-[10px]">
+      <summary className="cursor-pointer font-semibold text-stone-500 dark:text-neutral-400 uppercase tracking-wide text-[10px]">
         {title}
       </summary>
-      <pre className="mt-1 max-h-40 overflow-auto rounded-lg border border-stone-200 bg-stone-950 p-2 text-[11px] text-stone-100 whitespace-pre-wrap break-words">
+      <pre className="mt-1 max-h-40 overflow-auto rounded-lg border border-stone-200 dark:border-neutral-800 bg-stone-950 dark:bg-neutral-50 p-2 text-[11px] text-stone-100 whitespace-pre-wrap break-words">
         {value}
       </pre>
     </details>

@@ -1,6 +1,6 @@
 use crate::openhuman::config::Config;
 use crate::openhuman::cron;
-use crate::openhuman::tools::traits::{Tool, ToolCallOptions, ToolResult};
+use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolCallOptions, ToolResult};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
@@ -37,6 +37,16 @@ impl Tool for CronRunTool {
     }
 
     fn supports_markdown(&self) -> bool {
+        true
+    }
+
+    fn permission_level(&self) -> PermissionLevel {
+        PermissionLevel::Execute
+    }
+
+    fn external_effect(&self) -> bool {
+        // Force-running a job immediately executes the stored command or
+        // agent prompt on the host.  Require approval (GHSA-f46p-6vf9-64mm).
         true
     }
 
@@ -145,24 +155,31 @@ mod tests {
 
         let result = tool.execute(json!({ "job_id": job.id })).await.unwrap();
         if cfg!(windows) {
-            // `echo` may not be available as a standalone executable on Windows;
-            // verify the expected failure mode without short-circuiting the test.
-            assert!(result.is_error);
-            assert!(
-                result.output().contains("spawn error"),
-                "{:?}",
-                result.output()
-            );
+            // Windows is platform-dependent for `echo`: cmd.exe treats it
+            // as a shell built-in (no standalone executable), but a dev
+            // box with Git Bash on PATH exposes a real `echo.exe` that
+            // succeeds. Both outcomes are valid; assert only that we
+            // get a deterministic ToolResult and that the runs ledger
+            // matches the success/failure decision.
+            if result.is_error {
+                assert!(
+                    result.output().contains("spawn error"),
+                    "expected spawn-error explanation on Windows failure path: {:?}",
+                    result.output()
+                );
+                let runs = cron::list_runs(&cfg, &job.id, 10).unwrap();
+                assert_eq!(runs.len(), 0, "spawn failure must not persist a run");
+            } else {
+                let runs = cron::list_runs(&cfg, &job.id, 10).unwrap();
+                assert_eq!(
+                    runs.len(),
+                    1,
+                    "successful run must persist exactly one entry"
+                );
+            }
         } else {
             assert!(!result.is_error, "{:?}", result.output());
-        }
-
-        // History persistence should be verified on all platforms.
-        let runs = cron::list_runs(&cfg, &job.id, 10).unwrap();
-        if cfg!(windows) {
-            // On Windows the job fails to spawn, so no run record is expected.
-            assert_eq!(runs.len(), 0);
-        } else {
+            let runs = cron::list_runs(&cfg, &job.id, 10).unwrap();
             assert_eq!(runs.len(), 1);
         }
     }
@@ -179,5 +196,38 @@ mod tests {
             .unwrap();
         assert!(result.is_error);
         assert!(result.output().contains("not found"));
+    }
+
+    // ── GHSA-f46p-6vf9-64mm: approval gate must fire for cron_run ────
+
+    #[test]
+    fn cron_run_is_external_effect() {
+        let tmp = TempDir::new().unwrap();
+        let config = Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let cfg = Arc::new(config);
+        let tool = CronRunTool::new(cfg);
+        assert!(
+            tool.external_effect(),
+            "cron_run must declare external_effect=true so ApprovalGate is consulted"
+        );
+    }
+
+    #[test]
+    fn cron_run_permission_level_is_execute() {
+        let tmp = TempDir::new().unwrap();
+        let config = Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let cfg = Arc::new(config);
+        let tool = CronRunTool::new(cfg);
+        assert_eq!(tool.permission_level(), PermissionLevel::Execute);
     }
 }

@@ -31,17 +31,6 @@ pub async fn dispatch(
     method: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let method = if let Some(canonical) = normalize_legacy_method(method) {
-        log::debug!(
-            "[rpc] legacy method '{}' rewritten to '{}'",
-            method,
-            canonical
-        );
-        canonical
-    } else {
-        method
-    };
-
     log::trace!(
         "[rpc:dispatch] enter method={} params={}",
         method,
@@ -97,44 +86,6 @@ pub async fn dispatch(
     Err(format!("unknown method: {method}"))
 }
 
-/// Normalizes legacy un-namespaced method names to their canonical equivalents.
-///
-/// This provides defense-in-depth against stale or unbalanced callers that may
-/// still be using old method names.
-///
-/// Source of truth: `app/src/services/rpcMethods.ts` (`LEGACY_METHOD_ALIASES`)
-fn normalize_legacy_method(method: &str) -> Option<&'static str> {
-    match method {
-        "openhuman.get_analytics_settings" => Some("openhuman.config_get_analytics_settings"),
-        "openhuman.get_composio_trigger_settings" => {
-            Some("openhuman.config_get_composio_trigger_settings")
-        }
-        "openhuman.get_config" => Some("openhuman.config_get"),
-        "openhuman.get_runtime_flags" => Some("openhuman.config_get_runtime_flags"),
-        "openhuman.ping" => Some("core.ping"),
-        "openhuman.set_browser_allow_all" => Some("openhuman.config_set_browser_allow_all"),
-        "openhuman.update_analytics_settings" => Some("openhuman.config_update_analytics_settings"),
-        "openhuman.update_browser_settings" => Some("openhuman.config_update_browser_settings"),
-        "openhuman.update_composio_trigger_settings" => {
-            Some("openhuman.config_update_composio_trigger_settings")
-        }
-        "openhuman.update_local_ai_settings" => Some("openhuman.config_update_local_ai_settings"),
-        "openhuman.update_memory_settings" => Some("openhuman.config_update_memory_settings"),
-        "openhuman.update_model_settings" => Some("openhuman.config_update_model_settings"),
-        "openhuman.update_runtime_settings" => Some("openhuman.config_update_runtime_settings"),
-        "openhuman.update_screen_intelligence_settings" => {
-            Some("openhuman.config_update_screen_intelligence_settings")
-        }
-        "openhuman.workspace_onboarding_flag_exists" => {
-            Some("openhuman.config_workspace_onboarding_flag_exists")
-        }
-        "openhuman.workspace_onboarding_flag_set" => {
-            Some("openhuman.config_workspace_onboarding_flag_set")
-        }
-        _ => None,
-    }
-}
-
 /// Handles internal core-level RPC methods.
 ///
 /// These methods provide basic information about the server and its version.
@@ -145,15 +96,72 @@ fn normalize_legacy_method(method: &str) -> Option<&'static str> {
 fn try_core_dispatch(
     state: &AppState,
     method: &str,
-    _params: serde_json::Value,
+    params: serde_json::Value,
 ) -> Option<Result<InvocationResult, String>> {
     match method {
         "core.ping" => Some(InvocationResult::ok(json!({ "ok": true }))),
         "core.version" => Some(InvocationResult::ok(
             json!({ "version": state.core_version }),
         )),
+        "core.events_subscribe_token" => Some(handle_events_subscribe_token(params)),
         _ => None,
     }
+}
+
+/// Mint a single-shot bind token for the SSE `/events` stream.
+///
+/// Browser `EventSource` cannot attach an `Authorization` header, so an
+/// authenticated holder of the per-process RPC bearer first asks for a
+/// short-lived token here (this RPC is gated by the same bearer-token
+/// middleware as the rest of `/rpc`) and then opens
+/// `/events?client_id=<id>&token=<bind>`. The `/events` handler removes
+/// the token from the store on first use, so a leaked URL cannot be
+/// replayed by a second subscriber.
+fn handle_events_subscribe_token(params: serde_json::Value) -> Result<InvocationResult, String> {
+    let obj = params.as_object();
+    let client_id = obj
+        .and_then(|m| m.get("client_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            log::warn!(
+                "[events-bind] reject mint: missing or empty client_id (param_keys={:?})",
+                obj.map(|m| m.keys().collect::<Vec<_>>())
+            );
+            "missing or empty 'client_id' parameter".to_string()
+        })?;
+    let ttl = obj
+        .and_then(|m| m.get("ttl_secs"))
+        .and_then(|v| v.as_u64())
+        .map(std::time::Duration::from_secs);
+
+    let issued =
+        crate::core::event_bind_tokens::issue(client_id.to_string(), ttl).ok_or_else(|| {
+            log::warn!(
+                "[events-bind] reject mint: store at capacity (client_id_len={} ttl_secs={:?})",
+                client_id.len(),
+                ttl.map(|d| d.as_secs())
+            );
+            "events bind-token store at capacity; try again shortly".to_string()
+        })?;
+
+    let ttl_remaining_secs = issued
+        .valid_until
+        .checked_duration_since(std::time::Instant::now())
+        .unwrap_or_default()
+        .as_secs();
+
+    log::debug!(
+        "[events-bind] minted token for client_id_len={} ttl_secs={}",
+        client_id.len(),
+        ttl_remaining_secs
+    );
+
+    InvocationResult::ok(json!({
+        "token": issued.token,
+        "ttl_secs": ttl_remaining_secs,
+    }))
 }
 
 async fn try_registry_dispatch(
@@ -296,87 +304,6 @@ mod tests {
             .expect("core.version must produce InvocationResult");
         assert_eq!(result.value, json!({ "version": "0.0.0-abc" }));
         assert!(result.logs.is_empty());
-    }
-
-    #[test]
-    fn test_normalize_legacy_method_all_aliases() {
-        let cases = vec![
-            (
-                "openhuman.get_analytics_settings",
-                "openhuman.config_get_analytics_settings",
-            ),
-            (
-                "openhuman.get_composio_trigger_settings",
-                "openhuman.config_get_composio_trigger_settings",
-            ),
-            ("openhuman.get_config", "openhuman.config_get"),
-            (
-                "openhuman.get_runtime_flags",
-                "openhuman.config_get_runtime_flags",
-            ),
-            ("openhuman.ping", "core.ping"),
-            (
-                "openhuman.set_browser_allow_all",
-                "openhuman.config_set_browser_allow_all",
-            ),
-            (
-                "openhuman.update_analytics_settings",
-                "openhuman.config_update_analytics_settings",
-            ),
-            (
-                "openhuman.update_browser_settings",
-                "openhuman.config_update_browser_settings",
-            ),
-            (
-                "openhuman.update_composio_trigger_settings",
-                "openhuman.config_update_composio_trigger_settings",
-            ),
-            (
-                "openhuman.update_local_ai_settings",
-                "openhuman.config_update_local_ai_settings",
-            ),
-            (
-                "openhuman.update_memory_settings",
-                "openhuman.config_update_memory_settings",
-            ),
-            (
-                "openhuman.update_model_settings",
-                "openhuman.config_update_model_settings",
-            ),
-            (
-                "openhuman.update_runtime_settings",
-                "openhuman.config_update_runtime_settings",
-            ),
-            (
-                "openhuman.update_screen_intelligence_settings",
-                "openhuman.config_update_screen_intelligence_settings",
-            ),
-            (
-                "openhuman.workspace_onboarding_flag_exists",
-                "openhuman.config_workspace_onboarding_flag_exists",
-            ),
-            (
-                "openhuman.workspace_onboarding_flag_set",
-                "openhuman.config_workspace_onboarding_flag_set",
-            ),
-        ];
-
-        for (legacy, canonical) in cases {
-            assert_eq!(
-                normalize_legacy_method(legacy),
-                Some(canonical),
-                "Legacy method {} should normalize to {}",
-                legacy,
-                canonical
-            );
-        }
-    }
-
-    #[test]
-    fn test_normalize_legacy_method_none_for_unknown_or_canonical() {
-        assert!(normalize_legacy_method("core.ping").is_none());
-        assert!(normalize_legacy_method("openhuman.config_get").is_none());
-        assert!(normalize_legacy_method("unknown.method").is_none());
     }
 
     #[tokio::test]

@@ -5,8 +5,6 @@ export type SettingsRoute =
   | 'home'
   | 'account'
   | 'features'
-  | 'ai-models'
-  | 'connections'
   | 'messaging'
   | 'cron-jobs'
   | 'screen-intelligence'
@@ -17,8 +15,9 @@ export type SettingsRoute =
   | 'team-members'
   | 'team-invites'
   | 'developer-options'
+  | 'autonomy'
   | 'ai'
-  | 'local-model'
+  | 'llm'
   | 'voice'
   | 'tools'
   | 'memory-data'
@@ -33,9 +32,15 @@ export type SettingsRoute =
   | 'notifications'
   | 'notification-routing'
   | 'mascot'
+  | 'persona'
+  | 'appearance'
   | 'intelligence'
   | 'webhooks-triggers'
-  | 'composio-triggers';
+  | 'composio-triggers'
+  | 'composio-routing'
+  | 'mcp-server'
+  | 'dev-workflow'
+  | 'devices';
 
 export interface BreadcrumbItem {
   label: string;
@@ -80,8 +85,6 @@ export const useSettingsNavigation = (): SettingsNavigationHook => {
     if (path.includes('/settings/team')) return 'team';
     if (path.includes('/settings/account')) return 'account';
     if (path.includes('/settings/features')) return 'features';
-    if (path.includes('/settings/ai-models')) return 'ai-models';
-    if (path.includes('/settings/connections')) return 'connections';
     if (path.includes('/settings/messaging')) return 'messaging';
     if (path.includes('/settings/cron-jobs')) return 'cron-jobs';
     if (path.includes('/settings/screen-awareness-debug')) return 'screen-awareness-debug';
@@ -91,9 +94,10 @@ export const useSettingsNavigation = (): SettingsNavigationHook => {
     if (path.includes('/settings/privacy')) return 'privacy';
     if (path.includes('/settings/billing')) return 'billing';
     if (path.includes('/settings/developer-options')) return 'developer-options';
+    if (path.includes('/settings/autonomy')) return 'autonomy';
+    if (path.includes('/settings/llm')) return 'llm';
     if (path.includes('/settings/ai')) return 'ai';
     if (path.includes('/settings/local-model-debug')) return 'local-model-debug';
-    if (path.includes('/settings/local-model')) return 'local-model';
     if (path.includes('/settings/voice-debug')) return 'voice-debug';
     if (path.includes('/settings/voice')) return 'voice';
     if (path.includes('/settings/tools')) return 'tools';
@@ -102,6 +106,7 @@ export const useSettingsNavigation = (): SettingsNavigationHook => {
     if (path.includes('/settings/webhooks-debug')) return 'webhooks-debug';
     if (path.includes('/settings/webhooks-triggers')) return 'webhooks-triggers';
     if (path.includes('/settings/composio-triggers')) return 'composio-triggers';
+    if (path.includes('/settings/composio-routing')) return 'composio-routing';
     if (path.includes('/settings/intelligence')) return 'intelligence';
     if (path.includes('/settings/recovery-phrase')) return 'recovery-phrase';
     if (path.includes('/settings/agent-chat')) return 'agent-chat';
@@ -110,7 +115,12 @@ export const useSettingsNavigation = (): SettingsNavigationHook => {
     // shorter `notifications` prefix.
     if (path.includes('/settings/notification-routing')) return 'notification-routing';
     if (path.includes('/settings/notifications')) return 'notifications';
+    if (path.includes('/settings/devices')) return 'devices';
     if (path.includes('/settings/mascot')) return 'mascot';
+    if (path.includes('/settings/persona')) return 'persona';
+    if (path.includes('/settings/appearance')) return 'appearance';
+    if (path.includes('/settings/mcp-server')) return 'mcp-server';
+    if (path.includes('/settings/dev-workflow')) return 'dev-workflow';
     return 'home';
   };
 
@@ -158,10 +168,7 @@ export const useSettingsNavigation = (): SettingsNavigationHook => {
     onClick: () => navigate('/settings/features'),
   };
 
-  const aiModelsCrumb: BreadcrumbItem = {
-    label: 'AI & Models',
-    onClick: () => navigate('/settings/ai-models'),
-  };
+  const aiCrumb: BreadcrumbItem = { label: 'AI', onClick: () => navigate('/settings/ai') };
 
   const teamCrumb: BreadcrumbItem = { label: 'Team', onClick: () => navigate('/settings/team') };
 
@@ -175,13 +182,12 @@ export const useSettingsNavigation = (): SettingsNavigationHook => {
       // Section pages
       case 'account':
       case 'features':
-      case 'ai-models':
+      case 'ai':
         return [settingsCrumb];
 
       // Leaf panels under account
       case 'recovery-phrase':
       case 'team':
-      case 'connections':
       case 'privacy':
         return [settingsCrumb, accountCrumb];
 
@@ -191,14 +197,14 @@ export const useSettingsNavigation = (): SettingsNavigationHook => {
       // Leaf panels under features
       case 'screen-intelligence':
       case 'autocomplete':
-      case 'voice':
       case 'messaging':
       case 'tools':
         return [settingsCrumb, featuresCrumb];
 
-      // Leaf panels under AI & Models
-      case 'local-model':
-        return [settingsCrumb, aiModelsCrumb];
+      // Leaf panels under AI
+      case 'voice':
+      case 'llm':
+        return [settingsCrumb, aiCrumb];
 
       // Team sub-pages
       case 'team-members':
@@ -206,7 +212,6 @@ export const useSettingsNavigation = (): SettingsNavigationHook => {
         return [settingsCrumb, accountCrumb, teamCrumb];
 
       // Developer sub-pages
-      case 'ai':
       case 'agent-chat':
       case 'cron-jobs':
       case 'screen-awareness-debug':
@@ -219,7 +224,11 @@ export const useSettingsNavigation = (): SettingsNavigationHook => {
       case 'intelligence':
       case 'webhooks-triggers':
       case 'composio-triggers':
+      case 'composio-routing':
       case 'notification-routing':
+      case 'mcp-server':
+      case 'dev-workflow':
+      case 'autonomy':
         return [settingsCrumb, developerCrumb];
 
       // Developer options section page
@@ -230,8 +239,19 @@ export const useSettingsNavigation = (): SettingsNavigationHook => {
       case 'notifications':
         return [settingsCrumb];
 
+      case 'devices':
+        return [settingsCrumb];
+
       // Mascot appearance panel sits at the top level of Settings.
       case 'mascot':
+        return [settingsCrumb];
+
+      // Persona panel sits at the top level of Settings.
+      case 'persona':
+        return [settingsCrumb];
+
+      // Appearance (theme) panel sits at the top level of Settings.
+      case 'appearance':
         return [settingsCrumb];
 
       case 'home':

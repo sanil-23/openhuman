@@ -353,7 +353,7 @@ export function GameplayReviewWorkspace({ onToast }: GameplayReviewWorkspaceProp
             onClick={handleImportSession}
             disabled={importBusy || analysisBusy}
             className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60">
-            {importBusy ? 'Importing…' : 'Import and analyze'}
+            {analysisBusy ? 'Analyzing…' : importBusy ? 'Importing…' : 'Import and analyze'}
           </button>
           <button
             type="button"

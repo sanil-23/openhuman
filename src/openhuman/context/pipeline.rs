@@ -13,9 +13,10 @@
 //!    `ToolResults` envelopes with a placeholder, preserving the
 //!    `AssistantToolCalls ⇔ ToolResults` API invariant.
 //! 4. **Autocompact** — prose summarisation of older messages.
-//!    OpenHuman's existing `auto_compact_history` lives in
-//!    `agent/loop_/history.rs` and operates on `ChatMessage` (not
-//!    `ConversationMessage`), so we don't call it here — the pipeline
+//!    The summariser (`ProviderSummarizer` in `context/summarizer.rs`,
+//!    optionally wrapped by `segment_recap_summarizer.rs`) operates on
+//!    `ConversationMessage` and issues LLM calls, so we don't run it
+//!    here — the pipeline
 //!    instead signals a `PipelineOutcome::AutocompactionRequested` to
 //!    the caller and trusts the caller to dispatch its own summariser
 //!    when ready. Keeping the pipeline pure (no LLM calls) means the
@@ -36,7 +37,7 @@
 use super::guard::{ContextCheckResult, ContextGuard};
 use super::microcompact::{microcompact, MicrocompactStats, DEFAULT_KEEP_RECENT_TOOL_RESULTS};
 use super::session_memory::{SessionMemoryConfig, SessionMemoryState};
-use crate::openhuman::providers::{ConversationMessage, UsageInfo};
+use crate::openhuman::inference::provider::{ConversationMessage, UsageInfo};
 use std::sync::{Arc, Mutex};
 
 /// Shared handle to a [`SessionMemoryState`] so both the synchronous
@@ -257,7 +258,7 @@ impl ContextPipeline {
 mod tests {
     use super::super::microcompact::CLEARED_PLACEHOLDER;
     use super::*;
-    use crate::openhuman::providers::{
+    use crate::openhuman::inference::provider::{
         ChatMessage, ConversationMessage, ToolCall, ToolResultMessage, UsageInfo,
     };
 

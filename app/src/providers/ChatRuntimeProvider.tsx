@@ -4,11 +4,13 @@ import { useCallback, useEffect, useRef } from 'react';
 import { requestUsageRefresh } from '../hooks/usageRefresh';
 import { useRefetchSnapshotOnTurnEnd } from '../hooks/useRefetchSnapshotOnTurnEnd';
 import {
+  type ChatApprovalRequestEvent,
   type ChatDoneEvent,
   type ChatInferenceStartEvent,
   type ChatIterationStartEvent,
   type ChatSegmentEvent,
   type ChatSubagentDoneEvent,
+  type ChatTaskBoardUpdatedEvent,
   type ChatToolCallEvent,
   type ChatToolResultEvent,
   type ProactiveMessageEvent,
@@ -18,12 +20,15 @@ import {
 import { store } from '../store';
 import {
   clearInferenceStatusForThread,
+  clearPendingApprovalForThread,
   clearStreamingAssistantForThread,
   endInferenceTurn,
   markInferenceTurnStreaming,
   recordChatTurnUsage,
   setInferenceStatusForThread,
+  setPendingApprovalForThread,
   setStreamingAssistantForThread,
+  setTaskBoardForThread,
   setToolTimelineForThread,
   type StreamingAssistantState,
   type ToolTimelineEntry,
@@ -226,16 +231,10 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
       }
 
       const state = store.getState().thread;
-      // Resolution priority: selected > active (in-flight inference) > welcome
-      // (onboarding lockdown) > first thread in list. `activeThreadId` tracks
-      // the currently running inference thread — during single-threaded onboarding
-      // this will typically be the welcome thread itself, so the ordering is safe.
+      // Resolution priority: selected > active (in-flight inference) > first thread.
+      // `activeThreadId` tracks the currently running inference thread.
       const targetFromState =
-        state.selectedThreadId ??
-        state.activeThreadId ??
-        state.welcomeThreadId ??
-        state.threads[0]?.id ??
-        null;
+        state.selectedThreadId ?? state.activeThreadId ?? state.threads[0]?.id ?? null;
       if (targetFromState) {
         return targetFromState;
       }
@@ -676,6 +675,10 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
         }
         dispatch(setToolTimelineForThread({ threadId: event.thread_id, entries }));
       },
+      onTaskBoardUpdated: (event: ChatTaskBoardUpdatedEvent) => {
+        if (!event.task_board) return;
+        dispatch(setTaskBoardForThread({ threadId: event.thread_id, board: event.task_board }));
+      },
       onProactiveMessage: (event: ProactiveMessageEvent) => {
         const messageDigest = proactiveMessageDigest(event.full_response ?? '');
         const eventKey = `proactive:${event.thread_id}:${event.request_id ?? 'none'}:${messageDigest}`;
@@ -705,6 +708,34 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
           }
         });
       },
+      onApprovalRequest: (event: ChatApprovalRequestEvent) => {
+        rtLog('approval_request', {
+          thread: event.thread_id,
+          request: event.request_id,
+          tool: event.tool_name,
+        });
+        // Pull the exact command/target out of the redacted args for display:
+        // shell → command, file write/edit → path, network → url.
+        const a = event.args ?? {};
+        const firstString = (v: unknown): string | undefined =>
+          typeof v === 'string' && v.length > 0 ? v : undefined;
+        const command =
+          firstString(a.command) ??
+          firstString(a.path) ??
+          firstString(a.url) ??
+          firstString(a.target);
+        dispatch(
+          setPendingApprovalForThread({
+            threadId: event.thread_id,
+            approval: {
+              requestId: event.request_id,
+              toolName: event.tool_name,
+              message: event.message,
+              command,
+            },
+          })
+        );
+      },
       onDone: event => {
         const eventKey = `done:${event.thread_id}:${event.request_id ?? 'none'}`;
         if (
@@ -732,6 +763,7 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
         );
         dispatch(clearInferenceStatusForThread({ threadId: event.thread_id }));
         dispatch(clearStreamingAssistantForThread({ threadId: event.thread_id }));
+        dispatch(clearPendingApprovalForThread({ threadId: event.thread_id }));
 
         const existing = store.getState().chatRuntime.toolTimelineByThread[event.thread_id] ?? [];
         if (existing.length > 0) {
@@ -830,6 +862,7 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
         );
         dispatch(clearInferenceStatusForThread({ threadId: event.thread_id }));
         dispatch(clearStreamingAssistantForThread({ threadId: event.thread_id }));
+        dispatch(clearPendingApprovalForThread({ threadId: event.thread_id }));
 
         const existing = store.getState().chatRuntime.toolTimelineByThread[event.thread_id] ?? [];
         if (existing.length > 0) {
@@ -904,6 +937,9 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
     });
     for (const threadId of threadIds) {
       dispatch(clearInferenceStatusForThread({ threadId }));
+      // Clear any parked approval too: a disconnect before onDone/onError would
+      // otherwise leave the approval card stuck for a turn that can't complete.
+      dispatch(clearPendingApprovalForThread({ threadId }));
       dispatch(endInferenceTurn({ threadId }));
     }
     if (activeThreadId) {

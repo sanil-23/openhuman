@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { useT } from '../../../lib/i18n/I18nContext';
 import {
   type AcceptedCompletion,
   type AutocompleteConfig,
@@ -65,6 +66,7 @@ const parseAutocompleteConfig = (raw: unknown): AutocompleteConfig => {
 };
 
 const AutocompleteDebugPanel = () => {
+  const { t } = useT();
   const { navigateBack, breadcrumbs } = useSettingsNavigation();
 
   // Status & loading
@@ -166,7 +168,9 @@ const AutocompleteDebugPanel = () => {
       setStyleInstructions(config.style_instructions ?? '');
       setStyleExamplesText(config.style_examples.join('\n'));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load autocomplete settings');
+      setError(
+        err instanceof Error ? err.message : t('settings.autocomplete.debug.loadSettingsFailed')
+      );
     } finally {
       setIsLoading(false);
     }
@@ -212,7 +216,8 @@ const AutocompleteDebugPanel = () => {
       }
       return response.result;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to refresh autocomplete status';
+      const msg =
+        err instanceof Error ? err.message : t('settings.autocomplete.debug.refreshStatusFailed');
       appendUiLog(`refresh status failed: ${msg}`);
       setError(msg);
       return null;
@@ -249,16 +254,16 @@ const AutocompleteDebugPanel = () => {
       appendLogs(response.logs);
       const latestStatus = await refreshStatus();
       if (response.result.started) {
-        setMessage('Autocomplete started.');
+        setMessage(t('autocomplete.started'));
       } else if (latestStatus?.enabled === false) {
-        setMessage('Autocomplete is disabled in settings. Enable it and save first.');
+        setMessage(t('settings.autocomplete.debug.disabledInSettings'));
       } else if (latestStatus?.running) {
-        setMessage('Autocomplete is already running.');
+        setMessage(t('settings.autocomplete.debug.alreadyRunning'));
       } else {
-        setMessage('Autocomplete did not start.');
+        setMessage(t('settings.autocomplete.debug.didNotStart'));
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to start autocomplete';
+      const msg = err instanceof Error ? err.message : t('settings.autocomplete.debug.startFailed');
       appendUiLog(`start failed: ${msg}`);
       setError(msg);
     }
@@ -273,12 +278,12 @@ const AutocompleteDebugPanel = () => {
       const response = await openhumanAutocompleteStop({ reason: 'manual_stop_from_settings' });
       appendLogs(response.logs);
       const latestStatus = await refreshStatus();
-      setMessage('Autocomplete stopped.');
+      setMessage(t('autocomplete.stopped'));
       if (latestStatus?.running) {
         appendUiLog('runtime still reports running after stop');
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to stop autocomplete';
+      const msg = err instanceof Error ? err.message : t('settings.autocomplete.debug.stopFailed');
       appendUiLog(`stop failed: ${msg}`);
       setError(msg);
     }
@@ -304,12 +309,16 @@ const AutocompleteDebugPanel = () => {
       appendLogs(response.logs);
       setMessage(
         response.result.suggestion?.value
-          ? `Suggestion: ${response.result.suggestion.value}`
-          : 'No suggestion returned.'
+          ? t('settings.autocomplete.debug.suggestionPrefix').replace(
+              '{value}',
+              response.result.suggestion.value
+            )
+          : t('settings.autocomplete.debug.noSuggestionReturned')
       );
       await refreshStatus();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to fetch current suggestion';
+      const msg =
+        err instanceof Error ? err.message : t('settings.autocomplete.debug.fetchSuggestionFailed');
       appendUiLog(`get suggestion failed: ${msg}`);
       setError(msg);
     }
@@ -351,14 +360,17 @@ const AutocompleteDebugPanel = () => {
       });
       appendLogs(response.logs);
       if (response.result.accepted && response.result.value) {
-        setMessage(`Accepted: ${response.result.value}`);
+        setMessage(
+          t('settings.autocomplete.debug.acceptedPrefix').replace('{value}', response.result.value)
+        );
       } else {
-        setMessage(response.result.reason ?? 'No suggestion was applied.');
+        setMessage(response.result.reason ?? t('settings.autocomplete.debug.noSuggestionApplied'));
       }
       await refreshStatus();
       await waitForAcceptedHistoryEntry(response.result.value);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to accept suggestion';
+      const msg =
+        err instanceof Error ? err.message : t('settings.autocomplete.debug.acceptFailed');
       appendUiLog(`accept failed: ${msg}`);
       setError(msg);
     }
@@ -380,7 +392,10 @@ const AutocompleteDebugPanel = () => {
         appendUiLog('focus debug returned no focused element');
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to inspect focused element';
+      const msg =
+        err instanceof Error
+          ? err.message
+          : t('settings.autocomplete.debug.inspectFocusedElementFailed');
       appendUiLog(`debug focus failed: ${msg}`);
       setError(msg);
     }
@@ -416,10 +431,13 @@ const AutocompleteDebugPanel = () => {
       setStyleInstructions(response.result.config.style_instructions ?? '');
       setStyleExamplesText(response.result.config.style_examples.join('\n'));
       appendLogs(response.logs);
-      setMessage('Advanced settings saved.');
+      setMessage(t('autocomplete.settingsSaved'));
       await refreshStatus();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to save advanced settings';
+      const msg =
+        err instanceof Error
+          ? err.message
+          : t('settings.autocomplete.debug.saveAdvancedSettingsFailed');
       appendUiLog(`save advanced settings failed: ${msg}`);
       setError(msg);
     } finally {
@@ -438,7 +456,9 @@ const AutocompleteDebugPanel = () => {
       await openhumanAutocompleteClearHistory();
       setHistoryEntries([]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to clear history');
+      setError(
+        err instanceof Error ? err.message : t('settings.autocomplete.debug.clearHistoryFailed')
+      );
     } finally {
       setIsClearingHistory(false);
     }
@@ -456,7 +476,7 @@ const AutocompleteDebugPanel = () => {
   return (
     <div className="z-10 relative">
       <SettingsHeader
-        title="Autocomplete Debug"
+        title={t('autocomplete.debugTitle')}
         showBackButton={true}
         onBack={navigateBack}
         breadcrumbs={breadcrumbs}
@@ -466,40 +486,71 @@ const AutocompleteDebugPanel = () => {
         {/* ------------------------------------------------------------------ */}
         {/* Runtime section                                                     */}
         {/* ------------------------------------------------------------------ */}
-        <section className="rounded-2xl border border-stone-200 bg-white p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-stone-900">Runtime</h3>
-          <div className="text-sm text-stone-700 space-y-1">
-            <div>Platform supported: {status?.platform_supported ? 'yes' : 'no'}</div>
-            <div>Enabled: {status?.enabled ? 'yes' : 'no'}</div>
-            <div>Running: {status?.running ? 'yes' : 'no'}</div>
-            <div>Phase: {status?.phase ?? 'unknown'}</div>
-            <div>Debounce: {status?.debounce_ms ?? 0}ms</div>
-            <div>Model: {status?.model_id ?? 'n/a'}</div>
-            <div>App: {status?.app_name ?? 'n/a'}</div>
-            <div>Last error: {status?.last_error ?? 'none'}</div>
-            <div>Current suggestion: {status?.suggestion?.value ?? 'none'}</div>
+        <section className="rounded-2xl border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-stone-900 dark:text-neutral-100">
+            {t('settings.autocomplete.appFilter.runtime')}
+          </h3>
+          <div className="text-sm text-stone-700 dark:text-neutral-200 space-y-1">
+            <div>
+              {t('settings.autocomplete.appFilter.platformSupported')}:{' '}
+              {status?.platform_supported ? t('common.yes') : t('common.no')}
+            </div>
+            <div>
+              {t('settings.autocomplete.appFilter.enabled')}:{' '}
+              {status?.enabled ? t('common.yes') : t('common.no')}
+            </div>
+            <div>
+              {t('settings.autocomplete.appFilter.running')}:{' '}
+              {status?.running ? t('common.yes') : t('common.no')}
+            </div>
+            <div>
+              {t('settings.autocomplete.appFilter.phase')}:{' '}
+              {status?.phase ?? t('settings.autocomplete.shared.unknown')}
+            </div>
+            <div>
+              {t('settings.autocomplete.appFilter.debounce')}:{' '}
+              {`${String(status?.debounce_ms ?? 0)}ms`}
+            </div>
+            <div>
+              {t('settings.autocomplete.appFilter.model')}:{' '}
+              {status?.model_id ?? t('settings.autocomplete.shared.notApplicable')}
+            </div>
+            <div>
+              {t('settings.autocomplete.appFilter.app')}:{' '}
+              {status?.app_name ?? t('settings.autocomplete.shared.notApplicable')}
+            </div>
+            <div>
+              {t('settings.autocomplete.appFilter.lastError')}:{' '}
+              {status?.last_error ?? t('settings.autocomplete.shared.none')}
+            </div>
+            <div>
+              {t('settings.autocomplete.appFilter.currentSuggestion')}:{' '}
+              {status?.suggestion?.value ?? t('settings.autocomplete.shared.none')}
+            </div>
           </div>
           <div className="flex gap-2">
             <button
               type="button"
               onClick={() => void refreshStatus(true)}
               disabled={isLoading}
-              className="rounded-lg border border-stone-300 bg-stone-100 px-3 py-2 text-sm text-stone-700 disabled:opacity-50">
-              {isLoading ? 'Refreshing…' : 'Refresh Status'}
+              className="rounded-lg border border-stone-300 dark:border-neutral-700 bg-stone-100 dark:bg-neutral-800 px-3 py-2 text-sm text-stone-700 dark:text-neutral-200 disabled:opacity-50">
+              {isLoading
+                ? t('settings.autocomplete.appFilter.refreshing')
+                : t('settings.autocomplete.appFilter.refreshStatus')}
             </button>
             <button
               type="button"
               onClick={() => void start()}
               disabled={!status?.platform_supported || Boolean(status?.running)}
-              className="rounded-lg border border-green-500/60 bg-green-50 px-3 py-2 text-sm text-green-700 disabled:opacity-50">
-              Start
+              className="rounded-lg border border-green-500/60 bg-green-50 dark:bg-green-500/10 px-3 py-2 text-sm text-green-700 dark:text-green-300 disabled:opacity-50">
+              {t('autocomplete.start')}
             </button>
             <button
               type="button"
               onClick={() => void stop()}
               disabled={!status?.running}
-              className="rounded-lg border border-red-500/60 bg-red-50 px-3 py-2 text-sm text-red-600 disabled:opacity-50">
-              Stop
+              className="rounded-lg border border-red-500/60 bg-red-50 dark:bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-300 disabled:opacity-50">
+              {t('autocomplete.stop')}
             </button>
           </div>
         </section>
@@ -507,39 +558,43 @@ const AutocompleteDebugPanel = () => {
         {/* ------------------------------------------------------------------ */}
         {/* Test section                                                        */}
         {/* ------------------------------------------------------------------ */}
-        <section className="rounded-2xl border border-stone-200 bg-white p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-stone-900">Test</h3>
+        <section className="rounded-2xl border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-stone-900 dark:text-neutral-100">
+            {t('settings.autocomplete.appFilter.test')}
+          </h3>
           <div className="space-y-1">
-            <div className="text-xs text-stone-600">Context Override (optional)</div>
+            <div className="text-xs text-stone-600 dark:text-neutral-300">
+              {t('settings.autocomplete.appFilter.contextOverride')}
+            </div>
             <textarea
               value={contextOverride}
               onChange={event => setContextOverride(event.target.value)}
               rows={3}
-              className="w-full rounded border border-stone-200 bg-stone-50 p-2 text-xs text-stone-700"
+              className="w-full rounded border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 p-2 text-xs text-stone-700 dark:text-neutral-200"
             />
           </div>
           <div className="flex gap-2">
             <button
               type="button"
               onClick={() => void testCurrent()}
-              className="rounded-lg border border-primary-500/60 bg-primary-50 px-3 py-2 text-sm text-primary-600">
-              Get Suggestion
+              className="rounded-lg border border-primary-500/60 bg-primary-50 dark:bg-primary-500/10 px-3 py-2 text-sm text-primary-600 dark:text-primary-300">
+              {t('settings.autocomplete.appFilter.getSuggestion')}
             </button>
             <button
               type="button"
               onClick={() => void acceptSuggestion()}
-              className="rounded-lg border border-emerald-500/60 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-              Accept Suggestion
+              className="rounded-lg border border-emerald-500/60 bg-emerald-50 dark:bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
+              {t('settings.autocomplete.appFilter.acceptSuggestion')}
             </button>
             <button
               type="button"
               onClick={() => void debugFocus()}
-              className="rounded-lg border border-amber-500/60 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-              Debug Focus
+              className="rounded-lg border border-amber-500/60 bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+              {t('settings.autocomplete.appFilter.debugFocus')}
             </button>
           </div>
           {focusDebug && (
-            <pre className="max-h-48 overflow-auto rounded-xl border border-stone-200 bg-stone-50 p-2 text-xs text-stone-700">
+            <pre className="max-h-48 overflow-auto rounded-xl border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 p-2 text-xs text-stone-700 dark:text-neutral-200">
               {focusDebug}
             </pre>
           )}
@@ -548,28 +603,34 @@ const AutocompleteDebugPanel = () => {
         {/* ------------------------------------------------------------------ */}
         {/* Live Logs section                                                   */}
         {/* ------------------------------------------------------------------ */}
-        <section className="rounded-2xl border border-stone-200 bg-white p-4 space-y-3">
+        <section className="rounded-2xl border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-stone-900">Live Logs</h3>
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-neutral-100">
+              {t('settings.autocomplete.appFilter.liveLogs')}
+            </h3>
             <button
               type="button"
               onClick={clearLogs}
-              className="rounded-lg border border-stone-300 bg-stone-100 px-3 py-1.5 text-xs text-stone-700">
-              Clear
+              className="rounded-lg border border-stone-300 dark:border-neutral-700 bg-stone-100 dark:bg-neutral-800 px-3 py-1.5 text-xs text-stone-700 dark:text-neutral-200">
+              {t('common.clear')}
             </button>
           </div>
-          <pre className="max-h-56 overflow-auto rounded-xl border border-stone-200 bg-stone-50 p-2 text-xs text-stone-700">
-            {logs.length > 0 ? logs.join('\n') : 'No logs yet.'}
+          <pre className="max-h-56 overflow-auto rounded-xl border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 p-2 text-xs text-stone-700 dark:text-neutral-200">
+            {logs.length > 0 ? logs.join('\n') : t('settings.autocomplete.appFilter.noLogs')}
           </pre>
         </section>
 
         {/* ------------------------------------------------------------------ */}
         {/* Advanced settings                                                   */}
         {/* ------------------------------------------------------------------ */}
-        <section className="rounded-2xl border border-stone-200 bg-white p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-stone-900">Advanced Settings</h3>
-          <label className="flex items-center justify-between rounded-xl border border-stone-200 bg-stone-50 px-3 py-2">
-            <span className="text-sm text-stone-700">Debounce Ms</span>
+        <section className="rounded-2xl border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-stone-900 dark:text-neutral-100">
+            {t('autocomplete.advancedSettings')}
+          </h3>
+          <label className="flex items-center justify-between rounded-xl border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-3 py-2">
+            <span className="text-sm text-stone-700 dark:text-neutral-200">
+              {t('settings.autocomplete.completionStyle.debounce')}
+            </span>
             <input
               type="number"
               min={50}
@@ -577,11 +638,13 @@ const AutocompleteDebugPanel = () => {
               step={10}
               value={debounceMs}
               onChange={event => setDebounceMs(event.target.value)}
-              className="w-28 rounded border border-stone-300 bg-white px-2 py-1 text-xs text-stone-700"
+              className="w-28 rounded border border-stone-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-stone-700 dark:text-neutral-200"
             />
           </label>
-          <label className="flex items-center justify-between rounded-xl border border-stone-200 bg-stone-50 px-3 py-2">
-            <span className="text-sm text-stone-700">Max Characters</span>
+          <label className="flex items-center justify-between rounded-xl border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-3 py-2">
+            <span className="text-sm text-stone-700 dark:text-neutral-200">
+              {t('settings.autocomplete.completionStyle.maxChars')}
+            </span>
             <input
               type="number"
               min={32}
@@ -589,11 +652,13 @@ const AutocompleteDebugPanel = () => {
               step={8}
               value={maxChars}
               onChange={event => setMaxChars(event.target.value)}
-              className="w-28 rounded border border-stone-300 bg-white px-2 py-1 text-xs text-stone-700"
+              className="w-28 rounded border border-stone-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-stone-700 dark:text-neutral-200"
             />
           </label>
-          <label className="flex items-center justify-between rounded-xl border border-stone-200 bg-stone-50 px-3 py-2">
-            <span className="text-sm text-stone-700">Overlay TTL Ms</span>
+          <label className="flex items-center justify-between rounded-xl border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-3 py-2">
+            <span className="text-sm text-stone-700 dark:text-neutral-200">
+              {t('settings.autocomplete.completionStyle.overlayTtl')}
+            </span>
             <input
               type="number"
               min={300}
@@ -601,77 +666,90 @@ const AutocompleteDebugPanel = () => {
               step={100}
               value={overlayTtlMs}
               onChange={event => setOverlayTtlMs(event.target.value)}
-              className="w-28 rounded border border-stone-300 bg-white px-2 py-1 text-xs text-stone-700"
+              className="w-28 rounded border border-stone-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-stone-700 dark:text-neutral-200"
             />
           </label>
           <div className="space-y-1">
-            <div className="text-xs text-stone-600">Style Instructions</div>
+            <div className="text-xs text-stone-600 dark:text-neutral-300">
+              {t('settings.autocomplete.completionStyle.styleInstructions')}
+            </div>
             <textarea
               value={styleInstructions}
               onChange={event => setStyleInstructions(event.target.value)}
               rows={3}
-              className="w-full rounded border border-stone-200 bg-stone-50 p-2 text-xs text-stone-700"
+              className="w-full rounded border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 p-2 text-xs text-stone-700 dark:text-neutral-200"
             />
           </div>
           <div className="space-y-1">
-            <div className="text-xs text-stone-600">Style Examples (one per line)</div>
+            <div className="text-xs text-stone-600 dark:text-neutral-300">
+              {t('settings.autocomplete.completionStyle.styleExamples')}
+            </div>
             <textarea
               value={styleExamplesText}
               onChange={event => setStyleExamplesText(event.target.value)}
               rows={3}
-              className="w-full rounded border border-stone-200 bg-stone-50 p-2 text-xs text-stone-700"
+              className="w-full rounded border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 p-2 text-xs text-stone-700 dark:text-neutral-200"
             />
           </div>
           <button
             type="button"
             onClick={() => void saveAdvancedConfig()}
             disabled={isSaving}
-            className="rounded-lg border border-primary-500/60 bg-primary-50 px-3 py-2 text-sm text-primary-600 disabled:opacity-50">
-            {isSaving ? 'Saving…' : 'Save'}
+            className="rounded-lg border border-primary-500/60 bg-primary-50 dark:bg-primary-500/10 px-3 py-2 text-sm text-primary-600 dark:text-primary-300 disabled:opacity-50">
+            {isSaving ? t('autocomplete.saving') : t('common.save')}
           </button>
         </section>
 
         {/* ------------------------------------------------------------------ */}
         {/* Personalization History                                             */}
         {/* ------------------------------------------------------------------ */}
-        <section className="rounded-2xl border border-stone-200 bg-white p-4 space-y-3">
+        <section className="rounded-2xl border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-stone-900">Personalization History</h3>
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-neutral-100">
+              {t('settings.autocomplete.completionStyle.personalizationHistory')}
+            </h3>
             <button
               type="button"
               onClick={() => void clearHistory()}
               disabled={isClearingHistory || historyEntries.length === 0}
-              className="rounded-lg border border-red-500/60 bg-red-50 px-3 py-1.5 text-xs text-red-600 disabled:opacity-40">
-              {isClearingHistory ? 'Clearing…' : 'Clear History'}
+              className="rounded-lg border border-red-500/60 bg-red-50 dark:bg-red-500/10 px-3 py-1.5 text-xs text-red-600 dark:text-red-300 disabled:opacity-40">
+              {isClearingHistory
+                ? t('settings.autocomplete.completionStyle.clearing')
+                : t('settings.autocomplete.completionStyle.clearHistory')}
             </button>
           </div>
-          <p className="text-xs text-stone-500">
+          <p className="text-xs text-stone-500 dark:text-neutral-400">
             {isHistoryLoading
-              ? 'Loading…'
+              ? t('common.loading')
               : historyEntries.length === 0
-                ? 'No accepted completions yet. Accept suggestions with Tab to start personalising.'
-                : `${String(historyEntries.length)} accepted completion${historyEntries.length === 1 ? '' : 's'} stored — used to personalise future suggestions.`}
+                ? t('settings.autocomplete.completionStyle.noHistory')
+                : (historyEntries.length === 1
+                    ? t('settings.autocomplete.completionStyle.acceptedCompletion')
+                    : t('settings.autocomplete.completionStyle.acceptedCompletions')
+                  ).replace('{count}', String(historyEntries.length))}
           </p>
           {historyEntries.length > 0 && (
-            <div className="max-h-48 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-2 space-y-1">
+            <div className="max-h-48 overflow-y-auto rounded-xl border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 p-2 space-y-1">
               {historyEntries.map((entry, idx) => (
                 <div
                   key={`${String(entry.timestamp_ms)}-${String(idx)}`}
-                  className="flex flex-col gap-0.5 rounded-lg bg-white px-2 py-1.5 text-xs border border-stone-100">
-                  <div className="flex items-center gap-2 text-stone-500">
+                  className="flex flex-col gap-0.5 rounded-lg bg-white dark:bg-neutral-900 px-2 py-1.5 text-xs border border-stone-100 dark:border-neutral-800">
+                  <div className="flex items-center gap-2 text-stone-500 dark:text-neutral-400">
                     <span className="shrink-0">
                       {new Date(entry.timestamp_ms).toLocaleString()}
                     </span>
                     {entry.app_name && (
-                      <span className="rounded bg-stone-100 px-1 text-stone-600">
+                      <span className="rounded bg-stone-100 dark:bg-neutral-800 px-1 text-stone-600 dark:text-neutral-300">
                         {entry.app_name}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-baseline gap-1 text-stone-700 truncate">
-                    <span className="shrink-0 text-stone-400">…</span>
-                    <span className="truncate text-stone-500">{entry.context.slice(-40)}</span>
-                    <span className="shrink-0 text-stone-400">→</span>
+                  <div className="flex items-baseline gap-1 text-stone-700 dark:text-neutral-200 truncate">
+                    <span className="shrink-0 text-stone-400 dark:text-neutral-500">…</span>
+                    <span className="truncate text-stone-500 dark:text-neutral-400">
+                      {entry.context.slice(-40)}
+                    </span>
+                    <span className="shrink-0 text-stone-400 dark:text-neutral-500">→</span>
                     <span className="font-medium text-primary-500 truncate">
                       {entry.suggestion}
                     </span>
@@ -685,8 +763,8 @@ const AutocompleteDebugPanel = () => {
         {/* ------------------------------------------------------------------ */}
         {/* Feedback messages                                                   */}
         {/* ------------------------------------------------------------------ */}
-        {message && <div className="text-xs text-green-700">{message}</div>}
-        {error && <div className="text-xs text-red-600">{error}</div>}
+        {message && <div className="text-xs text-green-700 dark:text-green-300">{message}</div>}
+        {error && <div className="text-xs text-red-600 dark:text-red-300">{error}</div>}
       </div>
     </div>
   );

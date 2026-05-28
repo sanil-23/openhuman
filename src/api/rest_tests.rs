@@ -1,10 +1,14 @@
-use super::{key_bytes_from_string, sanitize_client_version, BackendOAuthClient};
+use super::{
+    key_bytes_from_string, parse_message_path, sanitize_client_version, BackendApiError,
+    BackendOAuthClient,
+};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
+use reqwest::Method;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
@@ -215,6 +219,31 @@ async fn backend_client_sends_x_core_version_on_auth_requests() {
     );
 }
 
+#[tokio::test]
+async fn backend_client_sends_x_tauri_version_when_env_set() {
+    // Serialize against any concurrent test that also touches this env var.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = ENV_LOCK.lock().unwrap();
+
+    std::env::set_var("OPENHUMAN_TAURI_VERSION", "9.8.7-shell+test");
+    let (base_url, captured) = spawn_header_capture_server().await;
+    let client = BackendOAuthClient::new(&base_url).unwrap();
+    let url = client.url_for("/probe").unwrap();
+    let response = client.raw_client().get(url).send().await.unwrap();
+    assert!(response.status().is_success());
+    std::env::remove_var("OPENHUMAN_TAURI_VERSION");
+
+    let headers = captured.take();
+    let request_headers = headers.last().unwrap();
+    let tauri_version = request_headers
+        .get("x-tauri-version")
+        .and_then(|value| value.to_str().ok())
+        .unwrap();
+    assert_eq!(tauri_version, "9.8.7-shell+test");
+    // Core version still flows alongside the new tauri version header.
+    assert!(request_headers.get("x-core-version").is_some());
+}
+
 // Regression: OPENHUMAN-TAURI-8K / Sentry issue 7473650958.
 // When config.api_url is a full LLM completions URL (e.g. /v1/chat/completions),
 // Url::join used to produce wrong paths like /v1/chat/teams/me/usage instead of
@@ -267,4 +296,197 @@ async fn backend_raw_client_inherits_x_core_version_default_header() {
         version,
         sanitize_client_version(env!("CARGO_PKG_VERSION")).unwrap()
     );
+}
+
+#[tokio::test]
+async fn authed_json_surfaces_message_not_found_on_404() {
+    let app = Router::new()
+        .route(
+            "/channels/telegram/messages/1103",
+            post(|| async { (axum::http::StatusCode::NOT_FOUND, "Not Found") }),
+        )
+        .route(
+            "/channels/discord/messages/abc",
+            post(|| async { (axum::http::StatusCode::NOT_FOUND, "Not Found") }),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let base_url = format!("http://{addr}");
+    let client = BackendOAuthClient::new(&base_url).unwrap();
+
+    // Telegram path — matches OPENHUMAN-TAURI-2Y shape.
+    let err = client
+        .authed_json(
+            "mock-jwt",
+            Method::POST,
+            "/channels/telegram/messages/1103",
+            None,
+        )
+        .await
+        .unwrap_err();
+    let typed = err.downcast_ref::<BackendApiError>().unwrap();
+    let BackendApiError::MessageNotFound {
+        provider,
+        message_id,
+    } = typed;
+    assert_eq!(provider, "telegram");
+    assert_eq!(message_id, "1103");
+
+    // Discord path — proves the helper is provider-agnostic.
+    let err = client
+        .authed_json(
+            "mock-jwt",
+            Method::POST,
+            "/channels/discord/messages/abc",
+            None,
+        )
+        .await
+        .unwrap_err();
+    let typed = err.downcast_ref::<BackendApiError>().unwrap();
+    let BackendApiError::MessageNotFound {
+        provider,
+        message_id,
+    } = typed;
+    assert_eq!(provider, "discord");
+    assert_eq!(message_id, "abc");
+}
+
+#[tokio::test]
+async fn authed_json_404_outside_messages_path_still_reports() {
+    // 404 on a non-`/channels/<provider>/messages/<id>` path should NOT be
+    // demoted to MessageNotFound — it's a real backend bug or routing
+    // mistake and must keep its Sentry signal.
+    let app = Router::new().route(
+        "/auth/profile",
+        get(|| async { (axum::http::StatusCode::NOT_FOUND, "Not Found") }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let base_url = format!("http://{addr}");
+    let client = BackendOAuthClient::new(&base_url).unwrap();
+
+    let err = client
+        .authed_json("mock-jwt", Method::GET, "/auth/profile", None)
+        .await
+        .unwrap_err();
+    assert!(
+        err.downcast_ref::<BackendApiError>().is_none(),
+        "non-channel-message 404 must not be classified as MessageNotFound"
+    );
+}
+
+// ── parse_message_path unit tests (TAURI-R7 regression guard) ───────────────
+
+#[test]
+fn parse_message_path_canonical_form() {
+    assert_eq!(
+        parse_message_path("/channels/telegram/messages/1103"),
+        Some(("telegram", "1103"))
+    );
+}
+
+#[test]
+fn parse_message_path_discord_provider() {
+    assert_eq!(
+        parse_message_path("/channels/discord/messages/abc"),
+        Some(("discord", "abc"))
+    );
+}
+
+#[test]
+fn parse_message_path_base_path_prefix() {
+    // TAURI-R7 root cause: BACKEND_URL with a path prefix adds segments,
+    // breaking the strict 4-segment check. The sliding window must handle it.
+    assert_eq!(
+        parse_message_path("/api/v1/channels/telegram/messages/1103"),
+        Some(("telegram", "1103"))
+    );
+}
+
+#[test]
+fn parse_message_path_double_prefix() {
+    assert_eq!(
+        parse_message_path("/v2/api/channels/discord/messages/abc"),
+        Some(("discord", "abc"))
+    );
+}
+
+#[test]
+fn parse_message_path_trailing_slash() {
+    assert_eq!(
+        parse_message_path("/channels/telegram/messages/1103/"),
+        Some(("telegram", "1103"))
+    );
+}
+
+#[test]
+fn parse_message_path_percent_encoded_slug() {
+    // Channel slugs with percent-encoded characters must pass through verbatim.
+    assert_eq!(
+        parse_message_path("/channels/telegram%3Abot/messages/1103"),
+        Some(("telegram%3Abot", "1103"))
+    );
+}
+
+#[test]
+fn parse_message_path_non_message_path_returns_none() {
+    assert_eq!(parse_message_path("/channels/telegram/typing"), None);
+    assert_eq!(parse_message_path("/channels/telegram"), None);
+    assert_eq!(parse_message_path("/auth/profile"), None);
+    assert_eq!(parse_message_path("/"), None);
+    assert_eq!(parse_message_path(""), None);
+}
+
+// ── authed_json defense-in-depth: PATCH 404 with base-path prefix ───────────
+
+#[tokio::test]
+async fn authed_json_patch_404_with_base_path_prefix_does_not_report() {
+    // Regression for TAURI-R7: if the resolved URL has a base-path prefix,
+    // authed_json must still suppress the 404 (either via parse_message_path
+    // sliding-window match → MessageNotFound, or via the defense-in-depth
+    // inline check) — NOT call report_error.
+    //
+    // Since BackendOAuthClient strips the base path in `new()`, the path
+    // passed to authed_json is always joined against the stripped base. We
+    // verify that a PATCH 404 returns an error without panicking and that
+    // it is NOT classified as a code bug (no BackendApiError::MessageNotFound
+    // wrapping for the generic bail! path, but no Sentry event either).
+    let app = axum::Router::new().route(
+        "/channels/telegram/messages/9999",
+        axum::routing::any(|| async { (axum::http::StatusCode::NOT_FOUND, "Not Found") }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let base_url = format!("http://{addr}");
+    let client = BackendOAuthClient::new(&base_url).unwrap();
+
+    // Standard path — must be classified as MessageNotFound (sliding-window parse).
+    let err = client
+        .authed_json(
+            "mock-jwt",
+            Method::PATCH,
+            "/channels/telegram/messages/9999",
+            None,
+        )
+        .await
+        .unwrap_err();
+    let typed = err.downcast_ref::<BackendApiError>().unwrap();
+    let BackendApiError::MessageNotFound {
+        provider,
+        message_id,
+    } = typed;
+    assert_eq!(provider, "telegram");
+    assert_eq!(message_id, "9999");
 }

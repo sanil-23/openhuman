@@ -12,6 +12,7 @@ use tokio_tungstenite::{
 };
 
 use crate::api::models::socket::ConnectionStatus;
+use crate::openhuman::util::utf8_safe_prefix_at_byte_boundary;
 
 use super::event_handlers::{handle_sio_event, parse_sio_event};
 use super::manager::{emit_state_change, SharedState};
@@ -161,8 +162,13 @@ pub(super) async fn ws_loop(
 ///
 /// - Below `FAIL_ESCALATE_THRESHOLD`: `warn` — transient blips (DNS, gateway
 ///   5xx, TLS resets) stay out of Sentry.
-/// - Exactly at the threshold: `error` — fires the one-shot Sentry event that
-///   signals a sustained outage.
+/// - Exactly at the threshold: routed through
+///   [`crate::core::observability::report_error_or_expected`] so transport-
+///   level user-environment shapes (`network is unreachable`, `dns error`,
+///   `connection refused/reset`, `tls handshake`) demote to a `warn`
+///   breadcrumb while genuine outages (gateway 5xx, server-side WebSocket
+///   close, malformed handshake) fire exactly one Sentry event per affected
+///   client.
 /// - Above the threshold: `warn` — already paged once; avoid unbounded events
 ///   during a long outage.
 ///
@@ -170,12 +176,23 @@ pub(super) async fn ws_loop(
 /// async event loop or touching the WS stack.
 fn log_connection_failure(consecutive: u32, reason: &str) {
     if consecutive == FAIL_ESCALATE_THRESHOLD {
-        // One-shot escalation: fire exactly one Sentry-visible `error` event so
-        // sustained outages surface without generating unbounded events.
-        log::error!(
-            "[socket] Connection failed (sustained outage after {} attempts): {}",
-            consecutive,
-            reason
+        // Route the one-shot sustained-outage escalation through the
+        // observability classifier so an offline user (no wifi / airplane mode
+        // / `Network is unreachable (os error 51)` — see OPENHUMAN-TAURI-BH)
+        // does not page on every affected client. Sentry has no signal to act
+        // on a user being offline — no status, no trace, no payload — so the
+        // event was pure noise. Genuine outage shapes (gateway 5xx, malformed
+        // handshake, …) don't match the classifier and still fire one Sentry
+        // event per affected client, preserving the OPENHUMAN-TAURI-8M intent.
+        let detailed = format!(
+            "[socket] Connection failed (sustained outage after {consecutive} attempts): {reason}"
+        );
+        let attempts = consecutive.to_string();
+        crate::core::observability::report_error_or_expected(
+            detailed.as_str(),
+            "socket",
+            "ws_connect",
+            &[("attempts", attempts.as_str())],
         );
     } else {
         // Below threshold (transient blips) or above threshold (already fired
@@ -277,7 +294,10 @@ async fn run_connection(
     emit_state_change(shared);
 
     // 7. Main event loop
-    let timeout_duration = Duration::from_millis(ping_interval + ping_timeout_ms + 5000);
+    // Deadline = pingInterval + pingTimeout + 5 s grace so minor server-side
+    // jitter doesn't cause a spurious reconnect on a healthy connection.
+    let timeout_ms = ping_interval + ping_timeout_ms + 5_000;
+    let timeout_duration = Duration::from_millis(timeout_ms);
     let mut deadline = Instant::now() + timeout_duration;
 
     loop {
@@ -319,8 +339,10 @@ async fn run_connection(
             }
             _ = tokio::time::sleep_until(deadline) => {
                 log::warn!(
-                    "[socket] Ping timeout ({}ms)",
-                    ping_interval + ping_timeout_ms + 5000
+                    "[socket] No server ping received within {}ms (interval={}ms + timeout={}ms + 5s grace); reconnecting",
+                    timeout_ms,
+                    ping_interval,
+                    ping_timeout_ms,
                 );
                 return ConnectionOutcome::Lost("Ping timeout".into());
             }
@@ -355,7 +377,7 @@ async fn read_eio_open(
                 }
                 log::debug!(
                     "[socket] Skipping non-OPEN packet: {}",
-                    &s[..s.len().min(40)]
+                    utf8_safe_prefix_at_byte_boundary(s, 40)
                 );
             }
             Some(Ok(_)) => continue,
@@ -400,7 +422,7 @@ async fn read_sio_connect_ack(
                 }
                 log::debug!(
                     "[socket] Skipping packet during SIO handshake: {}",
-                    &s[..s.len().min(40)]
+                    utf8_safe_prefix_at_byte_boundary(s, 40)
                 );
             }
             Some(Ok(_)) => continue,
@@ -447,7 +469,7 @@ fn handle_eio_message(
         _ => {
             log::debug!(
                 "[socket] Unknown EIO packet: {}",
-                &text[..text.len().min(30)]
+                utf8_safe_prefix_at_byte_boundary(text, 30)
             );
         }
     }
@@ -471,7 +493,7 @@ fn handle_sio_packet(
             } else {
                 log::warn!(
                     "[socket] Failed to parse SIO EVENT: {}",
-                    &text[..text.len().min(80)]
+                    utf8_safe_prefix_at_byte_boundary(text, 80)
                 );
             }
         }
@@ -506,7 +528,7 @@ fn handle_sio_packet(
         _ => {
             log::debug!(
                 "[socket] Unknown SIO packet type: {}",
-                &text[..text.len().min(30)]
+                utf8_safe_prefix_at_byte_boundary(text, 30)
             );
         }
     }

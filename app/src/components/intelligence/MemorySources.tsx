@@ -21,12 +21,13 @@
  * "Connected sources" panel with one section, one Sync button, one
  * stats block per identity. Sync only appears when:
  *   1. the connection is currently ACTIVE/CONNECTED, AND
- *   2. the toolkit is in the syncable allow-list (today: gmail).
+ *   2. the toolkit is in the syncable allow-list passed by the parent.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { listConnections, syncConnection } from '../../lib/composio/composioApi';
 import type { ComposioConnection } from '../../lib/composio/types';
+import { useT } from '../../lib/i18n/I18nContext';
 import {
   type FreshnessLabel,
   type MemorySyncStatus,
@@ -58,20 +59,19 @@ const TOOLKIT_LABEL: Record<string, string> = {
   document: 'Document',
 };
 
-const FRESHNESS_LABEL: Record<FreshnessLabel, string> = {
-  active: 'Active',
-  recent: 'Recent',
-  idle: 'Idle',
-};
+function useFreshnessLabel() {
+  const { t } = useT();
+  return { active: t('sync.active'), recent: t('sync.recent'), idle: t('sync.idle') };
+}
 
 function freshnessBadge(label: FreshnessLabel): string {
   switch (label) {
     case 'active':
-      return 'bg-primary-100 text-primary-700';
+      return 'bg-primary-100 dark:bg-primary-500/20 text-primary-700 dark:text-primary-300';
     case 'recent':
-      return 'bg-sage-100 text-sage-700';
+      return 'bg-sage-100 dark:bg-sage-500/20 text-sage-700 dark:text-sage-300';
     case 'idle':
-      return 'bg-stone-100 text-stone-700';
+      return 'bg-stone-100 dark:bg-neutral-800 text-stone-700 dark:text-neutral-200';
   }
 }
 
@@ -107,23 +107,43 @@ interface SourceRow {
   status: MemorySyncStatus | null;
 }
 
-function buildRows(
+export function buildRows(
   connections: ComposioConnection[],
   statuses: MemorySyncStatus[],
   syncableToolkits: ReadonlySet<string>
 ): SourceRow[] {
-  // Hide rows the user can't act on: only render identities that are
-  // (1) currently connected via Composio AND (2) whose toolkit has a
-  // memory-tree sync implementation. Orphan toolkits with chunks but
-  // no live auth, and connected toolkits without a sync provider, are
-  // both filtered out — neither offers a working Sync button so they
-  // were just clutter at the top of the Memory tab.
+  // Two-stage filter:
+  //   (1) Drop toolkits with no memory-tree sync implementation — Sync
+  //       would do nothing for them.
+  //   (2) Dedupe per (toolkit + identity) so re-authorizations don't
+  //       stack up as zombie EXPIRED rows next to the live one. Within a
+  //       group we keep the connection with the largest `createdAt` —
+  //       i.e. the user's most recent authorization for that account,
+  //       which is the actual current truth (a fresh EXPIRED supersedes
+  //       an older ACTIVE: the old row reflects an authorization the
+  //       user has since replaced, and the new EXPIRED tells them to
+  //       re-auth).
+  // When the backend doesn't surface a friendly identity (accountEmail/
+  // workspace/username — all null on the current Composio passthrough),
+  // we collapse by toolkit alone. Once identity fields land, multiple
+  // distinct accounts on the same toolkit will keep separate rows
+  // automatically.
   const statusByToolkit = new Map<string, MemorySyncStatus>();
   for (const s of statuses) statusByToolkit.set(s.provider, s);
 
-  const rows: SourceRow[] = [];
+  const latestByKey = new Map<string, ComposioConnection>();
   for (const conn of connections) {
     if (!syncableToolkits.has(conn.toolkit)) continue;
+    const identity = identityFor(conn);
+    const dedupKey = identity ? `${conn.toolkit}::${identity}` : conn.toolkit;
+    const existing = latestByKey.get(dedupKey);
+    if (!existing || isMoreRecentConnection(conn, existing)) {
+      latestByKey.set(dedupKey, conn);
+    }
+  }
+
+  const rows: SourceRow[] = [];
+  for (const conn of latestByKey.values()) {
     const label = TOOLKIT_LABEL[conn.toolkit] ?? conn.toolkit;
     const identity = identityFor(conn);
     const title = identity ? `${label} · ${identity}` : label;
@@ -138,11 +158,18 @@ function buildRows(
   return rows;
 }
 
+/** Pure recency: larger `createdAt` wins. A row missing `createdAt`
+ *  (empty string fallback) loses to any row that has one. */
+export function isMoreRecentConnection(a: ComposioConnection, b: ComposioConnection): boolean {
+  return (a.createdAt ?? '') > (b.createdAt ?? '');
+}
+
 export function MemorySources({
   syncableToolkits,
   pollIntervalMs = 5000,
   onToast,
 }: MemorySourcesProps) {
+  const { t } = useT();
   const [connections, setConnections] = useState<ComposioConnection[]>([]);
   const [statuses, setStatuses] = useState<MemorySyncStatus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -222,10 +249,12 @@ export function MemorySources({
   if (loading) {
     return (
       <section
-        className="rounded-lg border border-stone-200 bg-white p-4"
+        className="rounded-lg border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4"
         data-testid="memory-sources">
-        <h3 className="text-sm font-semibold text-stone-700">Memory sources</h3>
-        <p className="mt-2 text-xs text-stone-500">Loading…</p>
+        <h3 className="text-sm font-semibold text-stone-700 dark:text-neutral-200">
+          {t('sync.memorySources')}
+        </h3>
+        <p className="mt-2 text-xs text-stone-500 dark:text-neutral-400">{t('common.loading')}</p>
       </section>
     );
   }
@@ -233,10 +262,12 @@ export function MemorySources({
   if (loadError) {
     return (
       <section
-        className="rounded-lg border border-stone-200 bg-white p-4"
+        className="rounded-lg border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4"
         data-testid="memory-sources">
-        <h3 className="text-sm font-semibold text-stone-700">Memory sources</h3>
-        <p className="mt-2 break-words rounded-md bg-coral-50 p-2 text-xs text-coral-800">
+        <h3 className="text-sm font-semibold text-stone-700 dark:text-neutral-200">
+          {t('sync.memorySources')}
+        </h3>
+        <p className="mt-2 break-words rounded-md bg-coral-50 dark:bg-coral-500/10 p-2 text-xs text-coral-800">
           {loadError}
         </p>
       </section>
@@ -246,12 +277,13 @@ export function MemorySources({
   if (rows.length === 0) {
     return (
       <section
-        className="rounded-lg border border-stone-200 bg-white p-4"
+        className="rounded-lg border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4"
         data-testid="memory-sources">
-        <h3 className="text-sm font-semibold text-stone-700">Memory sources</h3>
-        <p className="mt-2 text-xs text-stone-500">
-          No connected sources with a memory-tree sync provider yet. Connect Gmail (or another
-          supported integration) in the Chat tab to start ingesting.
+        <h3 className="text-sm font-semibold text-stone-700 dark:text-neutral-200">
+          {t('sync.memorySources')}
+        </h3>
+        <p className="mt-2 text-xs text-stone-500 dark:text-neutral-400">
+          {t('sync.noConnectedSources')}
         </p>
       </section>
     );
@@ -259,15 +291,17 @@ export function MemorySources({
 
   return (
     <section
-      className="rounded-lg border border-stone-200 bg-white p-4"
+      className="rounded-lg border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4"
       data-testid="memory-sources">
       <header className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-stone-700">Memory sources</h3>
-        <span className="text-xs text-stone-400">
+        <h3 className="text-sm font-semibold text-stone-700 dark:text-neutral-200">
+          {t('sync.memorySources')}
+        </h3>
+        <span className="text-xs text-stone-400 dark:text-neutral-500">
           {rows.length} identit{rows.length === 1 ? 'y' : 'ies'}
         </span>
       </header>
-      <ul className="divide-y divide-stone-100">
+      <ul className="divide-y divide-stone-100 dark:divide-neutral-800">
         {rows.map(row => (
           <SourceRowCard
             key={row.key}
@@ -288,6 +322,8 @@ interface SourceRowCardProps {
 }
 
 function SourceRowCard({ row, isSyncing, onSync }: SourceRowCardProps) {
+  const { t } = useT();
+  const freshnessLabels = useFreshnessLabel();
   // `buildRows` already filtered down to (connected toolkit + syncable),
   // so `connection` is non-null and `isSyncable` is always true here.
   const { connection, status, title, toolkit } = row;
@@ -309,30 +345,40 @@ function SourceRowCard({ row, isSyncing, onSync }: SourceRowCardProps) {
       data-testid={`memory-source-row-${toolkit}`}>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="truncate text-sm font-medium text-stone-900">{title}</span>
+          <span className="truncate text-sm font-medium text-stone-900 dark:text-neutral-100">
+            {title}
+          </span>
           {status && (
             <span
               className={`rounded-md px-2 py-0.5 text-xs font-medium ${freshnessBadge(status.freshness)}`}
               data-testid={`memory-source-freshness-${toolkit}`}>
-              {FRESHNESS_LABEL[status.freshness]}
+              {freshnessLabels[status.freshness]}
             </span>
           )}
           {!isActive && (
-            <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+            <span className="rounded-md bg-amber-100 dark:bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
               {connection.status}
             </span>
           )}
         </div>
-        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-stone-500">
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-stone-500 dark:text-neutral-400">
           <span data-testid={`memory-source-chunks-${toolkit}`}>
-            {lifetime.toLocaleString()} chunks
+            {lifetime.toLocaleString()} {t('sync.chunks')}
           </span>
-          {lastSync && <span>Last chunk {lastSync}</span>}
-          {pending > 0 && <span>{pending.toLocaleString()} pending</span>}
+          {lastSync && (
+            <span>
+              {t('sync.lastChunk')} {lastSync}
+            </span>
+          )}
+          {pending > 0 && (
+            <span>
+              {pending.toLocaleString()} {t('sync.pending')}
+            </span>
+          )}
         </div>
         {showProgress && (
           <div className="mt-2 max-w-md" data-testid={`memory-source-progress-${toolkit}`}>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-100">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-100 dark:bg-neutral-800">
               <div
                 className="h-full bg-primary-500 transition-all"
                 style={{ width: `${pct}%` }}
@@ -342,8 +388,9 @@ function SourceRowCard({ row, isSyncing, onSync }: SourceRowCardProps) {
                 aria-valuemax={batchTotal}
               />
             </div>
-            <div className="mt-1 text-xs text-stone-500">
-              {batchProcessed.toLocaleString()} of {batchTotal.toLocaleString()} processed
+            <div className="mt-1 text-xs text-stone-500 dark:text-neutral-400">
+              {batchProcessed.toLocaleString()} / {batchTotal.toLocaleString()}{' '}
+              {t('sync.processed')}
             </div>
           </div>
         )}
@@ -361,11 +408,11 @@ function SourceRowCard({ row, isSyncing, onSync }: SourceRowCardProps) {
                      focus:outline-none focus:ring-2 focus:ring-primary-200">
           {isSyncing ? (
             <>
-              <Spinner /> Syncing…
+              <Spinner /> {t('sync.syncing')}
             </>
           ) : (
             <>
-              <SyncIcon /> Sync
+              <SyncIcon /> {t('sync.sync')}
             </>
           )}
         </button>

@@ -5,11 +5,12 @@ use crate::core::all::{ControllerFuture, RegisteredController};
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
 
 use super::execution::{
-    balances, chain_status, execute_prepared, prepare_contract_call, prepare_swap,
-    prepare_transfer, supported_assets, ExecutePreparedParams, PrepareContractCallParams,
-    PrepareSwapParams, PrepareTransferParams,
+    balances, chain_status, execute_prepared, network_defaults, prepare_contract_call,
+    prepare_swap, prepare_transfer, supported_assets, ExecutePreparedParams,
+    PrepareContractCallParams, PrepareSwapParams, PrepareTransferParams,
 };
 use super::ops::{WalletAccount, WalletSetupParams, WalletSetupSource};
+use super::{encode_erc20_transfer, WalletChain};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,7 +18,16 @@ struct SetupWalletParams {
     consent_granted: bool,
     source: WalletSetupSource,
     mnemonic_word_count: u8,
+    encrypted_mnemonic: String,
     accounts: Vec<WalletAccount>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EncodeErc20TransferParams {
+    chain: WalletChain,
+    to_address: String,
+    amount_raw: String,
 }
 
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
@@ -37,7 +47,9 @@ pub fn all_wallet_controller_schemas() -> Vec<ControllerSchema> {
         wallet_schemas("status"),
         wallet_schemas("setup"),
         wallet_schemas("balances"),
+        wallet_schemas("network_defaults"),
         wallet_schemas("supported_assets"),
+        wallet_schemas("encode_erc20_transfer"),
         wallet_schemas("chain_status"),
         wallet_schemas("prepare_transfer"),
         wallet_schemas("prepare_swap"),
@@ -61,8 +73,16 @@ pub fn all_wallet_registered_controllers() -> Vec<RegisteredController> {
             handler: handle_balances,
         },
         RegisteredController {
+            schema: wallet_schemas("network_defaults"),
+            handler: handle_network_defaults,
+        },
+        RegisteredController {
             schema: wallet_schemas("supported_assets"),
             handler: handle_supported_assets,
+        },
+        RegisteredController {
+            schema: wallet_schemas("encode_erc20_transfer"),
+            handler: handle_encode_erc20_transfer,
         },
         RegisteredController {
             schema: wallet_schemas("chain_status"),
@@ -113,6 +133,13 @@ pub fn wallet_schemas(function: &str) -> ControllerSchema {
                     "mnemonicWordCount",
                     "The number of words in the validated recovery phrase.",
                 ),
+                FieldSchema {
+                    name: "encryptedMnemonic",
+                    ty: TypeSchema::String,
+                    comment:
+                        "Encrypted recovery phrase payload created via openhuman.encrypt_secret. Required for on-chain signing/broadcast.",
+                    required: true,
+                },
                 required_json(
                     "accounts",
                     "Exactly one derived account for each supported chain: EVM, BTC, Solana, and Tron.",
@@ -129,7 +156,7 @@ pub fn wallet_schemas(function: &str) -> ControllerSchema {
             namespace: "wallet",
             function: "balances",
             description:
-                "List native-asset balances for every derived wallet account. Each row carries a providerStatus indicating whether a chain RPC is configured.",
+                "List native-asset balances for every derived wallet account. EVM balances are read live from the configured/default RPC; other chains remain placeholder-zero until provider support lands.",
             inputs: vec![],
             outputs: vec![FieldSchema {
                 name: "result",
@@ -138,16 +165,46 @@ pub fn wallet_schemas(function: &str) -> ControllerSchema {
                 required: true,
             }],
         },
-        "supported_assets" => ControllerSchema {
+        "network_defaults" => ControllerSchema {
             namespace: "wallet",
-            function: "supported_assets",
+            function: "network_defaults",
             description:
-                "Catalog of natively supported assets (one native per chain) the wallet surface understands.",
+                "List default RPC URLs, explorer bases, capability flags, and asset catalogs for supported wallet chains.",
             inputs: vec![],
             outputs: vec![FieldSchema {
                 name: "result",
                 ty: TypeSchema::Json,
-                comment: "Array of {chain, symbol, name, native, decimals}.",
+                comment: "Array of {chain, network, chainId?, rpcUrl, rpcSource, explorerTxUrlBase, supportsBroadcast, supportsTokenTransfers, supportsContractCalls, assets[]}.",
+                required: true,
+            }],
+        },
+        "supported_assets" => ControllerSchema {
+            namespace: "wallet",
+            function: "supported_assets",
+            description:
+                "Catalog of built-in asset defaults the wallet surface understands, including default ERC-20s on EVM.",
+            inputs: vec![],
+            outputs: vec![FieldSchema {
+                name: "result",
+                ty: TypeSchema::Json,
+                comment: "Array of {chain, symbol, name, native, decimals, contractAddress?}.",
+                required: true,
+            }],
+        },
+        "encode_erc20_transfer" => ControllerSchema {
+            namespace: "wallet",
+            function: "encode_erc20_transfer",
+            description:
+                "Encode ERC-20 transfer(address,uint256) calldata for EVM token sends.",
+            inputs: vec![
+                required_json("chain", "Target chain. Must be evm."),
+                required_json("toAddress", "Recipient EVM address."),
+                required_json("amountRaw", "Token amount in the token's smallest unit as a decimal string."),
+            ],
+            outputs: vec![FieldSchema {
+                name: "result",
+                ty: TypeSchema::Json,
+                comment: "0x-prefixed calldata string for transfer(address,uint256).",
                 required: true,
             }],
         },
@@ -155,12 +212,12 @@ pub fn wallet_schemas(function: &str) -> ControllerSchema {
             namespace: "wallet",
             function: "chain_status",
             description:
-                "Per-chain readiness: whether a wallet account is derived and whether an RPC provider is configured.",
+                "Per-chain readiness: whether a wallet account is derived plus the active RPC URL (default or env override).",
             inputs: vec![],
             outputs: vec![FieldSchema {
                 name: "result",
                 ty: TypeSchema::Json,
-                comment: "Array of {chain, configured, providerStatus} (providerStatus ∈ ready|unconfigured|missing).",
+                comment: "Array of {chain, configured, providerStatus, rpcUrl}.",
                 required: true,
             }],
         },
@@ -168,15 +225,21 @@ pub fn wallet_schemas(function: &str) -> ControllerSchema {
             namespace: "wallet",
             function: "prepare_transfer",
             description:
-                "Build a simulated native or token-transfer quote. Returns a quoteId; call wallet.execute_prepared with confirmed=true to forward to the keystore.",
+                "Build a native or token-transfer quote. All four chains (EVM, BTC, Solana, Tron) sign + broadcast on execute_prepared after explicit confirmation. BTC supports only native transfers (no token concept).",
             inputs: vec![
                 required_json("chain", "Target chain (evm | btc | solana | tron)."),
                 required_json("toAddress", "Recipient address on the target chain."),
-                required_json("amountRaw", "Amount in the asset's smallest unit (wei/sat/lamport) as a decimal string."),
+                required_json("amountRaw", "Amount in the asset's smallest unit (wei/sat/lamport/sun) as a decimal string."),
                 FieldSchema {
                     name: "assetSymbol",
                     ty: TypeSchema::Option(Box::new(TypeSchema::String)),
                     comment: "Optional. Omit / null for the chain's native asset; otherwise a token symbol from wallet.supported_assets.",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "evmNetwork",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::String)),
+                    comment: "Optional. Required only for chain='evm' to pick a network: ethereum_mainnet | base_mainnet | arbitrum_one | optimism_mainnet | polygon_mainnet. Defaults to ethereum_mainnet.",
                     required: false,
                 },
             ],
@@ -199,6 +262,12 @@ pub fn wallet_schemas(function: &str) -> ControllerSchema {
                 required_json("amountInRaw", "Input amount in the from-asset's smallest unit, as a decimal string."),
                 required_json("slippageBps", "Slippage tolerance in basis points (max 5000 = 50%)."),
                 required_json("routerAddress", "Router / aggregator contract address."),
+                FieldSchema {
+                    name: "evmNetwork",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::String)),
+                    comment: "Optional. EVM network selector when chain='evm'. Defaults to ethereum_mainnet.",
+                    required: false,
+                },
             ],
             outputs: vec![FieldSchema {
                 name: "result",
@@ -211,15 +280,21 @@ pub fn wallet_schemas(function: &str) -> ControllerSchema {
             namespace: "wallet",
             function: "prepare_contract_call",
             description:
-                "Build a contract-call simulation quote (EVM and Tron). Caller supplies pre-encoded calldata.",
+                "Build a contract-call quote for EVM. Caller supplies pre-encoded calldata.",
             inputs: vec![
-                required_json("chain", "Target chain (evm | tron). Other chains reject."),
+                required_json("chain", "Target chain. Must be evm."),
                 required_json("contractAddress", "Target contract address."),
                 required_json("calldata", "0x-prefixed hex calldata."),
                 FieldSchema {
                     name: "valueRaw",
                     ty: TypeSchema::Option(Box::new(TypeSchema::String)),
                     comment: "Native value attached, smallest unit. Defaults to '0'.",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "evmNetwork",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::String)),
+                    comment: "Optional. EVM network selector. Defaults to ethereum_mainnet.",
                     required: false,
                 },
             ],
@@ -234,7 +309,7 @@ pub fn wallet_schemas(function: &str) -> ControllerSchema {
             namespace: "wallet",
             function: "execute_prepared",
             description:
-                "Confirm a previously prepared quote and hand it off to the local keystore for signing. Requires confirmed=true; signing happens in the desktop shell, never in core.",
+                "Confirm and execute a previously prepared quote. EVM transfers and contract calls are signed in core from encrypted local secret material, then broadcast to the configured/default RPC.",
             inputs: vec![
                 required_json("quoteId", "quoteId returned by a prior wallet.prepare_* call."),
                 required_json("confirmed", "Must be true; explicit safety boundary between simulate and execute."),
@@ -242,7 +317,7 @@ pub fn wallet_schemas(function: &str) -> ControllerSchema {
             outputs: vec![FieldSchema {
                 name: "result",
                 ty: TypeSchema::Json,
-                comment: "ReadyToSign payload: {quoteId, status, chain, transaction}.",
+                comment: "ExecutionResult payload: {quoteId, status, chain, transactionHash, explorerUrl?, transaction}.",
                 required: true,
             }],
         },
@@ -277,6 +352,7 @@ fn handle_setup(params: Map<String, Value>) -> ControllerFuture {
             consent_granted: payload.consent_granted,
             source: payload.source,
             mnemonic_word_count: payload.mnemonic_word_count,
+            encrypted_mnemonic: Some(payload.encrypted_mnemonic),
             accounts: payload.accounts,
         })
         .await?
@@ -288,8 +364,27 @@ fn handle_balances(_params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move { balances().await?.into_cli_compatible_json() })
 }
 
+fn handle_network_defaults(_params: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { network_defaults().await?.into_cli_compatible_json() })
+}
+
 fn handle_supported_assets(_params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move { supported_assets().await?.into_cli_compatible_json() })
+}
+
+fn handle_encode_erc20_transfer(params: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move {
+        let parsed: EncodeErc20TransferParams = serde_json::from_value(Value::Object(params))
+            .map_err(|e| format!("invalid params: {e}"))?;
+        if parsed.chain != WalletChain::Evm {
+            return Err("encode_erc20_transfer only supports the evm chain".to_string());
+        }
+        serde_json::to_value(encode_erc20_transfer(
+            &parsed.to_address,
+            &parsed.amount_raw,
+        )?)
+        .map_err(|e| format!("failed to encode ERC20 transfer output: {e}"))
+    })
 }
 
 fn handle_chain_status(_params: Map<String, Value>) -> ControllerFuture {
@@ -345,12 +440,12 @@ mod tests {
 
     #[test]
     fn all_schemas_lists_every_controller() {
-        assert_eq!(all_wallet_controller_schemas().len(), 9);
+        assert_eq!(all_wallet_controller_schemas().len(), 11);
     }
 
     #[test]
     fn all_controllers_lists_every_handler() {
-        assert_eq!(all_wallet_registered_controllers().len(), 9);
+        assert_eq!(all_wallet_registered_controllers().len(), 11);
     }
 
     #[test]
@@ -364,8 +459,13 @@ mod tests {
     #[test]
     fn setup_schema_requires_all_inputs() {
         let schema = wallet_schemas("setup");
-        assert_eq!(schema.inputs.len(), 4);
-        assert!(schema.inputs.iter().all(|field| field.required));
+        assert_eq!(schema.inputs.len(), 5);
+        let encrypted = schema
+            .inputs
+            .iter()
+            .find(|field| field.name == "encryptedMnemonic")
+            .expect("encryptedMnemonic input present");
+        assert!(encrypted.required);
     }
 
     #[test]

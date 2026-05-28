@@ -8,6 +8,7 @@
  */
 import debug from 'debug';
 
+import type { TaskBoard } from '../types/turnState';
 import { callCoreRpc } from './coreRpcClient';
 import { socketService } from './socketService';
 
@@ -110,6 +111,29 @@ export interface ProactiveMessageEvent {
   thread_id: string;
   request_id?: string;
   full_response: string;
+}
+
+/**
+ * Emitted when the agent turn parks on the ApprovalGate — a `Prompt`-class
+ * (external-effect) tool call is awaiting the user's decision (only when the
+ * core runs with `OPENHUMAN_APPROVAL_GATE=1`). The frontend surfaces a
+ * pending-approval prompt; answering routes to the `openhuman.approval_decide`
+ * RPC. A typed `yes`/`no` chat reply is also honoured server-side; any other
+ * text cancels the parked turn and is taken as a fresh message.
+ */
+export interface ChatApprovalRequestEvent {
+  thread_id: string;
+  client_id?: string;
+  request_id: string;
+  tool_name: string;
+  /** Human-readable summary of the action awaiting approval. */
+  message: string;
+  /**
+   * Redacted args of the gated call — e.g. `{ command }` for shell,
+   * `{ path }` for file writes, `{ url }` for network. The card renders the
+   * exact command/target from this so the user sees precisely what will run.
+   */
+  args?: Record<string, unknown>;
 }
 
 /** Emitted when the agent turn begins (before the first LLM call). */
@@ -269,6 +293,12 @@ export interface ChatToolArgsDeltaEvent {
   delta: string;
 }
 
+export interface ChatTaskBoardUpdatedEvent {
+  thread_id: string;
+  request_id?: string;
+  task_board: TaskBoard;
+}
+
 export interface ChatEventListeners {
   onInferenceStart?: (event: ChatInferenceStartEvent) => void;
   onIterationStart?: (event: ChatIterationStartEvent) => void;
@@ -283,7 +313,9 @@ export interface ChatEventListeners {
   onTextDelta?: (event: ChatTextDeltaEvent) => void;
   onThinkingDelta?: (event: ChatThinkingDeltaEvent) => void;
   onToolArgsDelta?: (event: ChatToolArgsDeltaEvent) => void;
+  onTaskBoardUpdated?: (event: ChatTaskBoardUpdatedEvent) => void;
   onProactiveMessage?: (event: ProactiveMessageEvent) => void;
+  onApprovalRequest?: (event: ChatApprovalRequestEvent) => void;
   onDone?: (event: ChatDoneEvent) => void;
   onError?: (event: ChatErrorEvent) => void;
 }
@@ -311,7 +343,9 @@ export function subscribeChatEvents(listeners: ChatEventListeners): () => void {
     textDelta: 'text_delta',
     thinkingDelta: 'thinking_delta',
     toolArgsDelta: 'tool_args_delta',
+    taskBoardUpdated: 'task_board_updated',
     proactiveMessage: 'proactive_message',
+    approvalRequest: 'approval_request',
     done: 'chat_done',
     error: 'chat_error',
   } as const;
@@ -564,6 +598,38 @@ export function subscribeChatEvents(listeners: ChatEventListeners): () => void {
     handlers.push([EVENTS.proactiveMessage, cb]);
   }
 
+  if (listeners.onApprovalRequest) {
+    const cb = (payload: unknown) => {
+      const e = payload as ChatApprovalRequestEvent;
+      chatLog(
+        '%s thread_id=%s request_id=%s tool=%s',
+        EVENTS.approvalRequest,
+        e.thread_id,
+        e.request_id,
+        e.tool_name
+      );
+      listeners.onApprovalRequest?.(e);
+    };
+    socket.on(EVENTS.approvalRequest, cb);
+    handlers.push([EVENTS.approvalRequest, cb]);
+  }
+
+  if (listeners.onTaskBoardUpdated) {
+    const cb = (payload: unknown) => {
+      const e = payload as ChatTaskBoardUpdatedEvent;
+      chatLog(
+        '%s thread_id=%s request_id=%s cards=%d',
+        EVENTS.taskBoardUpdated,
+        e.thread_id,
+        e.request_id,
+        e.task_board?.cards?.length ?? 0
+      );
+      listeners.onTaskBoardUpdated?.(e);
+    };
+    socket.on(EVENTS.taskBoardUpdated, cb);
+    handlers.push([EVENTS.taskBoardUpdated, cb]);
+  }
+
   if (listeners.onDone) {
     const cb = (payload: unknown) => {
       const e = payload as ChatDoneEvent;
@@ -600,7 +666,15 @@ export function subscribeChatEvents(listeners: ChatEventListeners): () => void {
 export interface ChatSendParams {
   threadId: string;
   message: string;
-  model: string;
+  model?: string;
+  profileId?: string | null;
+  /**
+   * BCP-47 UI locale (e.g. `'ar'`, `'zh-CN'`) — drives the core's
+   * "reply in this language" system-prompt directive. Optional so
+   * callers that don't have a locale handy (legacy paths, tests) keep
+   * working unchanged.
+   */
+  locale?: string | null;
 }
 
 /**
@@ -623,7 +697,9 @@ export async function chatSend(params: ChatSendParams): Promise<void> {
       client_id: clientId,
       thread_id: params.threadId,
       message: params.message,
-      model_override: params.model,
+      model_override: params.model ?? undefined,
+      profile_id: params.profileId ?? undefined,
+      locale: params.locale ?? undefined,
     },
   });
 }

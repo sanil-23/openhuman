@@ -8,13 +8,30 @@
  * The legacy entrypoint at `scripts/mock-api-core.mjs` is a re-export shim
  * over this module so existing import paths keep working.
  */
-export { getMockServerPort, startMockServer, stopMockServer } from "./server.mjs";
+export {
+  getMockServerPort,
+  startMockServer,
+  stopMockServer,
+} from "./server.mjs";
 export {
   DEFAULT_PORT,
+  clearSocketEventLog,
   clearRequestLog,
+  getSocketEventLog,
   getMockBehavior,
+  getMockTelegramSent,
+  listMockLlmThreads,
   getRequestLog,
+  listSocketSessions,
+  pushMockTelegramUpdate,
   resetMockBehavior,
+  resetMockLlmThreads,
+  resetMockTelegram,
   setMockBehavior,
   setMockBehaviors,
 } from "./state.mjs";
+export {
+  disconnectMockSockets,
+  emitMockAgentAudioStream,
+  emitMockSocketEvent,
+} from "./socket.mjs";

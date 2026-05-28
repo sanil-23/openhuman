@@ -1,9 +1,9 @@
 import * as Sentry from '@sentry/react';
-import { openUrl as tauriOpenUrl } from '@tauri-apps/plugin-opener';
+import { revealItemInDir, openUrl as tauriOpenUrl } from '@tauri-apps/plugin-opener';
 
 import { isTauri } from './tauriCommands/common';
 
-const isHttpUrl = (url: string): boolean => /^https?:\/\//i.test(url);
+const isHttpUrl = (url: string): boolean => /^https?:\/\//i.test(url.trim());
 
 /**
  * Returns a low-PII representation of `url` for telemetry breadcrumbs.
@@ -48,22 +48,38 @@ const getTelemetryUrl = (url: string): string => {
  * `https://` / `mailto:` links still work for dev/preview builds.
  */
 export const openUrl = async (url: string): Promise<void> => {
+  const normalizedUrl = url.trim();
+
   if (isTauri()) {
     try {
-      await tauriOpenUrl(url);
+      await tauriOpenUrl(normalizedUrl);
       return;
     } catch (err) {
       Sentry.addBreadcrumb({
         category: 'ipc',
         level: 'warning',
         message: 'tauriOpenUrl failed; evaluating fallback',
-        data: { url: getTelemetryUrl(url), error: String(err) },
+        data: { url: getTelemetryUrl(normalizedUrl), error: String(err) },
       });
-      if (!isHttpUrl(url)) {
+      if (!isHttpUrl(normalizedUrl)) {
         throw err;
       }
       // http(s) URL — safe to fall back to window.open.
     }
   }
-  window.open(url, '_blank', 'noopener,noreferrer');
+  window.open(normalizedUrl, '_blank', 'noopener,noreferrer');
+};
+
+/**
+ * Reveals a filesystem path in the host OS file manager
+ * (Finder on macOS, Explorer on Windows, the default file manager on
+ * Linux). Used as a guaranteed-works fallback when a third-party
+ * deep link (e.g. `obsidian://`) may silently no-op because the
+ * target app isn't installed.
+ *
+ * Outside Tauri this is a no-op — there's no OS shell to drive.
+ */
+export const revealPath = async (path: string): Promise<void> => {
+  if (!isTauri()) return;
+  await revealItemInDir(path);
 };

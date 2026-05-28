@@ -1,9 +1,11 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 
+import AppRoutesIOS from './AppRoutesIOS';
 import DefaultRedirect from './components/DefaultRedirect';
 import ProtectedRoute from './components/ProtectedRoute';
 import PublicRoute from './components/PublicRoute';
 import HumanPage from './features/human/HumanPage';
+import { getIsMobile } from './lib/platform';
 import Accounts from './pages/Accounts';
 import Channels from './pages/Channels';
 import Home from './pages/Home';
@@ -14,9 +16,16 @@ import Onboarding from './pages/onboarding/Onboarding';
 import Rewards from './pages/Rewards';
 import Settings from './pages/Settings';
 import Skills from './pages/Skills';
+import WebCallbackPage from './pages/WebCallbackPage';
 import Welcome from './pages/Welcome';
 
 const AppRoutes = () => {
+  // Mobile target (iOS or Android): pair → Human/Chat/Settings only.
+  // Desktop routes are not rendered.
+  if (getIsMobile()) {
+    return <AppRoutesIOS />;
+  }
+
   return (
     <Routes>
       {/* Public routes - redirect to /home if logged in */}
@@ -28,6 +37,9 @@ const AppRoutes = () => {
           </PublicRoute>
         }
       />
+
+      <Route path="/callback/:kind" element={<WebCallbackPage />} />
+      <Route path="/callback/:kind/:status" element={<WebCallbackPage />} />
 
       {/* Onboarding (full-page stepper, gated by onboarding_completed) */}
       <Route

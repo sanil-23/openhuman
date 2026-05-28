@@ -1,9 +1,21 @@
+import { configureStore } from '@reduxjs/toolkit';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { Provider } from 'react-redux';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { I18nProvider } from '../../../lib/i18n/I18nContext';
+import type { Locale } from '../../../lib/i18n/types';
+import localeReducer from '../../../store/localeSlice';
 import SettingsHome from '../SettingsHome';
+
+function makeTestStore(locale: Locale = 'en') {
+  return configureStore({
+    reducer: { locale: localeReducer },
+    preloadedState: { locale: { current: locale } },
+  });
+}
 
 // --- hoisted mocks ---
 
@@ -21,10 +33,13 @@ vi.mock('../hooks/useSettingsNavigation', () => ({
   useSettingsNavigation: () => ({ navigateToSettings: mockNavigateToSettings }),
 }));
 
+const mockClearSession = vi.fn().mockResolvedValue(undefined);
+let mockSessionToken: string | null = null;
+
 vi.mock('../../../providers/CoreStateProvider', () => ({
   useCoreState: () => ({
-    clearSession: vi.fn().mockResolvedValue(undefined),
-    snapshot: { auth: { userId: null }, currentUser: null },
+    clearSession: mockClearSession,
+    snapshot: { auth: { userId: null }, currentUser: null, sessionToken: mockSessionToken },
   }),
 }));
 
@@ -40,22 +55,23 @@ vi.mock('../../../utils/tauriCommands', () => ({
   scheduleCefProfilePurge: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { mockClearAllAppData } = vi.hoisted(() => ({
-  mockClearAllAppData: vi.fn().mockResolvedValue(undefined),
-}));
-vi.mock('../../../utils/clearAllAppData', () => ({
-  clearAllAppData: (...args: unknown[]) => mockClearAllAppData(...args),
-}));
-
 vi.mock('../../walkthrough/AppWalkthrough', () => ({ resetWalkthrough: vi.fn() }));
 
 // --- helpers ---
 
-function renderSettingsHome() {
-  return render(
-    <MemoryRouter>
+function renderSettingsHome({ locale = 'en', withI18n = false } = {}) {
+  const content = withI18n ? (
+    <I18nProvider>
       <SettingsHome />
-    </MemoryRouter>
+    </I18nProvider>
+  ) : (
+    <SettingsHome />
+  );
+
+  return render(
+    <Provider store={makeTestStore(locale as Locale)}>
+      <MemoryRouter>{content}</MemoryRouter>
+    </Provider>
   );
 }
 
@@ -66,123 +82,60 @@ describe('SettingsHome', () => {
     vi.clearAllMocks();
   });
 
-  describe('section headers', () => {
-    it('renders the General section header', () => {
-      renderSettingsHome();
-      expect(screen.getByText('General')).toBeInTheDocument();
-    });
+  describe('flat menu', () => {
+    // Section headers ("General", "Features & AI", "Billing & Rewards",
+    // "Support", "Danger Zone") were intentionally removed — the menu is
+    // now a single flat list to reduce visual noise.
+    it.each(['General', 'Features & AI', 'Billing & Rewards', 'Support', 'Danger Zone'])(
+      'does not render section header: %s',
+      label => {
+        renderSettingsHome();
+        expect(screen.queryByText(label)).not.toBeInTheDocument();
+      }
+    );
 
-    it('renders the Features & AI section header', () => {
+    it('renders the core menu items in a single list', () => {
       renderSettingsHome();
-      expect(screen.getByText('Features & AI')).toBeInTheDocument();
-    });
-
-    it('renders the Billing & Rewards section header', () => {
-      renderSettingsHome();
-      expect(screen.getByText('Billing & Rewards')).toBeInTheDocument();
-    });
-
-    it('renders the Support section header', () => {
-      renderSettingsHome();
-      expect(screen.getByText('Support')).toBeInTheDocument();
-    });
-
-    it('renders the Advanced section header', () => {
-      renderSettingsHome();
+      expect(screen.getByText('Account')).toBeInTheDocument();
+      expect(screen.getByText('Alerts')).toBeInTheDocument();
+      expect(screen.getByText('Notifications')).toBeInTheDocument();
+      expect(screen.getByText('Billing & Usage')).toBeInTheDocument();
       expect(screen.getByText('Advanced')).toBeInTheDocument();
+      expect(screen.getByTestId('settings-nav-account')).toBeInTheDocument();
+      expect(screen.getByTestId('settings-nav-notifications')).toBeInTheDocument();
     });
 
-    it('renders the Danger Zone section header', () => {
+    it('no longer renders destructive actions on the home screen', () => {
+      // Clear App Data + Log out moved to Settings → Account.
       renderSettingsHome();
-      expect(screen.getByText('Danger Zone')).toBeInTheDocument();
-    });
-  });
-
-  describe('item grouping order', () => {
-    it('places Account and Notifications under General', () => {
-      renderSettingsHome();
-      const generalHeader = screen.getByText('General');
-      const accountItem = screen.getByText('Account');
-      const notificationsItem = screen.getByText('Notifications');
-
-      // All should appear after the General header in DOM order
-      expect(generalHeader.compareDocumentPosition(accountItem)).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
-      expect(generalHeader.compareDocumentPosition(notificationsItem)).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
+      expect(screen.queryByText('Clear App Data')).not.toBeInTheDocument();
+      expect(screen.queryByText('Log out')).not.toBeInTheDocument();
     });
 
-    it('places Features, AI & Models under Features & AI', () => {
-      renderSettingsHome();
-      const header = screen.getByText('Features & AI');
-      expect(header.compareDocumentPosition(screen.getByText('Features'))).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
-      expect(header.compareDocumentPosition(screen.getByText('AI & Models'))).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
+    it('localizes Appearance and Mascot menu items', () => {
+      renderSettingsHome({ locale: 'zh-CN', withI18n: true });
+
+      expect(screen.getByText('外观')).toBeInTheDocument();
+      expect(screen.getByText('选择浅色、深色或跟随系统主题')).toBeInTheDocument();
+      expect(screen.getByText('吉祥物')).toBeInTheDocument();
+      expect(screen.getByText('选择应用内使用的吉祥物颜色')).toBeInTheDocument();
     });
 
-    it('places Billing & Usage and Rewards under Billing & Rewards', () => {
+    it('no longer renders Features / AI / Rewards / Restart Tour / About on the home screen', () => {
       renderSettingsHome();
-      const header = screen.getByText('Billing & Rewards');
-      expect(header.compareDocumentPosition(screen.getByText('Billing & Usage'))).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
-      expect(header.compareDocumentPosition(screen.getByText('Rewards'))).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
-    });
-
-    it('places Restart Tour and About under Support', () => {
-      renderSettingsHome();
-      const header = screen.getByText('Support');
-      expect(header.compareDocumentPosition(screen.getByText('Restart Tour'))).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
-      expect(header.compareDocumentPosition(screen.getByText('About'))).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
-    });
-
-    it('places Developer Options under Advanced', () => {
-      renderSettingsHome();
-      const header = screen.getByText('Advanced');
-      expect(header.compareDocumentPosition(screen.getByText('Developer Options'))).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
-    });
-
-    it('places Clear App Data and Log out under Danger Zone', () => {
-      renderSettingsHome();
-      const header = screen.getByText('Danger Zone');
-      expect(header.compareDocumentPosition(screen.getByText('Clear App Data'))).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
-      expect(header.compareDocumentPosition(screen.getByText('Log out'))).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
+      expect(screen.queryByText('Features')).not.toBeInTheDocument();
+      expect(screen.queryByText('AI Configuration')).not.toBeInTheDocument();
+      expect(screen.queryByText('Rewards')).not.toBeInTheDocument();
+      expect(screen.queryByText('Restart Tour')).not.toBeInTheDocument();
+      expect(screen.queryByText('About')).not.toBeInTheDocument();
     });
   });
 
-  describe('Rewards menu item', () => {
-    it('renders the Rewards item', () => {
-      renderSettingsHome();
-      expect(screen.getByText('Rewards')).toBeInTheDocument();
-    });
-
-    it('navigates to /rewards when clicked', async () => {
-      const user = userEvent.setup();
+  describe('language selector', () => {
+    it('offers Bahasa Indonesia as a display language', () => {
       renderSettingsHome();
 
-      // The Rewards item description is used to find the right button
-      const rewardsButton = screen.getByText('Rewards').closest('button');
-      expect(rewardsButton).toBeTruthy();
-      await user.click(rewardsButton!);
-
-      expect(mockNavigate).toHaveBeenCalledWith('/rewards');
+      expect(screen.getByRole('option', { name: /Bahasa Indonesia/ })).toHaveValue('id');
     });
   });
 
@@ -203,28 +156,20 @@ describe('SettingsHome', () => {
       expect(mockNavigateToSettings).toHaveBeenCalledWith('notifications');
     });
 
-    it('navigates to /home when Restart Tour is clicked', async () => {
+    it('navigates to persona settings when Persona is clicked', async () => {
       const user = userEvent.setup();
       renderSettingsHome();
 
-      await user.click(screen.getByText('Restart Tour').closest('button')!);
-      expect(mockNavigate).toHaveBeenCalledWith('/home');
+      await user.click(screen.getByText('Persona').closest('button')!);
+      expect(mockNavigateToSettings).toHaveBeenCalledWith('persona');
     });
 
-    it('navigates to features settings when Features is clicked', async () => {
+    it('navigates to /notifications inbox when Alerts is clicked', async () => {
       const user = userEvent.setup();
       renderSettingsHome();
 
-      await user.click(screen.getByText('Features').closest('button')!);
-      expect(mockNavigateToSettings).toHaveBeenCalledWith('features');
-    });
-
-    it('navigates to ai-models settings when AI & Models is clicked', async () => {
-      const user = userEvent.setup();
-      renderSettingsHome();
-
-      await user.click(screen.getByText('AI & Models').closest('button')!);
-      expect(mockNavigateToSettings).toHaveBeenCalledWith('ai-models');
+      await user.click(screen.getByText('Alerts').closest('button')!);
+      expect(mockNavigate).toHaveBeenCalledWith('/notifications');
     });
 
     it('opens billing URL when Billing & Usage is clicked', async () => {
@@ -236,42 +181,36 @@ describe('SettingsHome', () => {
       expect(openUrl).toHaveBeenCalledWith('https://billing.example.com');
     });
 
-    it('navigates to about settings when About is clicked', async () => {
+    it('navigates to developer-options when Advanced is clicked', async () => {
       const user = userEvent.setup();
       renderSettingsHome();
 
-      await user.click(screen.getByText('About').closest('button')!);
-      expect(mockNavigateToSettings).toHaveBeenCalledWith('about');
-    });
-
-    it('navigates to developer-options settings when Developer Options is clicked', async () => {
-      const user = userEvent.setup();
-      renderSettingsHome();
-
-      await user.click(screen.getByText('Developer Options').closest('button')!);
+      await user.click(screen.getByText('Advanced').closest('button')!);
       expect(mockNavigateToSettings).toHaveBeenCalledWith('developer-options');
     });
   });
 
-  describe('Clear App Data flow', () => {
+  describe('local session gating', () => {
     beforeEach(() => {
-      mockClearAllAppData.mockReset().mockResolvedValue(undefined);
+      // Use a valid local-session token (three parts, last part = 'local')
+      mockSessionToken = 'header.payload.local';
     });
 
-    it('passes the current snapshot user id + clearSession to clearAllAppData', async () => {
-      const user = userEvent.setup();
+    afterEach(() => {
+      mockSessionToken = null;
+    });
+
+    it('hides the Billing & Usage item in local mode', () => {
       renderSettingsHome();
+      expect(screen.queryByText('Billing & Usage')).not.toBeInTheDocument();
+    });
 
-      await user.click(screen.getByText('Clear App Data').closest('button')!);
-      // Confirm in the modal
-      const confirmButtons = screen.getAllByRole('button', { name: /Clear App Data/i });
-      // The last one is the modal confirm button (first is the menu item we just clicked).
-      await user.click(confirmButtons[confirmButtons.length - 1]);
-
-      expect(mockClearAllAppData).toHaveBeenCalledTimes(1);
-      const args = mockClearAllAppData.mock.calls[0][0];
-      expect(args).toMatchObject({ userId: null });
-      expect(typeof args.clearSession).toBe('function');
+    it('shows "Billing & Usage" when not in local mode', () => {
+      mockSessionToken = null;
+      renderSettingsHome();
+      expect(screen.getByText('Billing & Usage')).toBeInTheDocument();
     });
   });
+  // Clear App Data flow moved to LogoutAndClearActions (rendered on Account
+  // page) — see LogoutAndClearActions.test.tsx.
 });

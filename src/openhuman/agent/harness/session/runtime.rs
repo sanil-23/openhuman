@@ -11,11 +11,12 @@ use super::types::{Agent, AgentBuilder};
 use crate::core::event_bus::{publish_global, DomainEvent};
 use crate::openhuman::agent::dispatcher::ParsedToolCall;
 use crate::openhuman::agent::error::AgentError;
+use crate::openhuman::agent_tool_policy::ToolPolicyEngine;
+use crate::openhuman::inference::provider::{self, ConversationMessage, Provider, ToolCall};
 use crate::openhuman::memory::Memory;
 use crate::openhuman::prompt_injection::{
     enforce_prompt_input, PromptEnforcementAction, PromptEnforcementContext,
 };
-use crate::openhuman::providers::{self, ConversationMessage, Provider, ToolCall};
 use crate::openhuman::tools::{Tool, ToolSpec};
 use crate::openhuman::util::truncate_with_ellipsis;
 use anyhow::Result;
@@ -120,13 +121,6 @@ impl Agent {
         &self.connected_integrations
     }
 
-    /// The Composio client cached on the session, if any. Populated by
-    /// [`Agent::fetch_connected_integrations`]; remains `None` when the
-    /// user is not signed in.
-    pub fn composio_client(&self) -> Option<&crate::openhuman::composio::ComposioClient> {
-        self.composio_client.as_ref()
-    }
-
     /// This session's transcript key — `"{unix_ts}_{agent_id}"`,
     /// generated once at build time. Sub-agents chain this into their
     /// own transcript filenames so the parent → child hierarchy is
@@ -149,6 +143,9 @@ impl Agent {
         integrations: Vec<crate::openhuman::context::prompt::ConnectedIntegration>,
     ) {
         self.connected_integrations = integrations;
+        self.connected_integrations_initialized = true;
+        self.last_seen_integrations_hash =
+            crate::openhuman::composio::connected_set_hash(&self.connected_integrations);
     }
 
     /// The agent's runtime config snapshot.
@@ -164,6 +161,7 @@ impl Agent {
     pub fn set_event_context(&mut self, session_id: impl Into<String>, channel: impl Into<String>) {
         self.event_session_id = session_id.into();
         self.event_channel = channel.into();
+        self.rebuild_tool_policy_session();
     }
 
     /// Override the agent definition name used for session transcript
@@ -202,6 +200,7 @@ impl Agent {
             .unwrap_or("0");
         self.session_key = format!("{prefix}_{sanitized}");
         self.agent_definition_name = name;
+        self.rebuild_tool_policy_session();
     }
 
     /// Attach a progress event sender for real-time turn updates.
@@ -217,20 +216,28 @@ impl Agent {
     }
 
     /// Restrict which tools the main agent can see and call for this
-    /// session. An empty set restores the default "all visible"
-    /// behavior.
+    /// session. An empty set restores the default "all visible" behavior,
+    /// still subject to the configured channel permission policy.
     pub fn set_visible_tool_names(&mut self, names: HashSet<String>) {
         self.visible_tool_names = names;
-        let visible_specs = if self.visible_tool_names.is_empty() {
-            (*self.tool_specs).clone()
-        } else {
-            self.tool_specs
-                .iter()
-                .filter(|spec| self.visible_tool_names.contains(&spec.name))
-                .cloned()
-                .collect()
-        };
-        self.visible_tool_specs = Arc::new(visible_specs);
+        self.rebuild_tool_policy_session();
+    }
+
+    pub(super) fn rebuild_tool_policy_session(&mut self) {
+        self.tool_policy_session = ToolPolicyEngine::build_session(
+            &self.agent_definition_name,
+            &self.event_channel,
+            "session",
+            &self.config.channel_permissions,
+            self.tools.as_slice(),
+            &self.visible_tool_names,
+        );
+        let visible_specs = super::builder::visible_tool_specs_for_policy(
+            self.tool_specs.as_slice(),
+            &self.visible_tool_names,
+            &self.tool_policy_session,
+        );
+        self.visible_tool_specs = Arc::new(super::builder::dedup_visible_tool_specs(visible_specs));
     }
 
     /// Clears the agent's conversation history.
@@ -283,30 +290,40 @@ impl Agent {
         let learned = crate::openhuman::agent::prompts::LearnedContextData::default();
         let system_prompt = self.build_system_prompt(learned)?;
 
-        let mut cached: Vec<crate::openhuman::providers::ChatMessage> =
+        let mut cached: Vec<crate::openhuman::inference::provider::ChatMessage> =
             Vec::with_capacity(prior.len() + 1);
-        cached.push(crate::openhuman::providers::ChatMessage::system(
+        cached.push(crate::openhuman::inference::provider::ChatMessage::system(
             system_prompt,
         ));
         for (role, content) in prior {
             let chat = match role.as_str() {
-                "user" => crate::openhuman::providers::ChatMessage::user(content),
+                "user" => crate::openhuman::inference::provider::ChatMessage::user(content),
                 "agent" | "assistant" => {
-                    crate::openhuman::providers::ChatMessage::assistant(content)
+                    crate::openhuman::inference::provider::ChatMessage::assistant(content)
                 }
                 // Fall back to user role for unknown senders rather than
                 // dropping the message — losing context is worse than
                 // mislabelling a system/tool message.
-                _ => crate::openhuman::providers::ChatMessage::user(content),
+                _ => crate::openhuman::inference::provider::ChatMessage::user(content),
             };
             cached.push(chat);
         }
 
+        let cached_len_before = cached.len();
+        let bounded = self.bound_cached_transcript_messages(cached);
+        if bounded.len() < cached_len_before {
+            log::warn!(
+                "[agent] seed_resume_from_messages — bounded cached transcript {} → {} (max_history_messages={})",
+                cached_len_before,
+                bounded.len(),
+                self.config.max_history_messages
+            );
+        }
         log::info!(
             "[agent] seed_resume_from_messages — primed cached transcript with {} prior messages",
-            cached.len() - 1
+            bounded.len().saturating_sub(1)
         );
-        self.cached_transcript_messages = Some(cached);
+        self.cached_transcript_messages = Some(bounded);
         Ok(())
     }
 
@@ -374,6 +391,7 @@ impl Agent {
             Some(AgentError::ToolExecutionError { .. }) => Some("tool_execution_error"),
             Some(AgentError::CostBudgetExceeded { .. }) => Some("cost_budget_exceeded"),
             Some(AgentError::MaxIterationsExceeded { .. }) => Some("max_iterations_exceeded"),
+            Some(AgentError::EmptyProviderResponse { .. }) => Some("empty_provider_response"),
             Some(AgentError::CompactionFailed { .. }) => Some("compaction_failed"),
             Some(AgentError::PermissionDenied { .. }) => Some("permission_denied"),
             Some(AgentError::Other(_)) | None => None,
@@ -383,7 +401,7 @@ impl Agent {
             return kind.to_string();
         }
 
-        let scrubbed = providers::sanitize_api_error(&err.to_string())
+        let scrubbed = provider::sanitize_api_error(&err.to_string())
             .replace(['\n', '\r', '\t'], " ")
             .split_whitespace()
             .collect::<Vec<_>>()
@@ -412,7 +430,7 @@ impl Agent {
     /// If the provider response already contains native tool calls, they are
     /// returned as-is.
     pub(super) fn persisted_tool_calls_for_history(
-        response: &crate::openhuman::providers::ChatResponse,
+        response: &crate::openhuman::inference::provider::ChatResponse,
         parsed_calls: &[ParsedToolCall],
         iteration: usize,
     ) -> Vec<ToolCall> {
@@ -502,25 +520,50 @@ impl Agent {
             }
             Err(err) => {
                 let sanitized_message = Self::sanitize_event_error_message(&err);
-                // OPENHUMAN-TAURI-5Z: upstream transient HTTP failures
-                // (408/429/502/503/504) are already retried + filtered at the
-                // provider layer. When retries exhaust they bubble up here via
-                // `Result::Err`, and re-reporting under `domain=agent` escapes
-                // the `domain=llm_provider` filter — one Sentry event per
-                // failed turn for a transient infrastructure blip. Route
-                // through `report_error_or_expected` so the classifier demotes
-                // those (and other expected user-state errors) to a warn-level
-                // breadcrumb while preserving the AgentError publish + return.
-                crate::core::observability::report_error_or_expected(
-                    &err,
-                    "agent",
-                    "run_single",
-                    &[
-                        ("session_id", self.event_session_id()),
-                        ("channel", self.event_channel()),
-                        ("error_kind", sanitized_message.as_str()),
-                    ],
-                );
+                // Some typed `AgentError` variants represent agent / user /
+                // provider state that the UI already surfaces — the
+                // max-tool-iterations cap (OPENHUMAN-TAURI-99 / -98,
+                // chat-rendered "Error: Agent exceeded maximum tool
+                // iterations") and the empty-provider-response degeneracy
+                // (TAURI-RUST-4JX, "The model returned an empty response.
+                // Please try again."). Skip the Sentry funnel for both
+                // and emit a structured `log::info!` instead. The
+                // suppressed set is owned by `AgentError::skips_sentry()`
+                // so the policy stays in one place.
+                //
+                // Other agent errors go through `report_error_or_expected`
+                // so OPENHUMAN-TAURI-5Z and the budget-noise cluster —
+                // upstream transient HTTP and backend budget-exhausted 400s
+                // that bubble up under `domain=agent` and escape the
+                // `domain=llm_provider` filter — get demoted to a
+                // warn/info-level breadcrumb without losing genuine bugs.
+                // `Err` propagation, the `AgentError` domain event, and
+                // downstream `recoverable=false` semantics are preserved.
+                let skips_sentry = err
+                    .downcast_ref::<AgentError>()
+                    .is_some_and(AgentError::skips_sentry);
+                if skips_sentry {
+                    log::info!(
+                        target: "agent",
+                        "[agent.run_single] suppressed Sentry emission for user-state agent error \
+                         session_id={} channel={} error_kind={} message={}",
+                        self.event_session_id(),
+                        self.event_channel(),
+                        sanitized_message.as_str(),
+                        err
+                    );
+                } else {
+                    crate::core::observability::report_error_or_expected(
+                        &err,
+                        "agent",
+                        "run_single",
+                        &[
+                            ("session_id", self.event_session_id()),
+                            ("channel", self.event_channel()),
+                            ("error_kind", sanitized_message.as_str()),
+                        ],
+                    );
+                }
                 publish_global(DomainEvent::AgentError {
                     session_id: self.event_session_id().to_string(),
                     message: sanitized_message,

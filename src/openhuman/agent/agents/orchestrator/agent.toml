@@ -4,6 +4,13 @@ when_to_use = "Staff Engineer — routes, judges quality, synthesises. Never wri
 temperature = 0.4
 max_iterations = 15
 sandbox_mode = "none"
+
+# Spawn hierarchy: this is the user-facing fast tier (chat model hint).
+# Loader enforces: a `chat` agent must NOT list any other `chat` agent
+# in `subagents` below — handoff goes to `reasoning` (e.g. planner) for
+# long-running deep work, or directly to `worker` specialists for the
+# fast path. See `AgentTier` in `src/openhuman/agent/harness/definition.rs`.
+agent_tier = "chat"
 omit_identity = true
 omit_memory_context = true
 omit_safety_preamble = true
@@ -42,8 +49,23 @@ subagents = [
     "planner",
     "code_executor",
     "tools_agent",
+    "skill_creator",
     "critic",
     "archivist",
+    # Crypto wallet & market specialist (#1397). Synthesised into a
+    # `delegate_do_crypto` tool at agent-build time. Route any wallet,
+    # transfer, swap, contract-call, or exchange trading request here —
+    # the agent enforces a strict read → simulate → confirm → execute
+    # contract that the generic delegation surface does not.
+    "crypto_agent",
+    # Prediction-market & event-contract specialist (#2427). Synthesised
+    # into a `delegate_do_prediction_markets` tool at agent-build time.
+    # Route any Polymarket / Kalshi (and future event-contract venue)
+    # market browse, portfolio read, or order request here. The
+    # `tools_agent` wildcard explicitly disallows `polymarket` / `kalshi`
+    # so there is exactly one canonical route — through this delegate —
+    # which keeps the venue-specific approval-gate prompt in scope.
+    "markets_agent",
     # NOTE: `summarizer` used to be listed here for the runtime-only
     # oversized-tool-result hook. That path is currently disabled
     # (`context.summarizer_payload_threshold_tokens = 0`) after recursive
@@ -55,7 +77,15 @@ subagents = [
 ]
 
 [model]
-hint = "reasoning"
+# Front-line conversational agent: TTFT dominates UX. `hint:chat` resolves
+# to the fast chat tier (`reasoning-quick-v1` / Kimi K2.6 Turbo on
+# Fireworks via backend PR #760, 128k context, `supportsThinking: false`).
+# The orchestrator is a planner/router that picks a delegate and
+# synthesises sub-agent output — workload that doesn't benefit from the
+# slower deep-reasoning tier. Sub-agents that need heavier reasoning
+# can still opt into `reasoning-v1` (DeepSeek V4 Pro) via
+# `ModelSpec::Hint("reasoning")` in their own definitions.
+hint = "chat"
 
 [tools]
 # Direct tools — things the orchestrator calls itself rather than
@@ -71,6 +101,7 @@ hint = "reasoning"
 named = [
     "query_memory",
     "memory_store",
+    "save_preference",
     "memory_forget",
     "memory_tree",
     # WhatsApp local-data tools (issue #1341). The scanner ingests chats
@@ -86,6 +117,7 @@ named = [
     "read_workspace_state",
     "ask_user_clarification",
     "spawn_worker_thread",
+    "spawn_parallel_agents",
     "composio_list_connections",
     # Time + scheduling — lets the orchestrator answer "what time is it",
     # "remind me in 10 minutes", "every morning at 8" directly rather than

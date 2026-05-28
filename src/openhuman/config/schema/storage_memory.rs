@@ -33,7 +33,7 @@ impl Default for StorageProviderConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[allow(clippy::struct_excessive_bools)]
 #[serde(default)]
 pub struct MemoryConfig {
@@ -47,10 +47,38 @@ pub struct MemoryConfig {
     pub embedding_model: String,
     #[serde(default = "default_embedding_dims")]
     pub embedding_dimensions: usize,
+    /// Outbound embedding-request budget for cloud providers, in requests per
+    /// minute. Cloud backends (OpenHuman/Voyage, OpenAI, remote `custom:`
+    /// endpoints) cap requests per account; the client throttles to stay under
+    /// that quota rather than tripping 429s. `0` disables throttling. Loopback
+    /// endpoints are always exempt. Env override:
+    /// `OPENHUMAN_MEMORY_EMBED_RATE_LIMIT`.
+    #[serde(default = "default_embedding_rate_limit_per_min")]
+    pub embedding_rate_limit_per_min: u32,
     #[serde(default = "default_min_relevance_score")]
     pub min_relevance_score: f64,
     #[serde(default)]
     pub sqlite_open_timeout_secs: Option<u64>,
+
+    /// Base URL for the `agentmemory` REST server. Honored only when
+    /// `backend = "agentmemory"`. Defaults to `http://localhost:3111`
+    /// (the agentmemory loopback default).
+    #[serde(default)]
+    pub agentmemory_url: Option<String>,
+
+    /// Optional bearer token sent as `Authorization: Bearer <secret>`
+    /// to the agentmemory REST server. When unset, the backend speaks
+    /// to a local agentmemory daemon without authentication. Setting a
+    /// secret + a non-loopback host enables the v0.9.12 plaintext-bearer
+    /// guard semantics on the client side: the backend refuses to send
+    /// the token over plaintext HTTP when the host is not loopback.
+    #[serde(default)]
+    pub agentmemory_secret: Option<String>,
+
+    /// Per-request timeout for the agentmemory REST client, in
+    /// milliseconds. Defaults to 5000 ms.
+    #[serde(default)]
+    pub agentmemory_timeout_ms: Option<u64>,
 }
 
 fn default_memory_backend() -> String {
@@ -77,6 +105,11 @@ fn default_embedding_dims() -> usize {
     // Keep this in sync with `embeddings::cloud::DEFAULT_CLOUD_EMBEDDING_DIMENSIONS`.
     1024
 }
+fn default_embedding_rate_limit_per_min() -> u32 {
+    // Cloud embedding backends cap requests at ~60/min per account. Keep in
+    // sync with `embeddings::rate_limit::DEFAULT_EMBEDDING_RATE_LIMIT_PER_MIN`.
+    60
+}
 fn default_min_relevance_score() -> f64 {
     0.4
 }
@@ -89,9 +122,42 @@ impl Default for MemoryConfig {
             embedding_provider: default_embedding_provider(),
             embedding_model: default_embedding_model(),
             embedding_dimensions: default_embedding_dims(),
+            embedding_rate_limit_per_min: default_embedding_rate_limit_per_min(),
             min_relevance_score: default_min_relevance_score(),
             sqlite_open_timeout_secs: None,
+            agentmemory_url: None,
+            agentmemory_secret: None,
+            agentmemory_timeout_ms: None,
         }
+    }
+}
+
+// Manual `Debug` implementation that redacts `agentmemory_secret`. Without
+// this, any `format!("{cfg:?}")` / `tracing::debug!(?cfg, ...)` / panic
+// message capturing a `MemoryConfig` would dump the bearer token in
+// plaintext — directly against the repo rule "Never log secrets, raw
+// JWTs, API keys, credentials, or full PII in debug logs".
+impl std::fmt::Debug for MemoryConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryConfig")
+            .field("backend", &self.backend)
+            .field("auto_save", &self.auto_save)
+            .field("embedding_provider", &self.embedding_provider)
+            .field("embedding_model", &self.embedding_model)
+            .field("embedding_dimensions", &self.embedding_dimensions)
+            .field(
+                "embedding_rate_limit_per_min",
+                &self.embedding_rate_limit_per_min,
+            )
+            .field("min_relevance_score", &self.min_relevance_score)
+            .field("sqlite_open_timeout_secs", &self.sqlite_open_timeout_secs)
+            .field("agentmemory_url", &self.agentmemory_url)
+            .field(
+                "agentmemory_secret",
+                &self.agentmemory_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field("agentmemory_timeout_ms", &self.agentmemory_timeout_ms)
+            .finish()
     }
 }
 

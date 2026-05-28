@@ -66,9 +66,23 @@ fn write_json_atomic(path: &Path, entity: &str, payload: &str) -> Result<(), Str
         path.display(),
         tmp_path.display()
     );
-    fs::write(&tmp_path, payload)
-        .map_err(|err| format!("failed to write {entity} tmp: {err}"))?;
-    fs::rename(&tmp_path, path).map_err(|err| format!("failed to move {entity} into place: {err}"))?;
+    fs::write(&tmp_path, payload).map_err(|err| format!("failed to write {entity} tmp: {err}"))?;
+    fs::rename(&tmp_path, path)
+        .map_err(|err| format!("failed to move {entity} into place: {err}"))?;
+    Ok(())
+}
+
+/// Returns an error if `session_id` contains path separators or is empty,
+/// preventing path traversal when the id comes from an RPC caller.
+fn validate_session_id(session_id: &str) -> Result<(), String> {
+    if session_id.is_empty() {
+        return Err("session_id must not be empty".to_string());
+    }
+    if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
+        return Err(format!(
+            "session_id contains invalid characters: {session_id}"
+        ));
+    }
     Ok(())
 }
 
@@ -81,6 +95,7 @@ pub fn preset_path(workspace_dir: &Path, game_id: &str) -> PathBuf {
 }
 
 pub fn save_session(workspace_dir: &Path, session: &GameplayReviewSession) -> Result<(), String> {
+    validate_session_id(&session.session_id)?;
     ensure_dirs(workspace_dir)?;
     let path = session_path(workspace_dir, &session.session_id);
     debug!(
@@ -99,6 +114,7 @@ pub fn load_session(
     workspace_dir: &Path,
     session_id: &str,
 ) -> Result<Option<GameplayReviewSession>, String> {
+    validate_session_id(session_id)?;
     let path = session_path(workspace_dir, session_id);
     trace!(
         "[gameplay_review][store] load_session session_id={} path={}",

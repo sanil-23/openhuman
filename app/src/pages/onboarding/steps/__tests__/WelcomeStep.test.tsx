@@ -23,12 +23,21 @@ describe('WelcomeStep', () => {
   it('fires onNext when the CTA is clicked', () => {
     const onNext = vi.fn();
     renderWithProviders(<WelcomeStep onNext={onNext} />);
-    fireEvent.click(screen.getByRole('button', { name: "Let's Start" }));
+    fireEvent.click(screen.getByRole('button', { name: 'Get Started' }));
     expect(onNext).toHaveBeenCalledTimes(1);
   });
 
   it('CTA is always enabled (WelcomeStep has no disabled/loading props)', () => {
     renderWithProviders(<WelcomeStep onNext={() => {}} />);
-    expect(screen.getByRole('button', { name: "Let's Start" })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Get Started' })).not.toBeDisabled();
+  });
+
+  it('CTA has proper ARIA attributes for accessibility', () => {
+    renderWithProviders(<WelcomeStep onNext={() => {}} />);
+    const button = screen.getByRole('button', { name: 'Get Started' });
+
+    expect(button).toHaveAttribute('aria-label', 'Get Started');
+    expect(button).toHaveAttribute('aria-live', 'polite');
+    expect(button).toHaveAttribute('aria-busy', 'false');
   });
 });

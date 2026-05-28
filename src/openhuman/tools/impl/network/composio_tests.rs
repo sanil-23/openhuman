@@ -5,6 +5,18 @@ fn test_security() -> Arc<SecurityPolicy> {
     Arc::new(SecurityPolicy::default())
 }
 
+/// Spawn a throwaway axum mock bound to an ephemeral port and return its base
+/// URL. Mirrors `start_mock_backend` in `client_tests.rs` so both HTTP-level
+/// direct-mode tests share one setup model.
+async fn start_mock_backend(app: axum::Router) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://127.0.0.1:{}", addr.port())
+}
+
 // ── Constructor ───────────────────────────────────────────
 
 #[test]
@@ -336,6 +348,146 @@ fn build_execute_action_v3_request_drops_blank_optional_fields() {
     assert!(body.get("user_id").is_none());
 }
 
+// ── list_tool_schemas_v3 query builder (direct-mode tags) ──────────────────
+
+#[test]
+fn build_list_tool_schemas_v3_query_always_includes_limit() {
+    let params = ComposioTool::build_list_tool_schemas_v3_query(&[], None);
+    assert_eq!(params, vec![("limit", "200".to_string())]);
+}
+
+#[test]
+fn build_list_tool_schemas_v3_query_joins_toolkits_as_csv() {
+    let params = ComposioTool::build_list_tool_schemas_v3_query(&["github", "gmail"], None);
+    assert_eq!(
+        params,
+        vec![
+            ("limit", "200".to_string()),
+            ("toolkits", "github,gmail".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn build_list_tool_schemas_v3_query_emits_repeated_tags_params() {
+    // Composio v3 `/tools` takes tags as repeated `tags=` params
+    // (tags=stars&tags=repos), NOT comma-joined like the backend proxy.
+    // A Vec of duplicate ("tags", _) keys is exactly what reqwest's
+    // `.query(&params)` serializes into repeated query params.
+    let params =
+        ComposioTool::build_list_tool_schemas_v3_query(&["github"], Some(&["stars", "repos"]));
+    assert_eq!(
+        params,
+        vec![
+            ("limit", "200".to_string()),
+            ("toolkits", "github".to_string()),
+            ("tags", "stars".to_string()),
+            ("tags", "repos".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn build_list_tool_schemas_v3_query_tags_without_toolkit_filter() {
+    let params = ComposioTool::build_list_tool_schemas_v3_query(&[], Some(&["readOnlyHint"]));
+    assert_eq!(
+        params,
+        vec![
+            ("limit", "200".to_string()),
+            ("tags", "readOnlyHint".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn build_list_tool_schemas_v3_query_trims_and_drops_blank_entries() {
+    let params = ComposioTool::build_list_tool_schemas_v3_query(
+        &["  github  ", "   "],
+        Some(&["  stars  ", "", "   "]),
+    );
+    assert_eq!(
+        params,
+        vec![
+            ("limit", "200".to_string()),
+            ("toolkits", "github".to_string()),
+            ("tags", "stars".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn build_list_tool_schemas_v3_query_empty_tags_slice_is_no_filter() {
+    // `Some(&[])` and an all-blank slice must both behave like "no tags".
+    let empty = ComposioTool::build_list_tool_schemas_v3_query(&["gmail"], Some(&[]));
+    let blank = ComposioTool::build_list_tool_schemas_v3_query(&["gmail"], Some(&["  "]));
+    let expected = vec![
+        ("limit", "200".to_string()),
+        ("toolkits", "gmail".to_string()),
+    ];
+    assert_eq!(empty, expected);
+    assert_eq!(blank, expected);
+}
+
+// ── list_tool_schemas_v3 over HTTP (direct-mode tags reach the wire) ───────
+
+#[tokio::test]
+async fn list_tool_schemas_v3_sends_repeated_tags_to_v3_tools_endpoint() {
+    use axum::{extract::RawQuery, routing::get, Json, Router};
+    use std::sync::Mutex;
+
+    // Capture the raw query string the server sees. `RawQuery` (not
+    // `Query<HashMap>`) is required because a HashMap would collapse the
+    // repeated `tags=` params we specifically need to assert on.
+    let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let sink = captured.clone();
+    let app = Router::new().route(
+        "/tools",
+        get(move |RawQuery(q): RawQuery| {
+            let sink = sink.clone();
+            async move {
+                *sink.lock().unwrap() = q;
+                Json(json!({
+                    "items": [{
+                        "slug": "GITHUB_STAR_A_REPOSITORY",
+                        "description": "Star a repository",
+                        "input_parameters": { "type": "object" },
+                        "toolkit": { "slug": "github" }
+                    }]
+                }))
+            }
+        }),
+    );
+    let base = start_mock_backend(app).await;
+
+    let tool = ComposioTool::new_with_v3_base("ck_test_direct", None, test_security(), base);
+    let items = tool
+        .list_tool_schemas_v3(&["github"], Some(&["stars", "repos"]))
+        .await
+        .expect("direct v3 /tools should succeed against the mock");
+
+    let query = captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("mock server should have observed a query string");
+
+    // tags must be REPEATED params (tags=stars&tags=repos) — the Composio v3
+    // contract — NOT the comma-joined form the backend proxy uses.
+    assert!(query.contains("tags=stars"), "query was: {query}");
+    assert!(query.contains("tags=repos"), "query was: {query}");
+    assert!(
+        !query.contains("stars%2Crepos") && !query.contains("stars,repos"),
+        "tags must not be comma-joined; query was: {query}"
+    );
+    assert!(query.contains("toolkits=github"), "query was: {query}");
+    assert!(query.contains("limit=200"), "query was: {query}");
+
+    // And the v3 envelope reshapes back into schema items.
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].slug, "GITHUB_STAR_A_REPOSITORY");
+    assert_eq!(items[0].toolkit_slug.as_deref(), Some("github"));
+}
+
 // ── ensure_https ──────────────────────────────────────────────────────────
 
 #[test]
@@ -446,6 +598,7 @@ fn map_v3_tools_uses_name_when_slug_missing() {
         description: None,
         app_name: Some("myapp".into()),
         toolkit: None,
+        input_parameters: None,
     }];
     let actions = map_v3_tools_to_actions(items);
     assert_eq!(actions.len(), 1);
@@ -461,6 +614,7 @@ fn map_v3_tools_skips_items_without_slug_or_name() {
         description: Some("desc".into()),
         app_name: None,
         toolkit: None,
+        input_parameters: None,
     }];
     let actions = map_v3_tools_to_actions(items);
     assert!(
@@ -480,6 +634,7 @@ fn map_v3_tools_prefers_toolkit_slug_over_app_name() {
             slug: Some("preferred-app".into()),
             name: None,
         }),
+        input_parameters: None,
     }];
     let actions = map_v3_tools_to_actions(items);
     assert_eq!(actions[0].app_name.as_deref(), Some("preferred-app"));
@@ -492,4 +647,117 @@ fn composio_tool_category_is_skill() {
     use crate::openhuman::tools::traits::ToolCategory;
     let tool = ComposioTool::new("key", None, test_security());
     assert_eq!(tool.category(), ToolCategory::Skill);
+}
+
+// ── v3 /connected_accounts shape parsing ───────────────────────────
+//
+// Two upstream shapes covered:
+//   1. `toolkit` as a plain string slug (older payloads)
+//   2. `toolkit` as a nested `{ slug, ... }` object (newer payloads,
+//      mirroring the `de_string_or_object` drift handled by `types.rs`)
+// Plus an `appName` fallback for payloads that omit `toolkit` entirely.
+
+#[test]
+fn connected_account_toolkit_slug_from_string() {
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({
+        "id": "ca_1",
+        "status": "ACTIVE",
+        "toolkit": "gmail",
+        "created_at": "2026-05-15T00:00:00Z"
+    }))
+    .unwrap();
+    assert_eq!(raw.id, "ca_1");
+    assert_eq!(raw.status.as_deref(), Some("ACTIVE"));
+    assert_eq!(raw.toolkit_slug().as_deref(), Some("gmail"));
+    assert_eq!(raw.created_at.as_deref(), Some("2026-05-15T00:00:00Z"));
+}
+
+#[test]
+fn connected_account_toolkit_slug_from_nested_object() {
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({
+        "id": "ca_2",
+        "status": "INITIATED",
+        "toolkit": {"slug": "slack", "logo": "https://example.test/slack.png"}
+    }))
+    .unwrap();
+    assert_eq!(raw.toolkit_slug().as_deref(), Some("slack"));
+}
+
+#[test]
+fn connected_account_toolkit_slug_fallback_to_app_name() {
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({
+        "id": "ca_3",
+        "status": "ACTIVE",
+        "appName": "notion"
+    }))
+    .unwrap();
+    assert_eq!(raw.toolkit_slug().as_deref(), Some("notion"));
+}
+
+#[test]
+fn connected_account_toolkit_slug_returns_none_when_unrecognized() {
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({
+        "id": "ca_4",
+        "status": "PENDING",
+        "toolkit": {"unrelated": 42}
+    }))
+    .unwrap();
+    assert!(raw.toolkit_slug().is_none());
+}
+
+#[test]
+fn connected_account_tolerates_missing_fields() {
+    // All optional fields absent — the row must still parse so a
+    // malformed Composio response doesn't blow up `list_connections`.
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({"id": "ca_5"})).unwrap();
+    assert_eq!(raw.id, "ca_5");
+    assert!(raw.status.is_none());
+    assert!(raw.toolkit_slug().is_none());
+    assert!(raw.created_at.is_none());
+}
+
+#[test]
+fn connected_account_accepts_camelcase_created_at() {
+    // Tolerate both `created_at` (canonical) and `createdAt` (drift).
+    let raw: ComposioConnectedAccount = serde_json::from_value(json!({
+        "id": "ca_6",
+        "createdAt": "2026-05-15T00:00:00Z"
+    }))
+    .unwrap();
+    assert_eq!(raw.created_at.as_deref(), Some("2026-05-15T00:00:00Z"));
+}
+
+// ── API key trimming (issue #2323) ────────────────────────
+//
+// Composio v3 rejects API keys with leading/trailing whitespace as
+// "Invalid API key format" (Sentry TAURI-RUST-D3). The constructor must
+// strip surrounding whitespace defensively, but MUST preserve internal
+// whitespace so legitimate keys containing spaces are not corrupted.
+
+#[test]
+fn composio_tool_trims_surrounding_whitespace_in_api_key() {
+    let tool = ComposioTool::new(" key123 ", None, test_security());
+    assert_eq!(tool.api_key, "key123");
+}
+
+#[test]
+fn composio_tool_trims_trailing_newline_in_api_key() {
+    // The real-world Sentry case: secret store payloads frequently carry a
+    // trailing newline (clipboard paste, file read). It must be stripped.
+    let tool = ComposioTool::new("key123\n", None, test_security());
+    assert_eq!(tool.api_key, "key123");
+}
+
+#[test]
+fn composio_tool_preserves_internal_whitespace_in_api_key() {
+    // Pins the trim-scope: a future refactor must NOT widen this to
+    // `replace(' ', "")` or similar — only surrounding whitespace is stripped.
+    let tool = ComposioTool::new("k1 k2", None, test_security());
+    assert_eq!(tool.api_key, "k1 k2");
+}
+
+#[test]
+fn composio_tool_accepts_empty_api_key_without_panic() {
+    let tool = ComposioTool::new("", None, test_security());
+    assert_eq!(tool.api_key, "");
 }

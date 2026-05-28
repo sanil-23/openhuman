@@ -21,20 +21,70 @@ use super::transcript;
 use super::types::Agent;
 use crate::core::event_bus::{publish_global, DomainEvent};
 use crate::openhuman::agent::dispatcher::{ParsedToolCall, ToolExecutionResult};
+use crate::openhuman::agent::error::AgentError;
 use crate::openhuman::agent::harness;
 use crate::openhuman::agent::hooks::{self, ToolCallRecord, TurnContext};
 use crate::openhuman::agent::memory_loader::collect_recall_citations;
 use crate::openhuman::agent::progress::AgentProgress;
+use crate::openhuman::agent::tool_policy::{
+    ToolCallContext, ToolPolicyDecision, ToolPolicyRequest,
+};
+use crate::openhuman::agent_experience::{
+    prepend_experience_block, render_experience_hits, AgentExperienceStore, ExperienceQuery,
+};
+use crate::openhuman::agent_tool_policy::render_tool_policy_boundary;
 use crate::openhuman::context::prompt::{LearnedContextData, PromptContext, PromptTool};
 use crate::openhuman::context::{ReductionOutcome, ARCHIVIST_EXTRACTION_PROMPT};
+use crate::openhuman::inference::model_context::context_window_for_model;
+use crate::openhuman::inference::provider::{
+    ChatMessage, ChatRequest, ConversationMessage, ProviderDelta, UsageInfo,
+};
 use crate::openhuman::memory::MemoryCategory;
-use crate::openhuman::providers::{ChatMessage, ChatRequest, ConversationMessage, ProviderDelta};
 use crate::openhuman::tools::traits::ToolCallOptions;
 use crate::openhuman::tools::Tool;
 use crate::openhuman::util::truncate_with_ellipsis;
+
+use crate::openhuman::agent::harness::token_budget::{
+    trim_chat_messages_to_budget, trim_conversation_history_to_budget,
+};
 use anyhow::Result;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+/// Instruction appended (as a synthetic user turn) to the provider
+/// messages when a turn hits the tool-call iteration cap. Asks the model
+/// to wrap up with a resumable checkpoint instead of letting the turn die.
+/// Native tools are disabled for this call so the model produces prose,
+/// not yet another tool call. See bug-report-2026-05-26 A1.
+const MAX_ITER_CHECKPOINT_INSTRUCTION: &str = "\
+You have reached the maximum number of tool calls allowed for this single turn, so you cannot call any more tools right now. \
+Do not attempt another tool call. Instead, write a short progress checkpoint for the user with two clearly labelled parts:\n\
+1. **Done so far** — what you have accomplished in this turn, grounded in the tool results above.\n\
+2. **Next steps** — exactly what you plan to do next.\n\
+Write it so you can pick up seamlessly where you left off when the user replies. Be concise.";
+
+/// Build a deterministic checkpoint summary from this turn's tool-call
+/// records. Used only as a safety net when the model-written checkpoint
+/// call fails or returns empty, so a capped turn can never be left without
+/// a well-formed assistant message — which is what silently wedged the
+/// thread before (bug-report-2026-05-26 A1).
+fn build_deterministic_checkpoint(records: &[ToolCallRecord], max_iterations: usize) -> String {
+    let mut out = format!(
+        "I reached the tool-call limit for this turn ({max_iterations} steps), so I paused here.\n\n**Done so far:**\n"
+    );
+    if records.is_empty() {
+        out.push_str("- (no tools completed yet)\n");
+    } else {
+        for r in records {
+            let status = if r.success { "ok" } else { "failed" };
+            out.push_str(&format!("- `{}` — {}\n", r.name, status));
+        }
+    }
+    out.push_str(
+        "\n**Next steps:** I'll continue from here — just reply (e.g. \"continue\") and I'll pick up where I left off.",
+    );
+    out
+}
 
 impl Agent {
     /// Executes a single interaction "turn" with the agent.
@@ -81,15 +131,17 @@ impl Agent {
             // stored prompt verbatim to preserve the KV-cache prefix the
             // inference backend has already tokenised. Fetching it later
             // would just burn memory-store reads on data we throw away.
-            self.fetch_connected_integrations().await;
-            // The synchronous builder couldn't synthesise `delegate_*`
-            // tools for connected Composio toolkits (no async runtime
-            // handle for the Composio fetcher), so it baked in `&[]`.
-            // Now that integrations are live, inject the matching
-            // delegation tools so the orchestrator's prompt + tool-spec
-            // list actually expose `delegate_gmail`, `delegate_notion`,
-            // etc.
-            self.refresh_delegation_tools();
+            if !self.connected_integrations_initialized {
+                self.fetch_connected_integrations().await;
+                // Sessions born without a cached Composio view still need
+                // a one-shot delegation-surface reconcile before the system
+                // prompt is frozen. The shared-Arc failure path returns
+                // `false`, but on turn 1 the Arc should still be uniquely
+                // owned; a `false` return here indicates a programmer error
+                // and the warn-level log inside the helper already surfaces
+                // it, so we keep the existing best-effort contract.
+                let _ = self.refresh_delegation_tools();
+            }
             let learned = self.fetch_learned_context().await;
             let rendered_prompt = self.build_system_prompt(learned)?;
             log::info!("[agent] system prompt built — initialising conversation history");
@@ -119,6 +171,11 @@ impl Agent {
                 .push(ConversationMessage::Chat(ChatMessage::system(
                     rendered_prompt,
                 )));
+            // Seed the per-turn mid-session refresh baseline with the
+            // hash of whatever Composio actually returned just now.
+            // Subsequent turns short-circuit unless this hash changes.
+            self.last_seen_integrations_hash =
+                crate::openhuman::composio::connected_set_hash(&self.connected_integrations);
         } else {
             // Deliberately do NOT rebuild the system prompt on subsequent
             // turns. The rendered prompt is the KV-cache prefix the inference
@@ -129,6 +186,74 @@ impl Agent {
             // rides on the user message via `memory_loader.load_context()`
             // — that's where the caller should inject anything that varies
             // between turns.
+            //
+            // *** Mid-session schema-only refresh ***
+            //
+            // The system prompt stays frozen, but the function-calling
+            // schema (the `tools` field in the provider request) is sent
+            // fresh on every API call — it's not part of the KV-cache
+            // prefix. So we *can* react to Composio connect/disconnect
+            // events mid-session by re-synthesising the `delegate_<toolkit>`
+            // surface on `self.tools` / `self.tool_specs` and letting
+            // the next provider call carry the new schema. KV cache stays
+            // intact; the system prompt's `## Connected Integrations`
+            // block goes mildly stale until the next session, but the
+            // schema is the source of truth the model actually routes
+            // against.
+            //
+            // The signal we react to is the process-wide
+            // [`crate::openhuman::composio::INTEGRATIONS_CACHE`], kept
+            // current by (a) the desktop UI's 5 s
+            // `composio_list_connections` poll, (b) the post-OAuth
+            // `ComposioConnectionCreatedSubscriber` invalidation, and
+            // (c) the 60 s TTL fallback. We read it via the read-only
+            // [`crate::openhuman::composio::cached_active_integrations`]
+            // helper — never trigger a backend fetch ourselves, never
+            // block on a writer.
+            // Session agents built through `from_config_*` carry their
+            // runtime `Config` snapshot directly, so this read avoids the
+            // old `Config::load_or_init()` round-trip on every turn.
+            //
+            if let Some(cfg) = self.integration_runtime_config.as_ref() {
+                if let Some(cache_view) =
+                    crate::openhuman::composio::cached_active_integrations(cfg)
+                {
+                    let new_hash = crate::openhuman::composio::connected_set_hash(&cache_view);
+                    if new_hash != self.last_seen_integrations_hash {
+                        log::info!(
+                            "[agent_loop] connection set changed mid-session (hash {:x} -> {:x}); refreshing tool schema (system prompt left intact for KV cache)",
+                            self.last_seen_integrations_hash,
+                            new_hash
+                        );
+                        // Snapshot the previous integration list so we
+                        // can roll back if `refresh_delegation_tools`
+                        // bails on a shared `Arc` — otherwise the
+                        // agent's `connected_integrations` and its
+                        // schema would disagree until the next
+                        // event-driven refresh, and the
+                        // `last_seen_integrations_hash` advance below
+                        // would suppress retries.
+                        let prev_integrations =
+                            std::mem::replace(&mut self.connected_integrations, cache_view);
+                        if self.refresh_delegation_tools() {
+                            self.last_seen_integrations_hash = new_hash;
+                            self.connected_integrations_initialized = true;
+                        } else {
+                            // Reconcile aborted (shared Arc) — restore
+                            // the previous integration list so the
+                            // next turn re-detects the same change and
+                            // retries cleanly. We deliberately do NOT
+                            // advance `last_seen_integrations_hash`.
+                            self.connected_integrations = prev_integrations;
+                        }
+                    }
+                }
+            }
+            // Cache empty/expired or config unavailable => no signal.
+            // We leave the current tool surface alone and pick up any
+            // real change on the next turn after the UI's 5 s poll has
+            // repopulated [`INTEGRATIONS_CACHE`].
+
             log::trace!(
                 "[agent_loop] system prompt reused (history_len={}) — KV cache prefix preserved",
                 self.history.len()
@@ -187,6 +312,7 @@ impl Agent {
         // error. The timestamp is bumped on every successful `load` (even
         // when the digest is empty) so an empty workspace doesn't get
         // re-queried every turn.
+        //
         let now = std::time::Instant::now();
         let context = if crate::openhuman::agent::tree_loader::should_prefetch(
             self.last_tree_prefetch_at,
@@ -229,6 +355,43 @@ impl Agent {
             context
         };
 
+        // ── Phase 3 STM preemptive recall ────────────────────────────
+        // On the very first turn only, assemble a bounded cross-thread
+        // context block from the FTS5 episodic arm (keyword match) and the
+        let mut context = context;
+
+        // ── Lane B: situational preferences (every turn) ─────────────────────
+        // Recall topic-scoped preferences semantically relevant to THIS message
+        // (model-aware embeddings, gated by vector similarity) and inject them
+        // under a banner. Runs every turn — unlike the first-turn-gated tree/STM
+        // blocks above — because the query changes per message; it rides the
+        // per-turn context that's prepended to the user message (no KV-cache
+        // cost). An unrelated message clears the similarity gate to nothing, so
+        // no block is injected.
+        {
+            let situational =
+                crate::openhuman::memory::preferences::recall_situational_preferences(
+                    &self.memory,
+                    user_message,
+                )
+                .await;
+            if !situational.is_empty() {
+                log::info!(
+                    "[pref_recall] situational block injected: {} item(s)",
+                    situational.len()
+                );
+                context.push_str("## Relevant preferences for this message\n\n");
+                for pref in &situational {
+                    context.push_str("- ");
+                    context.push_str(pref.trim());
+                    context.push('\n');
+                }
+                context.push('\n');
+            } else {
+                log::debug!("[pref_recall] no situational preference relevant to this message");
+            }
+        }
+
         let enriched = if context.is_empty() {
             log::info!("[agent] no memory context found — using raw user message");
             self.last_memory_context = None;
@@ -241,6 +404,10 @@ impl Agent {
             self.last_memory_context = Some(context.clone());
             format!("{context}{user_message}")
         };
+
+        let enriched = self
+            .inject_agent_experience_context(user_message, enriched)
+            .await;
 
         // ── SKILL.md body injection (#781) ───────────────────────────
         // Match installed SKILL.md skills against the user message and
@@ -312,6 +479,17 @@ impl Agent {
         // Collect tool call records across all iterations for post-turn hooks
         let mut all_tool_records: Vec<ToolCallRecord> = Vec::new();
 
+        // Trim-robust digest of THIS turn's tool calls + results, compiled as
+        // the loop runs. Used as the *only* context for the max-iteration
+        // checkpoint summary, so it compiles "what I did this turn" without
+        // the prior conversation or system prompt bleeding in — and it's
+        // immune to history trimming (which drops/reorders from the front).
+        // The persisted transcript is unaffected (bug-report-2026-05-26 A1).
+        // Bounded: each entry truncates the result to 800 chars, so at the
+        // default 10-iteration cap the digest is ~8 KB — revisit if
+        // `max_tool_iterations` is raised substantially.
+        let mut turn_tool_digest = String::new();
+
         // Capture the last `Vec<ChatMessage>` sent to the provider so we
         // can persist it as a session transcript after the turn completes.
         let mut last_provider_messages: Option<Vec<ChatMessage>> = None;
@@ -338,6 +516,21 @@ impl Agent {
                     iteration + 1,
                     self.history.len()
                 );
+
+                if let Some(context_window) = context_window_for_model(&effective_model) {
+                    let budget_outcome =
+                        trim_conversation_history_to_budget(&mut self.history, context_window);
+                    if budget_outcome.trimmed {
+                        log::warn!(
+                            "[agent_loop] pre-dispatch history trimmed model={} context_window={} original_tokens={} final_tokens={} messages_removed={}",
+                            effective_model,
+                            context_window,
+                            budget_outcome.original_tokens,
+                            budget_outcome.final_tokens,
+                            budget_outcome.messages_removed
+                        );
+                    }
+                }
 
                 // Global context management: run the reduction chain
                 // before every provider hit. Cheap when the guard is
@@ -408,7 +601,8 @@ impl Agent {
                 // a resumed session to provide a byte-identical prefix for
                 // KV cache reuse. After `.take()` the cache is consumed;
                 // subsequent iterations rebuild from history normally.
-                let messages = if let Some(mut cached) = self.cached_transcript_messages.take() {
+                let mut messages = if let Some(mut cached) = self.cached_transcript_messages.take()
+                {
                     // Append only the delta (new user message) from the
                     // end of the current history.
                     let new_tail = self.tool_dispatcher.to_provider_messages(
@@ -424,6 +618,21 @@ impl Agent {
                 } else {
                     self.tool_dispatcher.to_provider_messages(&self.history)
                 };
+                if let Some(context_window) = context_window_for_model(&effective_model) {
+                    let budget_outcome =
+                        trim_chat_messages_to_budget(&mut messages, context_window);
+                    if budget_outcome.trimmed {
+                        log::warn!(
+                            "[agent_loop] pre-dispatch provider messages trimmed model={} context_window={} original_tokens={} final_tokens={} messages_removed={}",
+                            effective_model,
+                            context_window,
+                            budget_outcome.original_tokens,
+                            budget_outcome.final_tokens,
+                            budget_outcome.messages_removed
+                        );
+                    }
+                }
+
                 last_provider_messages = Some(messages.clone());
 
                 log::info!(
@@ -525,6 +734,15 @@ impl Agent {
                         // the provider doesn't return usage.
                         if let Some(ref usage) = resp.usage {
                             self.context.record_usage(usage);
+                            // Feed the dashboard tracker. This always records
+                            // (model + usage) when the process-global tracker
+                            // is available — independent of `cost.enabled`,
+                            // which gates budget enforcement only. The call
+                            // is a no-op only when `init_global` has not yet
+                            // run (before bootstrap) or failed; errors are
+                            // logged and swallowed so cost telemetry never
+                            // breaks a turn.
+                            crate::openhuman::cost::record_provider_usage(&effective_model, usage);
                             cumulative_input_tokens += usage.input_tokens;
                             cumulative_output_tokens += usage.output_tokens;
                             cumulative_cached_input_tokens += usage.cached_input_tokens;
@@ -583,6 +801,29 @@ impl Agent {
                     } else {
                         text
                     };
+                    // Defense-in-depth (bug-report-2026-05-26 A1): a
+                    // completion with no text *and* no tool calls is never a
+                    // valid final answer — it's a degenerate/poisoned
+                    // response. Surfacing it as an error is visible; the old
+                    // behaviour returned `Ok("")`, which rendered as a blank
+                    // reply and silently wedged the thread.
+                    if final_text.trim().is_empty() {
+                        log::warn!(
+                            "[agent_loop] provider returned an empty final response (i={}, no text, no tool calls) — surfacing as error instead of a silent blank reply",
+                            iteration + 1
+                        );
+                        // Typed variant so `run_single` can route this
+                        // through `AgentError::skips_sentry()` and demote
+                        // to a `log::info!` instead of escalating to
+                        // Sentry (TAURI-RUST-4JX). The `Display` impl
+                        // still renders the canonical user-facing string
+                        // for UI surfaces, so the user behaviour is
+                        // unchanged.
+                        return Err(AgentError::EmptyProviderResponse {
+                            iteration: iteration + 1,
+                        }
+                        .into());
+                    }
                     log::info!(
                         "[agent] no tool calls — returning final response after {} iteration(s)",
                         iteration + 1
@@ -651,7 +892,12 @@ impl Agent {
                             assistant_response: final_text.clone(),
                             tool_calls: all_tool_records,
                             turn_duration_ms: turn_started.elapsed().as_millis() as u64,
-                            session_id: None,
+                            session_id: Some(self.event_session_id.clone())
+                                .filter(|session_id| !session_id.trim().is_empty()),
+                            agent_id: Some(self.agent_definition_id.clone())
+                                .filter(|agent_id| !agent_id.trim().is_empty()),
+                            entrypoint: Some(self.event_channel.clone())
+                                .filter(|entrypoint| !entrypoint.trim().is_empty()),
                             iteration_count: iteration + 1,
                         };
                         hooks::fire_hooks(&self.post_turn_hooks, ctx);
@@ -743,6 +989,14 @@ impl Agent {
                         r.name,
                         truncate_with_ellipsis(&r.output, 300)
                     );
+                    // Record this call in the turn digest (output truncated to
+                    // bound size) for a possible max-iteration checkpoint.
+                    turn_tool_digest.push_str(&format!(
+                        "- {} [{}]: {}\n",
+                        r.name,
+                        if r.success { "ok" } else { "failed" },
+                        truncate_with_ellipsis(&r.output, 800)
+                    ));
                 }
                 log::info!(
                     "[agent] all tools complete for iteration {} — looping back to provider",
@@ -773,18 +1027,137 @@ impl Agent {
                 );
             }
 
+            // Tool-call iteration cap reached. Instead of aborting the turn
+            // — which left the persisted transcript on an unterminated tool
+            // cycle and silently wedged the thread on the next message
+            // (bug-report-2026-05-26 A1) — emit a *resumable checkpoint*:
+            // ask the model (tools disabled) to summarize what it did and
+            // what comes next, persist that as the final assistant message,
+            // and return it. The full tool-call history stays in the
+            // transcript, so the user's next message naturally resumes the
+            // task — no heuristic "continue" detection needed.
             log::warn!(
-                "[agent] exceeded max tool iterations ({}) — aborting turn",
+                "[agent_loop] reached max tool iterations max={} — emitting resumable checkpoint instead of aborting",
                 self.config.max_tool_iterations
             );
-            log::warn!(
-                "[agent_loop] exceeded maximum tool iterations max={}",
-                self.config.max_tool_iterations
+
+            let base_messages = last_provider_messages
+                .clone()
+                .unwrap_or_else(|| self.tool_dispatcher.to_provider_messages(&self.history));
+            // Summarize ONLY this turn's work: feed the compiled tool-call
+            // digest (no system prompt, no prior conversation), not the full
+            // conversation. `base_messages` above is still used for the
+            // transcript persist below, so the saved transcript is unchanged
+            // (bug-report-2026-05-26 A1). `user_message` below is the
+            // `turn(&mut self, message: &str)` parameter (the turn's request).
+            let turn_summary_input = vec![ChatMessage::user(format!(
+                "You were working on this user request:\n{user_message}\n\nHere are the tool calls you made this turn and their results — compile your checkpoint from these:\n{}",
+                if turn_tool_digest.is_empty() {
+                    "(no tool calls recorded)"
+                } else {
+                    turn_tool_digest.as_str()
+                }
+            ))];
+            let checkpoint_iteration = (self.config.max_tool_iterations + 1) as u32;
+            let (mut checkpoint, checkpoint_usage) = self
+                .summarize_iteration_checkpoint(
+                    &turn_summary_input,
+                    &effective_model,
+                    checkpoint_iteration,
+                )
+                .await;
+
+            // Fold the checkpoint call's usage into the turn's cumulative
+            // accounting. The provider call happens regardless of whether we
+            // keep its prose, so dropping its tokens would undercount the
+            // turn and mis-attribute the prior iteration's usage to the
+            // checkpoint message (mirrors the normal final-response path).
+            if let Some(ref usage) = checkpoint_usage {
+                self.context.record_usage(usage);
+                crate::openhuman::cost::record_provider_usage(&effective_model, usage);
+                cumulative_input_tokens += usage.input_tokens;
+                cumulative_output_tokens += usage.output_tokens;
+                cumulative_cached_input_tokens += usage.cached_input_tokens;
+                cumulative_charged_usd += usage.charged_amount_usd;
+                last_turn_usage = Some(transcript::TurnUsage {
+                    model: effective_model.clone(),
+                    usage: transcript::MessageUsage {
+                        input: usage.input_tokens,
+                        output: usage.output_tokens,
+                        cached_input: usage.cached_input_tokens,
+                        cost_usd: usage.charged_amount_usd,
+                    },
+                    ts: chrono::Utc::now().to_rfc3339(),
+                });
+            } else {
+                // No usage on the checkpoint call: don't attribute a stale
+                // prior-iteration snapshot to the checkpoint assistant message.
+                last_turn_usage = None;
+            }
+
+            if checkpoint.trim().is_empty() {
+                log::warn!("[agent_loop] checkpoint summary empty — using deterministic fallback");
+                checkpoint = build_deterministic_checkpoint(
+                    &all_tool_records,
+                    self.config.max_tool_iterations,
+                );
+            }
+            log::info!(
+                "[agent_loop] max-iter checkpoint emitted chars={}",
+                checkpoint.chars().count()
             );
-            anyhow::bail!(
-                "Agent exceeded maximum tool iterations ({})",
-                self.config.max_tool_iterations
-            )
+
+            self.emit_progress(AgentProgress::TurnCompleted {
+                iterations: self.config.max_tool_iterations as u32,
+            })
+            .await;
+
+            self.history
+                .push(ConversationMessage::Chat(ChatMessage::assistant(
+                    checkpoint.clone(),
+                )));
+            self.trim_history();
+
+            // Persist the checkpoint so the transcript ends on a
+            // well-formed assistant message (never a dangling tool cycle).
+            // Note: `base_messages` ends before the final (capped) iteration's
+            // tool results — those landed after the last `last_provider_messages`
+            // snapshot — so the persisted transcript omits them. That's fine:
+            // the checkpoint prose covers the work done, and the transcript
+            // stays structurally correct (ends on an assistant message).
+            let mut checkpoint_messages = base_messages;
+            checkpoint_messages.push(ChatMessage::assistant(checkpoint.clone()));
+            self.persist_session_transcript(
+                &checkpoint_messages,
+                cumulative_input_tokens,
+                cumulative_output_tokens,
+                cumulative_cached_input_tokens,
+                cumulative_charged_usd,
+                last_turn_usage.as_ref(),
+            );
+
+            self.context.record_tool_calls(all_tool_records.len());
+
+            // Fire post-turn hooks with the checkpoint as the assistant
+            // response (mirrors the normal final-response path).
+            if !self.post_turn_hooks.is_empty() {
+                let ctx = TurnContext {
+                    user_message: user_message.to_string(),
+                    assistant_response: checkpoint.clone(),
+                    tool_calls: all_tool_records,
+                    turn_duration_ms: turn_started.elapsed().as_millis() as u64,
+                    session_id: Some(self.event_session_id.clone())
+                        .filter(|session_id| !session_id.trim().is_empty()),
+                    agent_id: Some(self.agent_definition_id.clone())
+                        .filter(|agent_id| !agent_id.trim().is_empty()),
+                    entrypoint: Some(self.event_channel.clone())
+                        .filter(|entrypoint| !entrypoint.trim().is_empty()),
+                    iteration_count: self.config.max_tool_iterations,
+                };
+                hooks::fire_hooks(&self.post_turn_hooks, ctx);
+            }
+
+            Ok(checkpoint)
         }; // end of `turn_body` async block
 
         // Run the turn body inside the parent-execution-context scope so
@@ -816,7 +1189,7 @@ impl Agent {
         // later), which is the right amount of retry behaviour for a
         // librarian task that's idempotent across reruns.
         if result.is_ok() && self.context.should_extract_session_memory() {
-            self.spawn_session_memory_extraction();
+            self.spawn_session_memory_extraction().await;
             // Sibling pipeline (#1399): heuristic transcript ingestion
             // turns the just-written transcript into durable
             // conversational memory + reflections so a brand-new chat
@@ -826,6 +1199,58 @@ impl Agent {
         }
 
         result
+    }
+
+    async fn inject_agent_experience_context(
+        &self,
+        user_message: &str,
+        enriched: String,
+    ) -> String {
+        const MAX_EXPERIENCE_HITS: usize = 3;
+        const MAX_EXPERIENCE_BLOCK_BYTES: usize = 2048;
+
+        if !self.learning_enabled {
+            return enriched;
+        }
+
+        let tools = self
+            .visible_tool_specs
+            .iter()
+            .map(|spec| spec.name.clone())
+            .collect();
+        let store = AgentExperienceStore::new(self.memory.clone());
+        let query = ExperienceQuery {
+            query: user_message.to_string(),
+            tools,
+            tags: Vec::new(),
+            agent_id: Some(self.agent_definition_id.clone()).filter(|id| !id.trim().is_empty()),
+            entrypoint: Some(self.event_channel.clone())
+                .filter(|entrypoint| !entrypoint.trim().is_empty()),
+            max_hits: MAX_EXPERIENCE_HITS,
+        };
+
+        match store.retrieve(query).await {
+            Ok(hits) => {
+                let matched_hits: Vec<_> = hits
+                    .into_iter()
+                    .filter(|hit| !hit.match_reasons.is_empty())
+                    .collect();
+                let block = render_experience_hits(&matched_hits, MAX_EXPERIENCE_BLOCK_BYTES);
+                if block.is_empty() {
+                    return enriched;
+                }
+                log::debug!(
+                    "[agent-experience] injected {} experience hit(s) bytes={}",
+                    matched_hits.len(),
+                    block.len()
+                );
+                prepend_experience_block(&enriched, &block)
+            }
+            Err(err) => {
+                log::warn!("[agent-experience] retrieval failed (non-fatal): {err}");
+                enriched
+            }
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -886,76 +1311,157 @@ impl Agent {
                 false,
             )
         } else if let Some(tool) = self.tools.iter().find(|t| t.name() == call.name) {
-            // Per-call options: ask the tool for markdown output when the
-            // context manager is configured to prefer it. Tools that
-            // implement `execute_with_options` will populate
-            // `markdown_formatted`; others fall through to the default
-            // implementation which forwards to `execute`.
-            let prefer_markdown = self.context.prefer_markdown_tool_output();
-            let options = ToolCallOptions { prefer_markdown };
-            let outcome = tool
-                .execute_with_options(call.arguments.clone(), options)
-                .await;
-            match outcome {
-                Ok(r) => {
-                    if !r.is_error {
-                        let mut output = r.output_for_llm(prefer_markdown);
-                        if prefer_markdown && r.markdown_formatted.is_some() {
-                            log::debug!(
-                                "[agent_loop] tool={} returned markdown payload bytes={}",
+            let session_decision = self.tool_policy_session.decision_for(&call.name);
+            if session_decision.is_denied() {
+                let required = session_decision
+                    .required_permission
+                    .map(|permission| permission.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                (
+                    format!(
+                        "Tool '{}' blocked by tool policy: requires {}, channel '{}' allows {}",
+                        call.name,
+                        required,
+                        self.event_channel,
+                        session_decision.allowed_permission
+                    ),
+                    false,
+                )
+            } else {
+                // Per-call args-aware permission check: tools that expose
+                // multi-level actions (e.g. schedule list vs schedule create)
+                // set a low static permission_level() so the tool is visible
+                // on read-capable channels, but declare the true per-action
+                // level via permission_level_with_args.
+                let call_required = tool.permission_level_with_args(&call.arguments);
+                if call_required > session_decision.allowed_permission {
+                    tracing::debug!(
+                        tool = call.name.as_str(),
+                        call_required = %call_required,
+                        allowed = %session_decision.allowed_permission,
+                        "[agent_loop] tool action blocked by per-call permission check"
+                    );
+                    (
+                        format!(
+                            "Tool '{}' action requires {} permission, channel '{}' allows {}",
+                            call.name,
+                            call_required,
+                            self.event_channel,
+                            session_decision.allowed_permission
+                        ),
+                        false,
+                    )
+                } else {
+                    let context = ToolCallContext::session(
+                        self.event_session_id(),
+                        self.event_channel(),
+                        self.agent_definition_id.to_string(),
+                        call_id.clone(),
+                        (iteration + 1) as u32,
+                    );
+                    let mut policy_request =
+                        ToolPolicyRequest::new(call.name.clone(), call.arguments.clone(), context);
+                    if let Some(generated_context) = tool.generated_runtime_context(&call.arguments)
+                    {
+                        policy_request =
+                            policy_request.with_generated_tool_context(generated_context);
+                    }
+                    let policy_decision = self.tool_policy.check(&policy_request).await;
+                    if let Some(reason) = policy_decision.blocking_reason() {
+                        let blocked_action = match &policy_decision {
+                            ToolPolicyDecision::RequireApproval { .. } => "requires approval",
+                            ToolPolicyDecision::Deny { .. } => "denied",
+                            ToolPolicyDecision::Allow => "allowed",
+                        };
+                        tracing::debug!(
+                            tool = call.name.as_str(),
+                            policy = self.tool_policy.name(),
+                            action = blocked_action,
+                            reason = %reason,
+                            "[agent_loop] tool blocked by policy"
+                        );
+                        (
+                            format!(
+                                "Tool '{}' {blocked_action} by policy '{}': {reason}",
                                 call.name,
-                                output.len()
-                            );
-                        }
-                        // Issue #574 — if a payload summarizer is wired
-                        // in (orchestrator session only) and the output
-                        // exceeds the configured threshold, hand it to
-                        // the summarizer sub-agent before it enters
-                        // history. On any failure or below-threshold
-                        // payload, leave `output` untouched and let the
-                        // existing tool_result_budget_bytes truncation
-                        // pipeline handle it downstream.
-                        if let Some(ps) = self.payload_summarizer.as_ref() {
-                            log::debug!(
-                                "[agent_loop] payload_summarizer intercepting tool={} bytes={}",
-                                call.name,
-                                output.len()
-                            );
-                            match ps.maybe_summarize(&call.name, None, &output).await {
-                                Ok(Some(payload)) => {
-                                    log::info!(
-                                        "[agent_loop] payload_summarizer compressed tool={} {}->{} bytes",
-                                        call.name,
-                                        payload.original_bytes,
-                                        payload.summary_bytes
-                                    );
-                                    output = payload.summary;
-                                }
-                                Ok(None) => {
-                                    log::debug!(
-                                        "[agent_loop] payload_summarizer pass-through tool={} bytes={}",
+                                self.tool_policy.name()
+                            ),
+                            false,
+                        )
+                    } else {
+                        // Per-call options: ask the tool for markdown output when the
+                        // context manager is configured to prefer it. Tools that
+                        // implement `execute_with_options` will populate
+                        // `markdown_formatted`; others fall through to the default
+                        // implementation which forwards to `execute`.
+                        let prefer_markdown = self.context.prefer_markdown_tool_output();
+                        let options = ToolCallOptions { prefer_markdown };
+                        let outcome = tool
+                            .execute_with_options(call.arguments.clone(), options)
+                            .await;
+                        match outcome {
+                            Ok(r) => {
+                                if !r.is_error {
+                                    let mut output = r.output_for_llm(prefer_markdown);
+                                    if prefer_markdown && r.markdown_formatted.is_some() {
+                                        log::debug!(
+                                        "[agent_loop] tool={} returned markdown payload bytes={}",
                                         call.name,
                                         output.len()
                                     );
-                                }
-                                Err(e) => {
-                                    log::warn!(
-                                        "[agent_loop] payload_summarizer error tool={} err={} (passing raw payload through)",
-                                        call.name,
-                                        e
-                                    );
+                                    }
+                                    // Issue #574 — if a payload summarizer is wired
+                                    // in (orchestrator session only) and the output
+                                    // exceeds the configured threshold, hand it to
+                                    // the summarizer sub-agent before it enters
+                                    // history. On any failure or below-threshold
+                                    // payload, leave `output` untouched and let the
+                                    // existing tool_result_budget_bytes truncation
+                                    // pipeline handle it downstream.
+                                    if let Some(ps) = self.payload_summarizer.as_ref() {
+                                        log::debug!(
+                                    "[agent_loop] payload_summarizer intercepting tool={} bytes={}",
+                                    call.name,
+                                    output.len()
+                                );
+                                        match ps.maybe_summarize(&call.name, None, &output).await {
+                                            Ok(Some(payload)) => {
+                                                log::info!(
+                                            "[agent_loop] payload_summarizer compressed tool={} {}->{} bytes",
+                                            call.name,
+                                            payload.original_bytes,
+                                            payload.summary_bytes
+                                        );
+                                                output = payload.summary;
+                                            }
+                                            Ok(None) => {
+                                                log::debug!(
+                                            "[agent_loop] payload_summarizer pass-through tool={} bytes={}",
+                                            call.name,
+                                            output.len()
+                                        );
+                                            }
+                                            Err(e) => {
+                                                log::warn!(
+                                            "[agent_loop] payload_summarizer error tool={} err={} (passing raw payload through)",
+                                            call.name,
+                                            e
+                                        );
+                                            }
+                                        }
+                                    }
+                                    (output, true)
+                                } else {
+                                    (
+                                        format!("Error: {}", r.output_for_llm(prefer_markdown)),
+                                        false,
+                                    )
                                 }
                             }
+                            Err(e) => (format!("Error executing {}: {e}", call.name), false),
                         }
-                        (output, true)
-                    } else {
-                        (
-                            format!("Error: {}", r.output_for_llm(prefer_markdown)),
-                            false,
-                        )
                     }
-                }
-                Err(e) => (format!("Error executing {}: {e}", call.name), false),
+                } // end else { // per-call permission ok
             }
         } else {
             (format!("Unknown tool: {}", call.name), false)
@@ -1076,7 +1582,6 @@ impl Agent {
             session_id: self.event_session_id().to_string(),
             channel: self.event_channel().to_string(),
             connected_integrations: self.connected_integrations.clone(),
-            composio_client: self.composio_client.clone(),
             tool_call_format: self.tool_dispatcher.tool_call_format(),
             session_key: self.session_key.clone(),
             session_parent_prefix: self.session_parent_prefix.clone(),
@@ -1131,18 +1636,123 @@ impl Agent {
             other_messages.drain(0..drop_count);
         }
 
+        // A cut that lands *between* an `AssistantToolCalls` and its
+        // `ToolResults` leaves the window opening on an orphaned `ToolResults`.
+        // Serialized, that is a `tool` message with no preceding `tool_calls`,
+        // which the provider rejects with a 400 (the response streams back
+        // empty and surfaces to the user as "Something went wrong"). Snap the
+        // boundary forward past any leading orphaned results so the window
+        // always starts on a clean turn (a `Chat` or an `AssistantToolCalls`).
+        let orphan_lead = other_messages
+            .iter()
+            .take_while(|m| matches!(m, ConversationMessage::ToolResults(_)))
+            .count();
+        if orphan_lead > 0 {
+            log::debug!(
+                "[agent] trim_history snapped window past {orphan_lead} orphaned ToolResults \
+                 (tool-cycle bisected by the {max}-message cap)"
+            );
+            other_messages.drain(0..orphan_lead);
+        }
+
         self.history = system_messages;
         self.history.extend(other_messages);
+    }
+
+    /// Bound a resumed transcript prefix to the agent history window.
+    ///
+    /// Resume paths may load a long prior transcript directly into
+    /// `cached_transcript_messages` (provider-ready `ChatMessage`s), which
+    /// bypasses `self.history`-based trimming/reduction. Keep at most
+    /// `max_history_messages` entries while preserving the leading system
+    /// message when present.
+    pub(super) fn bound_cached_transcript_messages(
+        &self,
+        messages: Vec<ChatMessage>,
+    ) -> Vec<ChatMessage> {
+        let max = self.config.max_history_messages.max(1);
+        if messages.len() <= max {
+            return messages;
+        }
+
+        let has_system = matches!(messages.first(), Some(msg) if msg.role == "system");
+        let keep_tail = if has_system {
+            max.saturating_sub(1)
+        } else {
+            max
+        };
+        let start = messages.len().saturating_sub(keep_tail);
+
+        // Same hazard as `trim_history`: the tail slice can open on a `tool`
+        // message whose `tool_calls` opener fell outside the window, which the
+        // provider rejects. Advance past any leading orphaned `tool` results so
+        // the window starts on a clean turn.
+        let tail = &messages[start..];
+        let orphan_lead = tail.iter().take_while(|m| m.role == "tool").count();
+        if orphan_lead > 0 {
+            log::debug!(
+                "[agent] bound_cached_transcript_messages snapped window past {orphan_lead} \
+                 orphaned tool result(s) (tool-cycle bisected by the {max}-message cap)"
+            );
+        }
+        let tail = &tail[orphan_lead..];
+
+        let mut bounded = Vec::with_capacity(tail.len() + usize::from(has_system));
+        if has_system {
+            bounded.push(messages[0].clone());
+        }
+        bounded.extend(tail.iter().cloned());
+        bounded
     }
 
     /// Pre-fetches learned context data from memory (observations, patterns, user profile).
     ///
     /// This is an async, non-blocking operation that populates the context
     /// for the system prompt.
+    ///
+    /// # Explicit-preferences narrow path
+    ///
+    /// When `learning_enabled` is `false` but `explicit_preferences_enabled`
+    /// is `true`, only the `user_profile` namespace (pinned preferences from
+    /// the `remember_preference` tool) is fetched and returned.  All other
+    /// inference-derived data (observations, patterns, reflections, tree
+    /// summaries) remains empty — the inference stack is not touched.
     pub(super) async fn fetch_learned_context(&self) -> LearnedContextData {
-        if !self.learning_enabled {
+        // Fast path: neither the full learning subsystem nor the explicit
+        // preferences path is active — skip all memory reads.
+        if !self.learning_enabled && !self.explicit_preferences_enabled {
+            tracing::debug!(
+                "[learning] fetch_learned_context: both learning_enabled and \
+                 explicit_preferences_enabled are false — returning empty context"
+            );
             return LearnedContextData::default();
         }
+
+        // Narrow explicit-preferences path (Lane A): inject the latest-N general
+        // (always-on) preferences written via `save_preference`. Topic-scoped
+        // (situational) prefs are NOT injected here — they ride the user message
+        // via per-turn recall (Lane B). The legacy `user_profile` pinned namespace
+        // is no longer read here; explicit prefs now live in `user_pref_general`.
+        if !self.learning_enabled && self.explicit_preferences_enabled {
+            let general = crate::openhuman::memory::preferences::load_general_preferences(
+                &self.memory,
+                crate::openhuman::memory::preferences::STANDING_PREFS_LIMIT,
+            )
+            .await;
+            tracing::debug!(
+                "[learning] fetch_learned_context: explicit_preferences_enabled — loaded {} general preference(s) for the system prompt",
+                general.len()
+            );
+            return LearnedContextData {
+                user_profile: general,
+                ..LearnedContextData::default()
+            };
+        }
+
+        // Full learning path: fetch all inference-derived data.
+        tracing::debug!(
+            "[learning] fetch_learned_context: learning_enabled=true — fetching full context"
+        );
 
         let obs_entries = self
             .memory
@@ -1164,15 +1774,16 @@ impl Agent {
             .await
             .unwrap_or_default();
 
-        let profile_entries = self
-            .memory
-            .list(
-                Some("user_profile"),
-                Some(&MemoryCategory::Custom("user_profile".into())),
-                None,
-            )
-            .await
-            .unwrap_or_default();
+        // Standing preferences come from the explicit two-lane store (Lane A),
+        // not the inferred `user_profile` facets — those are demoted: no longer
+        // injected as ground truth. A high-confidence inferred facet should be
+        // *proposed* to the user (and pinned via `save_preference` on
+        // confirmation), not silently treated as a standing preference.
+        let general = crate::openhuman::memory::preferences::load_general_preferences(
+            &self.memory,
+            crate::openhuman::memory::preferences::STANDING_PREFS_LIMIT,
+        )
+        .await;
 
         // Explicit user reflections — privileged memory class. Pulled
         // separately from observations/patterns so the prompt assembly
@@ -1218,11 +1829,7 @@ impl Agent {
                 .take(3)
                 .map(|e| sanitize_learned_entry(&e.content))
                 .collect(),
-            user_profile: profile_entries
-                .iter()
-                .take(20)
-                .map(|e| sanitize_learned_entry(&e.content))
-                .collect(),
+            user_profile: general,
             // Cap reflections at 10 to keep the privileged section
             // bounded — the issue requires reflections improve context
             // rather than flood it. Newest first.
@@ -1238,153 +1845,215 @@ impl Agent {
 
     /// Fetches the user's active Composio connections and populates
     /// `self.connected_integrations` so the system prompt can surface them.
-    /// Also caches a [`ComposioClient`] on the session so the sub-agent
-    /// runner can construct per-action tools for `integrations_agent` spawns
-    /// without rebuilding the client on every call.
     ///
     /// Delegates to the shared [`crate::openhuman::composio::fetch_connected_integrations`]
     /// which is the single source of truth for integration discovery.
+    ///
+    /// **No session-scoped Composio client is cached on the agent any
+    /// more (#1710 Wave 2)**. Every downstream caller that needs to
+    /// dispatch a Composio action now resolves a fresh client via
+    /// [`crate::openhuman::composio::client::create_composio_client`]
+    /// at call time so the live `composio.mode` toggle is honoured
+    /// without rebuilding the session — see `ComposioActionTool`,
+    /// `ProviderContext::execute`, the 5 migrated agent tools in
+    /// `composio/tools.rs`, and the spawn-time per-action tool build
+    /// path in `subagent_runner/ops.rs`.
     pub async fn fetch_connected_integrations(&mut self) {
-        let config = match crate::openhuman::config::Config::load_or_init().await {
-            Ok(c) => c,
-            Err(e) => {
-                log::debug!(
-                    "[agent] skipping connected integrations fetch: config load failed: {e}"
-                );
-                return;
-            }
+        let config = match self.integration_runtime_config.clone() {
+            Some(config) => config,
+            None => match crate::openhuman::config::Config::load_or_init().await {
+                Ok(config) => config,
+                Err(e) => {
+                    log::debug!(
+                        "[agent] skipping connected integrations fetch: config load failed: {e}"
+                    );
+                    return;
+                }
+            },
         };
         self.connected_integrations =
             crate::openhuman::composio::fetch_connected_integrations(&config).await;
-        self.composio_client = crate::openhuman::composio::build_composio_client(&config);
+        self.connected_integrations_initialized = true;
     }
 
     /// Re-synthesise `delegate_*` tools for the orchestrator's `subagents`
-    /// declaration using the live `connected_integrations` slice.
+    /// declaration using the live `connected_integrations` slice, and
+    /// reconcile the resulting set into `self.tools` / `self.tool_specs` /
+    /// `self.visible_tool_specs` / `self.visible_tool_names`.
     ///
-    /// The synchronous `AgentBuilder` path cannot do this — it has no
-    /// async runtime handle to reach Composio — so it passes an empty
-    /// integrations slice to `collect_orchestrator_tools` and produces
-    /// zero skill delegation tools. That leaves the orchestrator without
-    /// `delegate_gmail` / `delegate_notion` / … even when those toolkits
-    /// are actually authorised. Call this *after*
-    /// [`Agent::fetch_connected_integrations`] (and before
-    /// [`Agent::build_system_prompt`]) on turn 1 to add the missing
-    /// delegation tools to the live tool registry, tool-spec list, and
-    /// visible-tool whitelist so the LLM sees them as first-class tools.
+    /// **Reconciliation strategy** — full rebuild of the synthesised
+    /// subset:
     ///
-    /// No-op when:
-    /// * the agent definition isn't in the global registry,
-    /// * the definition has no `subagents` entries,
-    /// * no new tools would be added (every synthesised name already
-    ///   exists in `self.tools`),
-    /// * the `tools` / `tool_specs` Arc is shared (e.g. a sub-agent has
-    ///   already captured a snapshot — should never happen on turn 1).
-    pub fn refresh_delegation_tools(&mut self) {
+    ///   1. Drop every tool whose name was in [`Self::synthesized_tool_names`]
+    ///      from the previous synthesis. Direct tools (`query_memory`,
+    ///      `cron_add`, …) are untouched because their names are not in
+    ///      that set.
+    ///   2. Append the freshly collected synthesis output verbatim.
+    ///   3. Replace `synthesized_tool_names` with the new set so the
+    ///      next refresh has a clean mask to undo.
+    ///
+    /// This is safer than appending-only or strict-diff reconcile:
+    ///
+    ///   * Stale tools after a revoke can never leak — anything from the
+    ///     previous synthesis is unconditionally dropped, the new set is
+    ///     authoritative.
+    ///   * Direct tools can never be accidentally removed — only names
+    ///     in `synthesized_tool_names` are touched.
+    ///   * Duplicate registration is impossible — retain+extend
+    ///     guarantees every final entry is either a non-synthesised
+    ///     direct tool or a member of the fresh `synthed` set.
+    ///
+    /// **When to call**: on turn 1 only when the session was built
+    /// without a prewarmed Composio cache snapshot, and on any
+    /// subsequent turn where the connection set has changed since the
+    /// last reconcile (detected via
+    /// [`Self::last_seen_integrations_hash`] vs.
+    /// [`crate::openhuman::composio::cached_active_integrations`]).
+    ///
+    /// **Atomicity**: when `Arc::get_mut` fails (a sub-agent or other
+    /// caller has already captured a clone of the tool list), we restore
+    /// the previous `synthesized_tool_names` and bail. The next refresh
+    /// attempt will re-apply the full transition cleanly rather than
+    /// resuming from a partial state. This should never happen on a turn
+    /// boundary in production — sub-agents always drop their snapshots
+    /// before the parent's next turn — but it's defended against anyway.
+    ///
+    /// **Return value** — `true` when the agent's tool surface is now
+    /// consistent with `self.connected_integrations` (either because a
+    /// successful reconcile applied, or because no reconcile was needed).
+    /// `false` only when the Arc was shared and the reconcile was
+    /// aborted; callers should treat this as "retry next turn" and
+    /// **not** advance any signal they use to gate future refreshes
+    /// (e.g. `last_seen_integrations_hash`) — otherwise a one-shot
+    /// shared-Arc collision could suppress further reconciliation until
+    /// another integration event happened to bump the hash again.
+    pub fn refresh_delegation_tools(&mut self) -> bool {
         use crate::openhuman::agent::harness::definition::AgentDefinitionRegistry;
         use crate::openhuman::tools::orchestrator_tools::collect_orchestrator_tools;
 
         let Some(reg) = AgentDefinitionRegistry::global() else {
-            return;
+            // No registry — there's nothing we can do until the
+            // registry is initialised. The agent's surface stays at
+            // whatever the builder produced; callers can safely treat
+            // this as "no reconcile needed right now".
+            return true;
         };
         let Some(def) = reg.get(&self.agent_definition_id) else {
             log::debug!(
                 "[agent] refresh_delegation_tools: definition '{}' not in registry — skipping",
                 self.agent_definition_id
             );
-            return;
+            return true;
         };
         if def.subagents.is_empty() {
-            return;
+            return true;
         }
 
         let synthed = collect_orchestrator_tools(def, reg, &self.connected_integrations);
-        if synthed.is_empty() {
-            return;
+        let synthed_names: std::collections::HashSet<String> =
+            synthed.iter().map(|t| t.name().to_string()).collect();
+        let synthed_specs: Vec<crate::openhuman::tools::ToolSpec> =
+            synthed.iter().map(|t| t.spec()).collect();
+
+        // Skip the Arc mutation entirely when neither the previous nor
+        // the next synthesis produced any names — saves an
+        // `Arc::get_mut` probe on agents that don't declare `subagents`.
+        if self.synthesized_tool_names.is_empty() && synthed_names.is_empty() {
+            return true;
         }
 
-        let existing: std::collections::HashSet<String> =
-            self.tools.iter().map(|t| t.name().to_string()).collect();
-        let new_tools: Vec<Box<dyn Tool>> = synthed
-            .into_iter()
-            .filter(|t| !existing.contains(t.name()))
-            .collect();
-        if new_tools.is_empty() {
-            return;
-        }
+        // Mask used to drop the previous synthesis. We `take` it now so
+        // the restore-on-failure path below can put it back if the Arc
+        // turns out to be shared.
+        let old_synth = std::mem::take(&mut self.synthesized_tool_names);
 
-        let new_names: Vec<String> = new_tools.iter().map(|t| t.name().to_string()).collect();
-        let new_specs: Vec<crate::openhuman::tools::ToolSpec> =
-            new_tools.iter().map(|t| t.spec()).collect();
-
-        // The tools / tool_specs Arcs are uniquely owned at turn-1 build
-        // time (no sub-agent has captured a snapshot yet). If a caller
-        // managed to clone them out before the first turn fired, the
-        // mutation below would silently no-op — log that case so it's
-        // visible in diagnostics.
         match (
             Arc::get_mut(&mut self.tools),
             Arc::get_mut(&mut self.tool_specs),
         ) {
             (Some(tools_vec), Some(specs_vec)) => {
-                tools_vec.extend(new_tools);
-                specs_vec.extend(new_specs);
+                tools_vec.retain(|t| !old_synth.contains(t.name()));
+                specs_vec.retain(|s| !old_synth.contains(&s.name));
+                tools_vec.extend(synthed);
+                specs_vec.extend(synthed_specs);
             }
             _ => {
                 log::warn!(
                     "[agent] refresh_delegation_tools: tools/tool_specs Arc is shared — \
-                     cannot inject delegation tools ({} would have been added: {:?})",
-                    new_names.len(),
-                    new_names
+                     cannot reconcile delegation surface (would have produced {} synthesised tool(s)). \
+                     Restoring previous synthesized_tool_names so the next refresh retries cleanly.",
+                    synthed_names.len()
                 );
-                return;
+                self.synthesized_tool_names = old_synth;
+                return false;
             }
         }
 
-        // Definitions with a Named ToolScope carry an explicit visible
-        // whitelist; the synthesised delegation tools must opt in to that
-        // whitelist or the LLM never sees them. Wildcard-scope agents
-        // keep `visible_tool_names` empty ("no filter"), so we skip the
-        // insert there.
+        // `visible_tool_names` carries an explicit allowlist for
+        // [`ToolScope::Named`] agents. Drop the previously-synthesised
+        // names and add the new ones so the visible set tracks the
+        // tool list. Wildcard-scope agents keep this empty ("no
+        // filter") and never need touching.
         if !self.visible_tool_names.is_empty() {
-            for name in &new_names {
+            for name in &old_synth {
+                self.visible_tool_names.remove(name);
+            }
+            for name in &synthed_names {
                 self.visible_tool_names.insert(name.clone());
             }
         }
 
-        // Rebuild the visible-spec cache so the next prompt build picks
-        // up the new tools.
-        let visible_specs: Vec<crate::openhuman::tools::ToolSpec> =
-            if self.visible_tool_names.is_empty() {
-                (*self.tool_specs).clone()
-            } else {
-                self.tool_specs
-                    .iter()
-                    .filter(|spec| self.visible_tool_names.contains(&spec.name))
-                    .cloned()
-                    .collect()
-            };
-        self.visible_tool_specs = Arc::new(visible_specs);
+        // Rebuild the visible-spec cache from the new tool_specs so the
+        // next provider call carries the reconciled schema. Dedup
+        // afterward so a delegate synthesised here (e.g.
+        // `delegate_name = "research"`) doesn't collide with a
+        // same-named skill tool on the wire — Anthropic 400s on dup
+        // tool names where OpenHuman's backend silently accepts.
+        self.rebuild_tool_policy_session();
+
+        // Compute add/remove deltas for the log line — useful when
+        // diagnosing a Composio connect/revoke that should have rebuilt
+        // the surface but didn't. Materialise to owned `Vec<String>`
+        // so we can move `synthed_names` into `self.synthesized_tool_names`
+        // below without the log-statement reborrow blocking the move.
+        let added: Vec<String> = synthed_names
+            .iter()
+            .filter(|n| !old_synth.contains(n.as_str()))
+            .cloned()
+            .collect();
+        let removed: Vec<String> = old_synth
+            .iter()
+            .filter(|n| !synthed_names.contains(n.as_str()))
+            .cloned()
+            .collect();
+
+        self.synthesized_tool_names = synthed_names;
 
         log::info!(
-            "[agent] refresh_delegation_tools: added {} delegation tool(s) for agent '{}' (display='{}'): {:?}",
-            new_names.len(),
+            "[agent] refresh_delegation_tools: reconciled delegation surface for agent '{}' (display='{}'); now {} synthesised tool(s); added={:?} removed={:?}",
             self.agent_definition_id,
             self.agent_definition_name,
-            new_names
+            self.synthesized_tool_names.len(),
+            added,
+            removed
         );
+        true
     }
 
     /// Builds the system prompt for the current turn, including tool
     /// instructions and learned context.
     pub fn build_system_prompt(&self, learned: LearnedContextData) -> Result<String> {
         let tools_slice: &[Box<dyn Tool>] = self.tools.as_slice();
-        let instructions = self.tool_dispatcher.prompt_instructions(tools_slice);
+        let instructions = self
+            .tool_dispatcher
+            .prompt_instructions_for_specs(self.visible_tool_specs.as_slice())
+            .unwrap_or_else(|| self.tool_dispatcher.prompt_instructions(tools_slice));
         // Adapt the owned Box<dyn Tool> slice into the shared PromptTool
         // shape that every prompt-building call-site uses. Temporary vec
         // borrows from `tools_slice` and lives for the duration of the
         // prompt build.
         let prompt_tools = PromptTool::from_tools(tools_slice);
+        let prompt_visible_tool_names = self.tool_policy_session.visible_tool_names_for_prompt();
         let ctx = PromptContext {
             workspace_dir: &self.workspace_dir,
             model_name: &self.model_name,
@@ -1393,7 +2062,7 @@ impl Agent {
             skills: &self.skills,
             dispatcher_instructions: &instructions,
             learned,
-            visible_tool_names: &self.visible_tool_names,
+            visible_tool_names: &prompt_visible_tool_names,
             tool_call_format: self.tool_dispatcher.tool_call_format(),
             connected_integrations: &self.connected_integrations,
             connected_identities_md: crate::openhuman::agent::prompts::render_connected_identities(
@@ -1406,7 +2075,11 @@ impl Agent {
         // Route through the global context manager so every
         // prompt-building call-site — main agent, sub-agent runner,
         // channel runtimes — shares one builder configuration.
-        self.context.build_system_prompt(&ctx)
+        let mut prompt = self.context.build_system_prompt(&ctx)?;
+        if let Some(boundary) = render_tool_policy_boundary(&self.tool_policy_session, 2048) {
+            prompt = format!("{boundary}\n\n{prompt}");
+        }
+        Ok(prompt)
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -1431,11 +2104,18 @@ impl Agent {
                             );
                             return;
                         }
-                        log::info!(
-                            "[transcript] loaded {} messages for resume",
-                            session.messages.len()
-                        );
-                        self.cached_transcript_messages = Some(session.messages);
+                        let loaded_count = session.messages.len();
+                        log::info!("[transcript] loaded {} messages for resume", loaded_count);
+                        let bounded = self.bound_cached_transcript_messages(session.messages);
+                        if bounded.len() < loaded_count {
+                            log::warn!(
+                                "[transcript] resume prefix trimmed from {} to {} messages (max_history_messages={})",
+                                loaded_count,
+                                bounded.len(),
+                                self.config.max_history_messages
+                            );
+                        }
+                        self.cached_transcript_messages = Some(bounded);
                     }
                     Err(err) => {
                         log::warn!(
@@ -1450,6 +2130,104 @@ impl Agent {
                     "[transcript] no previous transcript found for agent={}",
                     self.agent_definition_name
                 );
+            }
+        }
+    }
+
+    /// Ask the provider for a resumable checkpoint summary when a turn
+    /// hits the tool-call iteration cap, with native tools **disabled** so
+    /// the model returns prose rather than another tool call. Streams text
+    /// deltas to the progress sink (when attached) so the checkpoint
+    /// appears in the UI like any other reply.
+    ///
+    /// Returns the summary text (empty when the provider call fails or
+    /// yields nothing — the caller then falls back to
+    /// [`build_deterministic_checkpoint`] so the thread is never left on an
+    /// unterminated tool cycle, bug-report-2026-05-26 A1) **paired with the
+    /// provider usage** for this extra call, so the caller can fold it into
+    /// the turn's cumulative token/cost accounting instead of silently
+    /// dropping it.
+    async fn summarize_iteration_checkpoint(
+        &self,
+        base_messages: &[ChatMessage],
+        effective_model: &str,
+        iteration_for_stream: u32,
+    ) -> (String, Option<UsageInfo>) {
+        let mut messages = base_messages.to_vec();
+        messages.push(ChatMessage::user(MAX_ITER_CHECKPOINT_INSTRUCTION));
+
+        // Mirror the main loop's streaming sink so the checkpoint renders
+        // incrementally. Only text deltas are relevant here (tools are
+        // disabled for this call).
+        let (delta_tx_opt, delta_forwarder) = if self.on_progress.is_some() {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<ProviderDelta>(128);
+            let progress_tx = self.on_progress.clone();
+            let forwarder = tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    let Some(ref sink) = progress_tx else {
+                        continue;
+                    };
+                    if let ProviderDelta::TextDelta { delta } = event {
+                        if sink
+                            .send(AgentProgress::TextDelta {
+                                delta,
+                                iteration: iteration_for_stream,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            });
+            (Some(tx), Some(forwarder))
+        } else {
+            (None, None)
+        };
+
+        let result = self
+            .provider
+            .chat(
+                ChatRequest {
+                    messages: &messages,
+                    tools: None,
+                    stream: delta_tx_opt.as_ref(),
+                },
+                effective_model,
+                self.temperature,
+            )
+            .await;
+        drop(delta_tx_opt);
+        if let Some(handle) = delta_forwarder {
+            let _ = handle.await;
+        }
+
+        match result {
+            Ok(resp) => {
+                let usage = resp.usage.clone();
+                // Strip any stray tool-call XML a text-mode model may have
+                // emitted; keep only the prose.
+                let (text, calls) = self.tool_dispatcher.parse_response(&resp);
+                let checkpoint = if !text.trim().is_empty() {
+                    text
+                } else if calls.is_empty() {
+                    // No tool-call markup was present, so the raw text (if
+                    // any) is genuine prose — safe to use.
+                    resp.text.unwrap_or_default()
+                } else {
+                    // `parse_response` stripped tool-call markup and left no
+                    // prose. Do NOT re-emit `resp.text` here: it would persist
+                    // the raw `<tool_call>…` markup verbatim as the checkpoint.
+                    // Return empty so the caller uses the deterministic
+                    // fallback instead (bug-report-2026-05-26 A1).
+                    String::new()
+                };
+                (checkpoint, usage)
+            }
+            Err(e) => {
+                log::warn!("[agent_loop] checkpoint summary call failed: {e:#}");
+                (String::new(), None)
             }
         }
     }
@@ -1515,7 +2293,7 @@ impl Agent {
             output_tokens,
             cached_input_tokens,
             charged_amount_usd,
-            thread_id: crate::openhuman::providers::thread_context::current_thread_id(),
+            thread_id: crate::openhuman::inference::provider::thread_context::current_thread_id(),
         };
 
         if let Err(err) = transcript::write_transcript(path, messages, &meta, turn_usage) {
@@ -1536,7 +2314,29 @@ impl Agent {
     /// Gated by [`context_pipeline::SessionMemoryState::should_extract`]
     /// — see its docs for the threshold invariants. Safe to call from
     /// inside `turn()` after the turn body has settled.
-    pub(super) fn spawn_session_memory_extraction(&mut self) {
+    pub(super) async fn spawn_session_memory_extraction(&mut self) {
+        // ── Flush the trailing open segment before the session winds down ──
+        //
+        // The ArchivistHook manages per-turn segment lifecycle but cannot
+        // force-close the *last* open segment because there is no explicit
+        // "session end" event in the turn loop. `spawn_session_memory_extraction`
+        // is the closest available signal: it fires when the context manager
+        // decides the session has accumulated enough material to archive.
+        //
+        // GUARANTEE: the flush is *awaited* here (not fire-and-forget) so
+        // the trailing segment always receives its recap + embedding + tree
+        // ingest before the function returns, even during runtime wind-down.
+        // This honours the doc-comment guarantee on `flush_open_segment` in
+        // `archivist.rs`. No deadlock risk: no mutex guard is held across
+        // this await point.
+        if let Some(ref archivist) = self.archivist_hook {
+            let session_id = self.event_session_id.clone();
+            log::debug!(
+                "[archivist] awaiting flush_open_segment for session={session_id} at session wind-down"
+            );
+            archivist.flush_open_segment(&session_id).await;
+        }
+
         let Some(registry) = harness::AgentDefinitionRegistry::global() else {
             log::debug!("[session_memory] registry not initialised — skipping extraction spawn");
             return;
@@ -1651,7 +2451,7 @@ impl Agent {
 }
 
 /// Wrapper around
-/// [`crate::openhuman::tree_summarizer::store::collect_root_summaries_with_caps`]
+/// [`crate::openhuman::memory_tree::tree_runtime::store::collect_root_summaries_with_caps`]
 /// that takes user-resolved per-namespace and total caps. The actual
 /// limits are derived from the active
 /// [`crate::openhuman::config::schema::agent::MemoryContextWindow`]
@@ -1661,7 +2461,7 @@ fn collect_tree_root_summaries(
     per_namespace_cap: usize,
     total_cap: usize,
 ) -> Vec<(String, String)> {
-    crate::openhuman::tree_summarizer::store::collect_root_summaries_with_caps(
+    crate::openhuman::memory_tree::tree_runtime::store::collect_root_summaries_with_caps(
         workspace_dir,
         per_namespace_cap,
         total_cap,

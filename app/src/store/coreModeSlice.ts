@@ -11,6 +11,10 @@
  * it is pre-login and not tied to any particular user identity.
  */
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { REHYDRATE } from 'redux-persist';
+
+import { E2E_DEFAULT_CORE_MODE } from '../utils/config';
+import { normalizeRpcUrl } from '../utils/configPersistence';
 
 export type CoreMode =
   | { kind: 'unset' }
@@ -51,6 +55,10 @@ const CORE_MODE_STORAGE_KEY = 'openhuman_core_mode';
  * can recover the exact mode on reload regardless of the persist flush race.
  */
 function deriveInitialMode(): CoreMode {
+  if (E2E_DEFAULT_CORE_MODE === 'local') {
+    return { kind: 'local' };
+  }
+
   if (typeof localStorage === 'undefined') return { kind: 'unset' };
   try {
     const mode = localStorage.getItem(CORE_MODE_STORAGE_KEY)?.trim();
@@ -58,7 +66,7 @@ function deriveInitialMode(): CoreMode {
     if (mode === 'cloud') {
       const url = localStorage.getItem(RPC_URL_STORAGE_KEY)?.trim();
       const token = localStorage.getItem(CORE_TOKEN_STORAGE_KEY)?.trim();
-      if (url && token) return { kind: 'cloud', url, token };
+      if (url && token) return { kind: 'cloud', url: normalizeRpcUrl(url), token };
     }
   } catch {
     /* localStorage unavailable — fall through to unset */
@@ -87,6 +95,19 @@ const coreModeSlice = createSlice({
     resetCoreMode(state) {
       state.mode = { kind: 'unset' };
     },
+  },
+  extraReducers: builder => {
+    builder.addCase(REHYDRATE, (state, action) => {
+      const rehydrateAction = action as typeof action & { key?: string };
+      if (rehydrateAction.key !== 'coreMode') return;
+
+      // The plain marker is written synchronously before boot-check work can
+      // reload the renderer. Let it win over stale async redux-persist blobs.
+      const synchronousMode = deriveInitialMode();
+      if (synchronousMode.kind !== 'unset') {
+        state.mode = synchronousMode;
+      }
+    });
   },
 });
 

@@ -1,7 +1,9 @@
 import debug from 'debug';
 import { useEffect, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 
 import { subscribeChatEvents } from '../../services/chatService';
+import { selectEffectiveMascotVoiceId } from '../../store/mascotSlice';
 import type { MascotFace } from './Mascot';
 import { lerpViseme, VISEMES, type VisemeShape } from './Mascot/visemes';
 import { type PlaybackHandle, playBase64Audio, swallowAudioStop } from './voice/audioPlayer';
@@ -74,6 +76,40 @@ export function pickViseme(delta: string): VisemeShape {
   }
 }
 
+type ConversationAckFace = Extract<MascotFace, 'happy' | 'confused' | 'concerned'>;
+type ConversationAckEvent = { full_response?: string | null; reaction_emoji?: string | null };
+
+const HAPPY_REACTION_EMOJIS = new Set(['✅', '🎉', '🙌', '😊', '😄', '👍', '💪']);
+const CONFUSED_REACTION_EMOJIS = new Set(['🤔', '❓', '❔']);
+const CONCERNED_REACTION_EMOJIS = new Set(['⚠️', '⚠', '🚨', '❌', '😕', '😟']);
+
+const CONCERNED_TEXT_RE =
+  /\b(sorry|apolog(?:y|ize|ise)|failed|failure|error|cannot|can't|unable|blocked|problem)\b/i;
+const CONFUSED_TEXT_RE =
+  /\b(not sure|unclear|ambiguous|clarify|which one|need more|can you confirm|maybe)\b/i;
+const HAPPY_TEXT_RE = /\b(done|completed|fixed|success|successful|ready|all set|great|nice)\b/i;
+
+/**
+ * Map conversation-level meaning into the short acknowledgement face that
+ * follows a completed turn. Runtime activity still owns thinking/speaking
+ * states; this only decides the post-turn emotional beat.
+ */
+export function pickConversationAckFace(event: ConversationAckEvent): ConversationAckFace | null {
+  const reaction = event.reaction_emoji?.trim();
+  if (reaction) {
+    if (HAPPY_REACTION_EMOJIS.has(reaction)) return 'happy';
+    if (CONFUSED_REACTION_EMOJIS.has(reaction)) return 'confused';
+    if (CONCERNED_REACTION_EMOJIS.has(reaction)) return 'concerned';
+  }
+
+  const text = event.full_response?.trim() ?? '';
+  if (!text) return null;
+  if (CONCERNED_TEXT_RE.test(text)) return 'concerned';
+  if (CONFUSED_TEXT_RE.test(text)) return 'confused';
+  if (HAPPY_TEXT_RE.test(text)) return 'happy';
+  return null;
+}
+
 export interface UseHumanMascotOptions {
   /** When true, post-stream replies are sent to ElevenLabs and the mouth
    *  follows the returned viseme timeline while the audio plays. */
@@ -97,9 +133,9 @@ export interface UseHumanMascotResult {
  * - `iteration_start` round > 1 or `tool_call` → `confused` (heavy reasoning)
  * - `tool_result success=false` → `concerned` (held briefly)
  * - `text_delta` → `speaking`, pseudo-lipsync from the trailing letter
- * - `chat_done` (no TTS) → `happy` (held briefly), then `idle`
+ * - `chat_done` (no TTS) → message-aware ack face (held briefly), then `idle`
  * - `chat_done` (TTS enabled) → `thinking` while synthesizing → `speaking`
- *   with real visemes → `idle` when the audio ends
+ *   with real visemes → message-aware ack face when the audio ends
  * - `chat_error`, TTS failure → `concerned` (held briefly), then `idle`
  * - `listening` option override → `listening` (highest priority)
  *
@@ -110,6 +146,15 @@ export function useHumanMascot(options: UseHumanMascotOptions = {}): UseHumanMas
   const { speakReplies = false, listening = false } = options;
   const speakRef = useRef(speakReplies);
   speakRef.current = speakReplies;
+
+  // Effective mascot voice id: resolves the manual override, the
+  // locale-default toggle, and the build-time fallback into a single
+  // string (see `selectEffectiveMascotVoiceId`). Mirrored into a ref so
+  // the inner `startTtsPlayback` closure always reads the latest value
+  // without having to re-create the callback on every re-render.
+  const effectiveMascotVoiceId = useSelector(selectEffectiveMascotVoiceId);
+  const mascotVoiceIdRef = useRef<string>(effectiveMascotVoiceId);
+  mascotVoiceIdRef.current = effectiveMascotVoiceId;
 
   const [face, setFace] = useState<MascotFace>('idle');
   const targetRef = useRef<VisemeShape>(VISEMES.REST);
@@ -176,13 +221,14 @@ export function useHumanMascot(options: UseHumanMascotOptions = {}): UseHumanMas
         lastDeltaAtRef.current = window.performance.now();
       },
       onDone: e => {
+        const ackFace = pickConversationAckFace(e) ?? 'happy';
         if (!speakRef.current || !e.full_response?.trim()) {
           // Soft acknowledgement beat instead of snapping back to idle.
-          holdThenIdle('happy');
+          holdThenIdle(ackFace);
           return;
         }
         // Fire-and-forget — startTtsPlayback owns its cleanup via finally.
-        void startTtsPlayback(e.full_response).catch(() => {});
+        void startTtsPlayback(e.full_response, ackFace).catch(() => {});
       },
       onError: () => {
         // Bump seq to invalidate any in-flight startTtsPlayback awaiters.
@@ -214,7 +260,10 @@ export function useHumanMascot(options: UseHumanMascotOptions = {}): UseHumanMas
     };
   }, []);
 
-  async function startTtsPlayback(text: string): Promise<void> {
+  async function startTtsPlayback(
+    text: string,
+    ackFace: ConversationAckFace = 'happy'
+  ): Promise<void> {
     // Cancel any in-flight playback so its handle.ended callback can't reset
     // state belonging to the new run.
     const prev = playbackRef.current;
@@ -234,7 +283,11 @@ export function useHumanMascot(options: UseHumanMascotOptions = {}): UseHumanMas
       setFace('thinking');
       let tts;
       try {
-        tts = await synthesizeSpeech(text);
+        // Always pass the effective voice id — the selector already
+        // resolves manual override / locale default / build-time
+        // fallback to a single string, so `synthesizeSpeech` doesn't
+        // need its own fallback branch here.
+        tts = await synthesizeSpeech(text, { voiceId: mascotVoiceIdRef.current });
       } catch (err) {
         // Voice path unavailable — degrade cleanly to text-only behavior.
         if (isStillCurrent()) degraded = true;
@@ -298,6 +351,9 @@ export function useHumanMascot(options: UseHumanMascotOptions = {}): UseHumanMas
         // rethrow anything else so real decoder errors aren't masked.
         swallowAudioStop(err);
       }
+    } catch (err) {
+      if (isStillCurrent()) degraded = true;
+      throw err;
     } finally {
       if (isStillCurrent()) {
         playbackRef.current = null;
@@ -305,7 +361,7 @@ export function useHumanMascot(options: UseHumanMascotOptions = {}): UseHumanMas
         if (degraded) {
           holdThenIdle('concerned');
         } else {
-          holdThenIdle('happy');
+          holdThenIdle(ackFace);
         }
       }
     }

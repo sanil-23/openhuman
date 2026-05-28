@@ -4,6 +4,7 @@
 
 * [Welcome to OpenHuman](README.md)
 * [Getting Started](overview/getting-started.md)
+* [Troubleshooting Sign-In](overview/troubleshooting-sign-in.md)
 
 ## Features
 
@@ -11,6 +12,7 @@
   * [Meeting Agents](features/mascot/meeting-agents.md)
 * [Obsidian-Style Memory](features/obsidian-wiki/README.md)
   * [Memory Trees](features/obsidian-wiki/memory-tree.md)
+  * [agentmemory backend](features/obsidian-wiki/agentmemory-backend.md)
   * [Auto-fetch from Integrations](features/obsidian-wiki/auto-fetch.md)
 * [Third-party Integrations (118+)](features/integrations/README.md)
   * [Triggers](features/integrations/triggers.md)
@@ -31,6 +33,7 @@
   * [System & Utilities](features/native-tools/system-and-utilities.md)
 * [Subconscious Loop](features/subconscious.md)
 * [Privacy & Security](features/privacy-and-security.md)
+  * [OS Keyring & Secret Storage](features/os-keyring-and-secret-storage.md)
 * [Platform & Availability](features/platform.md)
 * [Cloud Deploy](features/cloud-deploy.md)
 
@@ -42,6 +45,7 @@
 * [Testing Strategy](developing/testing-strategy.md)
 * [E2E Testing](developing/e2e-testing.md)
 * [Release Policy](developing/release-policy.md)
+* [Polymarket Integration (v1 Read + Trading)](developing/integrations/polymarket.md)
 * [Chromium Embedded Framework](developing/cef.md)
 * [Agent Observability](developing/agent-observability.md)
 * [Architecture](developing/architecture/README.md)

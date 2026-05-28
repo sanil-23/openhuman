@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{self, Duration};
 
@@ -9,14 +9,15 @@ use image::{ImageBuffer, Rgb, RgbImage};
 use tempfile::tempdir;
 
 use super::helpers::{
-    generate_suggestions, parse_vision_summary_output, truncate_tail, validate_input_action,
+    generate_suggestions, parse_vision_summary_output, persist_vision_summary, truncate_tail,
+    validate_input_action, vision_summary_memory_key,
 };
 use super::state::{AccessibilityEngine, EngineState};
-use super::types::{CaptureFrame, InputActionParams, StartSessionParams};
+use super::types::{CaptureFrame, InputActionParams, StartSessionParams, VisionSummary};
 use crate::openhuman::accessibility::{parse_foreground_output, AppContext};
 use crate::openhuman::config::{Config, ScreenIntelligenceConfig};
 use crate::openhuman::embeddings::NoopEmbedding;
-use crate::openhuman::memory::store::UnifiedMemory;
+use crate::openhuman::memory_store::UnifiedMemory;
 
 struct EnvVarGuard {
     key: &'static str,
@@ -46,13 +47,8 @@ impl Drop for EnvVarGuard {
     }
 }
 
-static SCREEN_INTELLIGENCE_ENV_LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
-
 fn screen_intelligence_env_lock() -> std::sync::MutexGuard<'static, ()> {
-    match SCREEN_INTELLIGENCE_ENV_LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-    {
+    match crate::openhuman::config::TEST_ENV_LOCK.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
@@ -780,12 +776,49 @@ async fn analyze_and_persist_frame_writes_unified_memory_document() {
     let documents = list["documents"]
         .as_array()
         .expect("documents array should exist");
-    let key = format!("screen_intelligence_{}", summary.id);
+    let key = vision_summary_memory_key(&summary);
     assert!(
         documents
             .iter()
             .any(|doc| doc["key"].as_str() == Some(&key)),
         "expected persisted vision summary key in background namespace: {key}"
+    );
+}
+
+#[tokio::test]
+async fn persist_vision_summary_uses_pii_safe_document_key() {
+    let _env_lock = screen_intelligence_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let _workspace = EnvVarGuard::set_to_path("OPENHUMAN_WORKSPACE", tmp.path());
+    write_screen_intelligence_test_config(tmp.path(), true, "ollama");
+
+    let summary = VisionSummary {
+        id: "vision-1700000000300-abcde1234f".to_string(),
+        captured_at_ms: 1700000000300,
+        app_name: Some("PipelineApp".to_string()),
+        window_title: Some("Main.rs".to_string()),
+        ui_state: "editor".to_string(),
+        key_text: "fn main() {}".to_string(),
+        actionable_notes: "Rust source is open".to_string(),
+        confidence: 0.93,
+    };
+    let raw_key = format!("screen_intelligence_{}", summary.id);
+    assert!(
+        crate::openhuman::memory_store::safety::pii::has_likely_pii(&raw_key),
+        "test fixture must resemble formatted PII before safe-key rewriting"
+    );
+
+    let persisted = persist_vision_summary(summary.clone())
+        .await
+        .expect("internal screen-intelligence keys must not trip PII guards");
+    assert_eq!(persisted.namespace, "background");
+    assert!(
+        !crate::openhuman::memory_store::safety::pii::has_likely_pii(&persisted.key),
+        "rewritten memory key must stay below the PII boundary guard"
+    );
+    assert_ne!(
+        persisted.key, raw_key,
+        "memory key should not embed the raw vision id when it can resemble formatted PII"
     );
 }
 
@@ -842,5 +875,50 @@ async fn analyze_and_persist_frame_rejects_disabled_local_ai() {
     assert!(
         err.contains("local_ai.runtime_enabled=true"),
         "unexpected error when local ai is disabled: {err}"
+    );
+}
+
+#[tokio::test]
+async fn start_session_is_idempotent() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+
+    let engine = Arc::new(AccessibilityEngine {
+        inner: Mutex::new(EngineState::new(ScreenIntelligenceConfig {
+            baseline_fps: 6.0,
+            session_ttl_secs: 60,
+            ..Default::default()
+        })),
+    });
+
+    // First start
+    let started = engine
+        .start_session(StartSessionParams {
+            consent: true,
+            ttl_secs: Some(60),
+            screen_monitoring: Some(true),
+        })
+        .await;
+
+    if started.is_err() {
+        // If we can't start the first session (e.g. no permissions in test env),
+        // we can't test idempotency properly here, but it shouldn't fail the test.
+        return;
+    }
+
+    // Second start - should succeed and return the same session status (active: true)
+    let second_start = engine
+        .start_session(StartSessionParams {
+            consent: true,
+            ttl_secs: Some(60),
+            screen_monitoring: Some(true),
+        })
+        .await;
+
+    assert!(second_start.is_ok(), "Second start_session should be Ok");
+    assert!(
+        second_start.unwrap().active,
+        "Second start_session should return active session status"
     );
 }

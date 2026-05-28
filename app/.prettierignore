@@ -3,6 +3,7 @@ dist
 coverage
 app
 src-tauri
+src-tauri-mobile
 rust-core
 skills
 *.config.js
@@ -11,3 +12,4 @@ tsconfig.tsbuildinfo
 yarn.lock
 package-lock.json
 target-test-run
+test/e2e/artifacts

@@ -309,7 +309,7 @@ impl PayloadSummarizer for SubagentPayloadSummarizer {
 }
 
 /// Rough token estimate: ~4 characters per token. Mirrors
-/// [`crate::openhuman::tree_summarizer::types::estimate_tokens`] but
+/// [`crate::openhuman::memory_tree::tree_runtime::types::estimate_tokens`] but
 /// returns `usize` (not `u32`) and lives here to avoid a cross-module
 /// dependency from the agent harness on the tree summarizer.
 fn estimate_tokens(text: &str) -> usize {
@@ -365,6 +365,7 @@ mod tests {
             background: false,
             subagents: vec![],
             delegate_name: None,
+            agent_tier: crate::openhuman::agent::harness::definition::AgentTier::Worker,
             source: DefinitionSource::Builtin,
         }
     }

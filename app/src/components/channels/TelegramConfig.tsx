@@ -1,10 +1,13 @@
 import debug from 'debug';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { AUTH_MODE_LABELS } from '../../lib/channels/definitions';
+import { useOAuthConnectionListener } from '../../hooks/useOAuthConnectionListener';
+import { useT } from '../../lib/i18n/I18nContext';
+import { useCoreState } from '../../providers/CoreStateProvider';
 import { channelConnectionsApi } from '../../services/api/channelConnectionsApi';
 import { callCoreRpc } from '../../services/coreRpcClient';
 import {
+  clearOtherPendingForChannel,
   disconnectChannelConnection,
   setChannelConnectionStatus,
   upsertChannelConnection,
@@ -16,25 +19,36 @@ import type {
   ChannelConnectionStatus,
   ChannelDefinition,
 } from '../../types/channels';
+import { isLocalSessionToken } from '../../utils/localSession';
 import { openUrl } from '../../utils/openUrl';
 import { restartCoreProcess } from '../../utils/tauriCommands/core';
 import ChannelFieldInput from './ChannelFieldInput';
 import ChannelStatusBadge from './ChannelStatusBadge';
 
 const log = debug('channels:telegram');
-const MANAGED_DM_CONNECTING_MESSAGE = 'Open Telegram and message the bot to complete setup.';
-const MANAGED_DM_TIMEOUT_MESSAGE = 'Managed DM verification timed out. Try connecting again.';
 
 interface TelegramConfigProps {
   definition: ChannelDefinition;
 }
 
 const TelegramConfig = ({ definition }: TelegramConfigProps) => {
+  const { t } = useT();
   const dispatch = useAppDispatch();
   const channelConnections = useAppSelector(state => state.channelConnections);
+  const { snapshot } = useCoreState();
+  const isLocalSession = isLocalSessionToken(snapshot.sessionToken);
+  const visibleAuthModes = definition.auth_modes.filter(
+    spec => !isLocalSession || (spec.mode !== 'managed_dm' && spec.mode !== 'oauth')
+  );
+
+  const MANAGED_DM_CONNECTING_MESSAGE = t('channels.telegram.managedDmConnecting');
+  const MANAGED_DM_TIMEOUT_MESSAGE = t('channels.telegram.managedDmTimeout');
 
   const [busyKeys, setBusyKeys] = useState<Record<string, boolean>>({});
   const [fieldValues, setFieldValues] = useState<Record<string, Record<string, string>>>({});
+  const [clearMemoryOnDisconnect, setClearMemoryOnDisconnect] = useState<Record<string, boolean>>(
+    {}
+  );
   const [error, setError] = useState<string | null>(null);
   const managedDmPollControllers = useRef<Record<string, AbortController>>({});
 
@@ -71,6 +85,12 @@ const TelegramConfig = ({ definition }: TelegramConfigProps) => {
       managedDmPollControllers.current = {};
     };
   }, []);
+
+  // Bridge OAuth deep-link completions into Redux. Previously absent on the
+  // Telegram panel, so OAuth attempts that succeeded in the browser would
+  // never clear the `connecting` badge here. Fixes the Telegram half of
+  // #2128 and inherits the shared error-transition behavior.
+  useOAuthConnectionListener({ channel: 'telegram', authMode: 'oauth' });
 
   const startManagedDmPolling = useCallback(
     (key: string, linkToken: string) => {
@@ -146,13 +166,24 @@ const TelegramConfig = ({ definition }: TelegramConfigProps) => {
         }
       })();
     },
-    [dispatch, stopManagedDmPolling]
+    [dispatch, stopManagedDmPolling, MANAGED_DM_TIMEOUT_MESSAGE]
   );
 
   const handleConnect = useCallback(
     (spec: AuthModeSpec) => {
       const key = `telegram:${spec.mode}`;
       void runBusy(key, async () => {
+        // Abort sibling managed-dm polls before clearing their slice rows;
+        // a still-running poll could otherwise complete after the clear and
+        // dispatch the sibling back to connected/error, leaking the prior
+        // attempt into state. (CodeRabbit on PR #2256.) Only managed_dm
+        // polls today, so stop that one explicitly.
+        const managedDmKey = 'telegram:managed_dm';
+        if (key !== managedDmKey) stopManagedDmPolling(managedDmKey);
+
+        // Cancel any sibling auth mode still mid-`connecting` so the panel
+        // doesn't pin multiple methods simultaneously (#2128).
+        dispatch(clearOtherPendingForChannel({ channel: 'telegram', exceptAuthMode: spec.mode }));
         dispatch(
           setChannelConnectionStatus({
             channel: 'telegram',
@@ -172,7 +203,10 @@ const TelegramConfig = ({ definition }: TelegramConfigProps) => {
                 channel: 'telegram',
                 authMode: spec.mode,
                 status: 'error',
-                lastError: `${field.label} is required`,
+                lastError: t('channels.fieldRequired', '{field} is required').replace(
+                  '{field}',
+                  t(`channels.telegram.fields.${field.key}.label`, field.label || field.key)
+                ),
               })
             );
             return;
@@ -262,7 +296,7 @@ const TelegramConfig = ({ definition }: TelegramConfigProps) => {
           } catch (restartErr) {
             const msg = restartErr instanceof Error ? restartErr.message : String(restartErr);
             log('core restart failed: %s', msg);
-            setError('Channel saved. Restart the app to activate it.');
+            setError(t('channels.telegram.savedRestartRequired'));
           }
         } else {
           dispatch(
@@ -275,7 +309,15 @@ const TelegramConfig = ({ definition }: TelegramConfigProps) => {
         }
       });
     },
-    [dispatch, fieldValues, runBusy, startManagedDmPolling]
+    [
+      dispatch,
+      fieldValues,
+      runBusy,
+      startManagedDmPolling,
+      stopManagedDmPolling,
+      MANAGED_DM_CONNECTING_MESSAGE,
+      t,
+    ]
   );
 
   const handleDisconnect = useCallback(
@@ -284,34 +326,56 @@ const TelegramConfig = ({ definition }: TelegramConfigProps) => {
       void runBusy(key, async () => {
         log('disconnecting telegram via %s', authMode);
         stopManagedDmPolling(`telegram:${authMode}`);
-        await channelConnectionsApi.disconnectChannel('telegram', authMode);
+        await channelConnectionsApi.disconnectChannel('telegram', authMode, {
+          clearMemory: Boolean(clearMemoryOnDisconnect[key]),
+        });
+        setClearMemoryOnDisconnect(prev => ({ ...prev, [key]: false }));
         dispatch(disconnectChannelConnection({ channel: 'telegram', authMode }));
       });
     },
-    [dispatch, runBusy, stopManagedDmPolling]
+    [clearMemoryOnDisconnect, dispatch, runBusy, stopManagedDmPolling]
   );
 
   return (
     <div className="space-y-3">
+      <div className="rounded-lg border border-primary-200 dark:border-primary-500/30 bg-primary-50/80 dark:bg-primary-500/10 px-4 py-3 text-sm text-stone-700 dark:text-neutral-200">
+        <p className="font-medium text-stone-900 dark:text-neutral-100">
+          {t('channels.telegram.remoteControlTitle')}
+        </p>
+        <p className="mt-1 text-xs text-stone-600 dark:text-neutral-400">
+          {t('channels.telegram.remoteControlBody')}
+        </p>
+      </div>
+
       {error && (
-        <div className="rounded-lg border border-coral-200 bg-coral-50 px-4 py-3 text-sm text-coral-700">
+        <div className="rounded-lg border border-coral-200 dark:border-coral-500/30 bg-coral-50 dark:bg-coral-500/10 px-4 py-3 text-sm text-coral-700 dark:text-coral-300">
           {error}
         </div>
       )}
 
-      {definition.auth_modes.map(spec => {
+      {isLocalSession && visibleAuthModes.length !== definition.auth_modes.length && (
+        <div className="rounded-lg border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-4 py-3 text-sm text-stone-700 dark:text-neutral-200">
+          {t('channels.localManagedUnavailable')}
+        </div>
+      )}
+
+      {visibleAuthModes.map(spec => {
         const compositeKey = `telegram:${spec.mode}`;
         const connection = channelConnections.connections.telegram?.[spec.mode];
         const status: ChannelConnectionStatus = connection?.status ?? 'disconnected';
 
         return (
-          <div key={spec.mode} className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+          <div
+            key={spec.mode}
+            className="rounded-lg border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 p-3">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-sm font-medium text-stone-900">
-                  {AUTH_MODE_LABELS[spec.mode] ?? spec.mode}
+                <p className="text-sm font-medium text-stone-900 dark:text-neutral-100">
+                  {t(`channels.authMode.${spec.mode}`)}
                 </p>
-                <p className="text-xs text-stone-500 mt-1">{spec.description}</p>
+                <p className="text-xs text-stone-500 dark:text-neutral-400 mt-1">
+                  {t(`channels.telegram.authMode.${spec.mode}.description`)}
+                </p>
                 {connection?.lastError && (
                   <p className="text-xs text-coral-600 mt-1">{connection.lastError}</p>
                 )}
@@ -324,7 +388,13 @@ const TelegramConfig = ({ definition }: TelegramConfigProps) => {
                 {spec.fields.map(field => (
                   <ChannelFieldInput
                     key={field.key}
-                    field={field}
+                    field={{
+                      ...field,
+                      label: t(`channels.telegram.fields.${field.key}.label`, field.label),
+                      placeholder: field.placeholder
+                        ? t(`channels.telegram.fields.${field.key}.placeholder`, field.placeholder)
+                        : field.placeholder,
+                    }}
                     value={fieldValues[compositeKey]?.[field.key] ?? ''}
                     onChange={val => updateField(compositeKey, field.key, val)}
                     disabled={busyKeys[compositeKey]}
@@ -333,20 +403,46 @@ const TelegramConfig = ({ definition }: TelegramConfigProps) => {
               </div>
             )}
 
+            {status === 'connected' && (
+              <label className="mt-3 flex items-start gap-2 rounded-lg border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(clearMemoryOnDisconnect[compositeKey])}
+                  onChange={event =>
+                    setClearMemoryOnDisconnect(prev => ({
+                      ...prev,
+                      [compositeKey]: event.currentTarget.checked,
+                    }))
+                  }
+                  className="mt-0.5 h-4 w-4 rounded border-stone-300 text-primary-600 focus:ring-primary-500"
+                />
+                <span className="min-w-0">
+                  <span className="block text-xs font-medium text-stone-800 dark:text-neutral-100">
+                    {t('accounts.disconnectClearMemory')}
+                  </span>
+                  <span className="block text-[11px] text-stone-500 dark:text-neutral-400">
+                    {t('accounts.disconnectClearMemoryHint')}
+                  </span>
+                </span>
+              </label>
+            )}
+
             <div className="mt-3 flex gap-2">
               <button
                 type="button"
                 disabled={busyKeys[compositeKey]}
                 onClick={() => handleConnect(spec)}
                 className="rounded-lg bg-primary-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-600 disabled:opacity-50">
-                {status === 'connected' ? 'Reconnect' : 'Connect'}
+                {status === 'connected'
+                  ? t('channels.telegram.reconnect')
+                  : t('channels.telegram.connect')}
               </button>
               <button
                 type="button"
                 disabled={busyKeys[compositeKey] || status === 'disconnected'}
                 onClick={() => handleDisconnect(spec.mode)}
-                className="rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-medium text-stone-600 hover:border-stone-300 disabled:opacity-50">
-                Disconnect
+                className="rounded-lg border border-stone-200 dark:border-neutral-800 px-3 py-1.5 text-xs font-medium text-stone-600 dark:text-neutral-300 hover:border-stone-300 dark:hover:border-neutral-700 disabled:opacity-50">
+                {t('accounts.disconnect')}
               </button>
             </div>
           </div>

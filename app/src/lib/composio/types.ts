@@ -9,10 +9,21 @@ export interface ComposioToolkitsResponse {
   toolkits: string[];
 }
 
+/**
+ * Sorted list of toolkit slugs that ship a curated agent-ready
+ * catalog on the core side. Used by the Skills grid to label
+ * connected-but-uncurated toolkits as preview / coming soon so
+ * users don't trigger the max-iterations failure documented in
+ * issue #2283.
+ */
+export interface ComposioAgentReadyToolkitsResponse {
+  toolkits: string[];
+}
+
 export interface ComposioConnection {
   id: string;
   toolkit: string;
-  /** Typical values: `ACTIVE`, `CONNECTED`, `PENDING`, `FAILED`. */
+  /** Typical values: `ACTIVE`, `CONNECTED`, `PENDING`, `FAILED`, `EXPIRED`. */
   status: string;
   /** ISO timestamp (backend passthrough). */
   createdAt?: string;
@@ -36,6 +47,7 @@ export interface ComposioAuthorizeResponse {
 
 export interface ComposioDeleteResponse {
   deleted: boolean;
+  memory_chunks_deleted?: number;
 }
 
 export interface ComposioToolFunction {
@@ -69,6 +81,22 @@ export interface ComposioUserScopePref {
   read: boolean;
   write: boolean;
   admin: boolean;
+}
+
+// ── GitHub repos ──────────────────────────────────────────────────
+
+export interface ComposioGithubRepo {
+  owner: string;
+  repo: string;
+  fullName: string;
+  private?: boolean;
+  defaultBranch?: string;
+  htmlUrl?: string;
+}
+
+export interface ComposioGithubReposResponse {
+  connectionId: string;
+  repositories: ComposioGithubRepo[];
 }
 
 // ── Trigger management ─────────────────────────────────────────────
@@ -117,7 +145,12 @@ export interface ComposioDisableTriggerResponse {
  * Mirrors the `SkillConnectionStatus` shape so the same
  * `UnifiedSkillCard` can render both.
  */
-export type ComposioConnectionState = 'disconnected' | 'pending' | 'connected' | 'error';
+export type ComposioConnectionState =
+  | 'disconnected'
+  | 'pending'
+  | 'connected'
+  | 'expired'
+  | 'error';
 
 export function deriveComposioState(
   connection: ComposioConnection | undefined
@@ -126,6 +159,7 @@ export function deriveComposioState(
   const status = connection.status.toUpperCase();
   if (status === 'ACTIVE' || status === 'CONNECTED') return 'connected';
   if (status === 'PENDING' || status === 'INITIATED' || status === 'INITIALIZING') return 'pending';
-  if (status === 'FAILED' || status === 'ERROR' || status === 'EXPIRED') return 'error';
+  if (status === 'EXPIRED') return 'expired';
+  if (status === 'FAILED' || status === 'ERROR') return 'error';
   return 'disconnected';
 }

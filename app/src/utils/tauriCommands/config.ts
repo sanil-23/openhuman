@@ -1,9 +1,13 @@
 /**
  * Config and settings commands.
  */
+import debug from 'debug';
+
 import { callCoreRpc } from '../../services/coreRpcClient';
 import { CORE_RPC_METHODS } from '../../services/rpcMethods';
-import { CommandResponse, isTauri } from './common';
+import { CommandResponse, isTauri, tauriErrorMessage } from './common';
+
+const log = debug('composio:rpc');
 
 export interface ConfigSnapshot {
   config: Record<string, unknown>;
@@ -14,6 +18,34 @@ export interface ConfigSnapshot {
 export interface ModelRoute {
   hint: string;
   model: string;
+}
+
+/** Authentication header style. Matches Rust AuthStyle enum. */
+export type AuthStyle = 'bearer' | 'anthropic' | 'openhuman_jwt' | 'none';
+
+/** @deprecated Use AuthStyle. Kept for back-compat with old wire format. */
+export type CloudProviderType =
+  | 'openhuman'
+  | 'openai'
+  | 'anthropic'
+  | 'openrouter'
+  | 'orcarouter'
+  | 'custom';
+
+/**
+ * Endpoint config for one cloud LLM provider (new slug-keyed shape).
+ * API keys are NOT carried here — they live in `auth-profiles.json`
+ * (set/cleared through the `auth_*` RPCs, keyed by `provider:<slug>`).
+ */
+export interface CloudProviderCreds {
+  /** Opaque stable id, e.g. `"p_openai_a8c3f"`. Never shown in UI. */
+  id: string;
+  /** User-chosen routing key, e.g. `"openai"`. Used in `"<slug>:<model>"` strings. */
+  slug: string;
+  /** Human-readable display label, e.g. `"OpenAI"`. */
+  label: string;
+  endpoint: string;
+  auth_style: AuthStyle;
 }
 
 export interface ModelSettingsUpdate {
@@ -38,6 +70,24 @@ export interface ModelSettingsUpdate {
    * on its own). Omit to leave existing routes untouched.
    */
   model_routes?: ModelRoute[] | null;
+  /**
+   * When present, REPLACES `config.cloud_providers` wholesale. API keys are
+   * NOT carried here — store them via `authStoreProviderCredentials`.
+   * Each entry: { id?, slug, label?, endpoint, auth_style? }
+   */
+  cloud_providers?: CloudProviderCreds[] | null;
+  /** @deprecated No longer used — slug-based routing replaces primary_cloud. */
+  primary_cloud?: string | null;
+  /** Per-workload provider strings — see Rust `providers::factory` grammar. */
+  chat_provider?: string | null;
+  reasoning_provider?: string | null;
+  agentic_provider?: string | null;
+  coding_provider?: string | null;
+  memory_provider?: string | null;
+  embeddings_provider?: string | null;
+  heartbeat_provider?: string | null;
+  learning_provider?: string | null;
+  subconscious_provider?: string | null;
 }
 
 /**
@@ -88,6 +138,18 @@ export interface ScreenIntelligenceSettingsUpdate {
 
 export interface LocalAiSettingsUpdate {
   runtime_enabled?: boolean | null;
+  /**
+   * MVP opt-in marker. Bootstrap hard-overrides status to "disabled" when
+   * this is `false`, regardless of `runtime_enabled`. The unified AI panel
+   * toggle flips this in tandem with `runtime_enabled` so a single click
+   * actually turns local AI on — without it, the daemon spawns but
+   * bootstrap immediately forces status back to disabled (cloud fallback).
+   */
+  opt_in_confirmed?: boolean | null;
+  provider?: string | null;
+  base_url?: string | null;
+  model_id?: string | null;
+  chat_model_id?: string | null;
   usage_embeddings?: boolean | null;
   usage_heartbeat?: boolean | null;
   usage_learning_reflection?: boolean | null;
@@ -140,19 +202,30 @@ export interface ClientConfig {
   /** OpenHuman product backend URL (auth/billing/voice). */
   api_url: string | null;
   /**
-   * Custom OpenAI-compatible LLM endpoint. When set with an api_key, the
-   * core routes inference directly to this URL instead of the OpenHuman
-   * backend. This is what the LLM Provider settings panel reads/writes.
+   * Custom OpenAI-compatible LLM endpoint. Legacy field, retained for
+   * back-compat — the new AI settings panel reads/writes
+   * `cloud_providers` + `*_provider` fields instead.
    */
   inference_url: string | null;
   default_model: string | null;
   app_version: string;
   api_key_set: boolean;
-  /**
-   * Persisted task-hint -> model id pairs the core router will obey. Empty
-   * when the OpenHuman built-in router is active.
-   */
+  /** Legacy per-task-hint model overrides (deprecated; will be removed). */
   model_routes: ModelRoute[];
+  /** Configured cloud providers (no API keys — those live in auth-profiles.json). */
+  cloud_providers: CloudProviderCreds[];
+  /** Id of the `cloud_providers` entry resolved by the `"cloud"` sentinel. */
+  primary_cloud: string | null;
+  /** Per-workload provider strings (e.g. `"cloud"`, `"ollama:llama3.1:8b"`, `"openai:gpt-4o"`). */
+  chat_provider: string | null;
+  reasoning_provider: string | null;
+  agentic_provider: string | null;
+  coding_provider: string | null;
+  memory_provider: string | null;
+  embeddings_provider: string | null;
+  heartbeat_provider: string | null;
+  learning_provider: string | null;
+  subconscious_provider: string | null;
 }
 
 export async function openhumanGetClientConfig(): Promise<CommandResponse<ClientConfig>> {
@@ -160,7 +233,7 @@ export async function openhumanGetClientConfig(): Promise<CommandResponse<Client
     throw new Error('Not running in Tauri');
   }
   return await callCoreRpc<CommandResponse<ClientConfig>>({
-    method: 'openhuman.config_get_client_config',
+    method: 'openhuman.inference_get_client_config',
   });
 }
 
@@ -171,7 +244,7 @@ export async function openhumanUpdateModelSettings(
     throw new Error('Not running in Tauri');
   }
   return await callCoreRpc<CommandResponse<ConfigSnapshot>>({
-    method: CORE_RPC_METHODS.configUpdateModelSettings,
+    method: 'openhuman.inference_update_model_settings',
     params: update,
   });
 }
@@ -224,6 +297,63 @@ export async function openhumanUpdateScreenIntelligenceSettings(
   });
 }
 
+// ── Agent access mode (autonomy / filesystem permissions) ───────────────────
+
+export type AutonomyLevel = 'readonly' | 'supervised' | 'full';
+export type TrustedAccess = 'read' | 'readwrite';
+
+export interface TrustedRoot {
+  path: string;
+  access: TrustedAccess;
+}
+
+/** The full [autonomy] block as returned by config_get_autonomy_settings. */
+export interface AutonomySettings {
+  level: AutonomyLevel;
+  workspace_only: boolean;
+  allowed_commands: string[];
+  forbidden_paths: string[];
+  trusted_roots: TrustedRoot[];
+  allow_tool_install: boolean;
+  max_actions_per_hour: number;
+  /** "Always allow" allowlist — tool names the agent runs without a prompt. */
+  auto_approve: string[];
+}
+
+/** Partial update — omitted fields are left unchanged. */
+export interface AutonomySettingsUpdate {
+  level?: AutonomyLevel;
+  workspace_only?: boolean;
+  allowed_commands?: string[];
+  forbidden_paths?: string[];
+  trusted_roots?: TrustedRoot[];
+  allow_tool_install?: boolean;
+  max_actions_per_hour?: number;
+  /** Replaces the "Always allow" allowlist wholesale. */
+  auto_approve?: string[];
+}
+
+export async function openhumanGetAutonomySettings(): Promise<CommandResponse<AutonomySettings>> {
+  if (!isTauri()) {
+    throw new Error('Not running in Tauri');
+  }
+  return await callCoreRpc<CommandResponse<AutonomySettings>>({
+    method: CORE_RPC_METHODS.configGetAutonomySettings,
+  });
+}
+
+export async function openhumanUpdateAutonomySettings(
+  update: AutonomySettingsUpdate
+): Promise<CommandResponse<ConfigSnapshot>> {
+  if (!isTauri()) {
+    throw new Error('Not running in Tauri');
+  }
+  return await callCoreRpc<CommandResponse<ConfigSnapshot>>({
+    method: CORE_RPC_METHODS.configUpdateAutonomySettings,
+    params: update,
+  });
+}
+
 export async function openhumanUpdateLocalAiSettings(
   update: LocalAiSettingsUpdate
 ): Promise<CommandResponse<ConfigSnapshot>> {
@@ -231,7 +361,7 @@ export async function openhumanUpdateLocalAiSettings(
     throw new Error('Not running in Tauri');
   }
   return await callCoreRpc<CommandResponse<ConfigSnapshot>>({
-    method: 'openhuman.config_update_local_ai_settings',
+    method: 'openhuman.inference_update_local_settings',
     params: update,
   });
 }
@@ -282,6 +412,65 @@ export async function openhumanGetMeetSettings(): Promise<
   });
 }
 
+export type SearchEngineId = 'managed' | 'parallel' | 'brave';
+
+export interface SearchSettingsUpdate {
+  engine?: SearchEngineId;
+  max_results?: number;
+  timeout_secs?: number;
+  /** Empty string clears the stored key. */
+  parallel_api_key?: string;
+  /** Empty string clears the stored key. */
+  brave_api_key?: string;
+  /**
+   * Websites the assistant may open/read (web_fetch / curl). Exact hosts
+   * match their subdomains; `"*"` allows all public sites; an empty list
+   * blocks all web access.
+   */
+  allowed_domains?: string[];
+  /**
+   * "Allow all sites" toggle. true → allowlist becomes `["*"]`.
+   * NOTE: `allow_all` is applied AFTER `allowed_domains` server-side, so when
+   * both are sent in one patch `allow_all` wins (true → `["*"]`, false → the
+   * `"*"` wildcard is dropped). Don't send both with conflicting intent.
+   */
+  allow_all?: boolean;
+}
+
+export interface SearchSettings {
+  engine: SearchEngineId | string;
+  effective_engine: SearchEngineId;
+  max_results: number;
+  timeout_secs: number;
+  parallel_configured: boolean;
+  brave_configured: boolean;
+  /** Current allowed-websites host list (may contain `"*"`). */
+  allowed_domains: string[];
+  /** True when the allowlist contains the `"*"` wildcard. */
+  allow_all: boolean;
+}
+
+export async function openhumanGetSearchSettings(): Promise<CommandResponse<SearchSettings>> {
+  if (!isTauri()) {
+    throw new Error('Not running in Tauri');
+  }
+  return await callCoreRpc<CommandResponse<SearchSettings>>({
+    method: CORE_RPC_METHODS.configGetSearchSettings,
+  });
+}
+
+export async function openhumanUpdateSearchSettings(
+  update: SearchSettingsUpdate
+): Promise<CommandResponse<ConfigSnapshot>> {
+  if (!isTauri()) {
+    throw new Error('Not running in Tauri');
+  }
+  return await callCoreRpc<CommandResponse<ConfigSnapshot>>({
+    method: CORE_RPC_METHODS.configUpdateSearchSettings,
+    params: update,
+  });
+}
+
 export interface ComposioTriggerSettingsUpdate {
   triage_disabled?: boolean | null;
   triage_disabled_toolkits?: string[] | null;
@@ -298,10 +487,21 @@ export async function openhumanUpdateComposioTriggerSettings(
   if (!isTauri()) {
     throw new Error('Not running in Tauri');
   }
-  return await callCoreRpc<CommandResponse<ConfigSnapshot>>({
-    method: 'openhuman.config_update_composio_trigger_settings',
-    params: update,
-  });
+  try {
+    return await callCoreRpc<CommandResponse<ConfigSnapshot>>({
+      method: 'openhuman.config_update_composio_trigger_settings',
+      params: update,
+    });
+  } catch (err) {
+    if (tauriErrorMessage(err).includes('unknown method')) {
+      // Stale core sidecar predates composio trigger settings (#1597).
+      log(
+        '[composio:rpc] graceful degradation: stale core lacks config_update_composio_trigger_settings (#1597)'
+      );
+      return { result: { config: {}, workspace_dir: '', config_path: '' }, logs: [] };
+    }
+    throw err;
+  }
 }
 
 export async function openhumanGetComposioTriggerSettings(): Promise<
@@ -310,9 +510,20 @@ export async function openhumanGetComposioTriggerSettings(): Promise<
   if (!isTauri()) {
     throw new Error('Not running in Tauri');
   }
-  return await callCoreRpc<CommandResponse<ComposioTriggerSettings>>({
-    method: 'openhuman.config_get_composio_trigger_settings',
-  });
+  try {
+    return await callCoreRpc<CommandResponse<ComposioTriggerSettings>>({
+      method: 'openhuman.config_get_composio_trigger_settings',
+    });
+  } catch (err) {
+    if (tauriErrorMessage(err).includes('unknown method')) {
+      // Stale core sidecar predates composio trigger settings (#1597).
+      log(
+        '[composio:rpc] graceful degradation: stale core lacks config_get_composio_trigger_settings (#1597)'
+      );
+      return { result: { triage_disabled: false, triage_disabled_toolkits: [] }, logs: [] };
+    }
+    throw err;
+  }
 }
 
 export async function openhumanGetRuntimeFlags(): Promise<CommandResponse<RuntimeFlags>> {

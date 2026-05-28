@@ -79,6 +79,9 @@ fn all_variants_have_correct_domain() {
                 event_name: "telegram:message".into(),
                 channel: "telegram".into(),
                 message: "hi".into(),
+                sender: None,
+                reply_target: None,
+                thread_ts: None,
                 raw_data: serde_json::Value::Null,
             },
             "channel",
@@ -91,6 +94,7 @@ fn all_variants_have_correct_domain() {
                 reply_target: "r".into(),
                 content: "hi".into(),
                 thread_ts: None,
+                workspace_dir: std::path::PathBuf::from("/test"),
             },
             "channel",
         ),
@@ -105,6 +109,7 @@ fn all_variants_have_correct_domain() {
                 response: "hello".into(),
                 elapsed_ms: 0,
                 success: true,
+                workspace_dir: std::path::PathBuf::from("/test"),
             },
             "channel",
         ),
@@ -177,7 +182,7 @@ fn all_variants_have_correct_domain() {
         (
             DomainEvent::SkillLoaded {
                 skill_id: "s".into(),
-                runtime: "quickjs".into(),
+                runtime: "nodejs".into(),
             },
             "skill",
         ),
@@ -304,6 +309,13 @@ fn all_variants_have_correct_domain() {
                 error: None,
                 cost_usd: 0.0,
                 elapsed_ms: 123,
+            },
+            "composio",
+        ),
+        (
+            DomainEvent::ComposioConfigChanged {
+                mode: "direct".into(),
+                api_key_set: true,
             },
             "composio",
         ),

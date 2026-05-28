@@ -10,18 +10,19 @@
  *   - all-pairs Coulomb repulsion pushes overlapping nodes apart
  *   - centring force keeps the cloud anchored in the viewport
  *
- * Click a node → opens the matching `.md` file in Obsidian via the
- * `obsidian://open?path=...` deep link, dispatched through Tauri's
- * `plugin-opener` so the OS shell handles the URL scheme. Without that
- * shim the webview tries to navigate itself and Obsidian never opens.
+ * Click a summary node → opens the matching `.md` file through the
+ * shared workspace path command. This keeps Memory graph file actions on
+ * the same guarded contract as chat workspace links.
  *
  * Pure SVG, no external graph dep — keeps the bundle small and the
  * rendering deterministic for tests/screenshots.
  */
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 
-import { openUrl } from '../../utils/openUrl';
+import { useT } from '../../lib/i18n/I18nContext';
 import { type GraphEdge, type GraphMode, type GraphNode } from '../../utils/tauriCommands';
+import { openWorkspacePath, previewWorkspaceText } from '../../utils/tauriCommands/workspacePaths';
+import { summaryWorkspacePath } from './memoryWorkspacePaths';
 
 interface SimNode extends GraphNode {
   x: number;
@@ -37,10 +38,15 @@ interface MemoryGraphProps {
   edges: GraphEdge[];
   /** Which graph this is — drives colour palette + click behaviour. */
   mode: GraphMode;
-  /** Absolute path to the content root, also from the RPC. */
-  contentRootAbs: string;
   /** Optional override for the empty-state message. */
   emptyHint?: string;
+}
+
+interface SummaryPreviewState {
+  path: string;
+  contents: string;
+  truncated: boolean;
+  error: string | null;
 }
 
 /** Per-node-kind palette. Source/topic/global preserved for tree mode. */
@@ -128,73 +134,43 @@ function relaxLayout(nodes: SimNode[], edges: Array<[number, number]>, iteration
   }
 }
 
-/**
- * Open a summary's `.md` file in Obsidian via the OS shell. Custom URL
- * schemes go through `tauri-plugin-opener` so the host app handles
- * them — `window.location.href` would route through the embedded
- * webview's intent handler and either no-op or navigate the
- * MemoryWorkspace away.
- */
-async function openSummaryInObsidian(node: GraphNode, contentRootAbs: string): Promise<void> {
-  if (node.kind !== 'summary' || !node.tree_kind || node.level == null || !node.file_basename) {
-    return;
-  }
-  const slug = slugify(node.tree_scope ?? '');
-  // Mirrors `summary_rel_path` on the Rust side — the `wiki/` prefix
-  // separates derived/processed content from the raw upstream archive
-  // under `raw/`. Folder name is `<kind>-<scope>` (flattened from the
-  // legacy two-level layout) so the Obsidian sidebar listing stays
-  // readable.
-  const rel =
-    node.tree_kind === 'global'
-      ? `wiki/summaries`
-      : `wiki/summaries/${node.tree_kind}-${slug}/L${node.level}/${node.file_basename}.md`;
-  const abs = joinPath(contentRootAbs, rel);
-  const url = `obsidian://open?path=${encodeURIComponent(abs)}`;
-  console.debug('[memory-graph] open in Obsidian url=%s', url);
-  try {
-    await openUrl(url);
-  } catch (err) {
-    console.error('[memory-graph] openUrl failed', err);
-  }
-}
-
-/** Mirror of `paths::slugify_source_id` (Rust). */
-function slugify(s: string): string {
-  const lower = s.toLowerCase();
-  let out = '';
-  let lastDash = true;
-  let pendingUnderscore = false;
-  for (const ch of lower) {
-    if (ch === '_') {
-      if (!lastDash) pendingUnderscore = true;
-    } else if (/[a-z0-9]/.test(ch)) {
-      if (pendingUnderscore) {
-        out += '_';
-        pendingUnderscore = false;
-      }
-      out += ch;
-      lastDash = false;
-    } else {
-      pendingUnderscore = false;
-      if (!lastDash) {
-        out += '-';
-        lastDash = true;
-      }
-    }
-  }
-  return out.replace(/[-_]+$/, '').slice(0, 120) || 'unknown';
-}
-
-/** Cross-platform path join (forward slash; Obsidian accepts both). */
-function joinPath(root: string, rel: string): string {
-  const trimmed = root.endsWith('/') || root.endsWith('\\') ? root.slice(0, -1) : root;
-  return `${trimmed}/${rel}`;
-}
-
-export function MemoryGraph({ nodes, edges, mode, contentRootAbs, emptyHint }: MemoryGraphProps) {
+export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps) {
+  const { t } = useT();
   const [hovered, setHovered] = useState<GraphNode | null>(null);
+  const [preview, setPreview] = useState<SummaryPreviewState | null>(null);
+  const [previewingPath, setPreviewingPath] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+
+  const openSummary = useCallback(async (node: GraphNode) => {
+    const path = summaryWorkspacePath(node);
+    if (!path) return;
+    console.debug('[memory-graph] open workspace path=%s', path);
+    try {
+      await openWorkspacePath(path);
+    } catch (err) {
+      console.error('[memory-graph] openWorkspacePath failed', err);
+    }
+  }, []);
+
+  const previewSummary = useCallback(async (node: GraphNode) => {
+    const path = summaryWorkspacePath(node);
+    if (!path) return;
+    setPreviewingPath(path);
+    try {
+      const next = await previewWorkspaceText(path);
+      setPreview({ path, contents: next.contents, truncated: next.truncated, error: null });
+    } catch (err) {
+      console.error('[memory-graph] previewWorkspaceText failed', err);
+      setPreview({
+        path,
+        contents: '',
+        truncated: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setPreviewingPath(null);
+    }
+  }, []);
 
   // Run the force simulation once when nodes arrive. Memoised so panning /
   // zooming the SVG doesn't re-run physics.
@@ -238,12 +214,9 @@ export function MemoryGraph({ nodes, edges, mode, contentRootAbs, emptyHint }: M
   if (nodes.length === 0) {
     return (
       <div
-        className="flex h-[640px] items-center justify-center rounded-lg border border-stone-100 bg-stone-50/40 text-sm text-stone-500"
+        className="flex h-[640px] items-center justify-center rounded-lg border border-stone-100 dark:border-neutral-800 bg-stone-50/40 text-sm text-stone-500 dark:text-neutral-400"
         data-testid="memory-graph-empty">
-        {emptyHint ??
-          (mode === 'contacts'
-            ? 'No contact mentions yet — sync a source and rebuild trees first.'
-            : 'No memory yet — connect a source above to start ingesting.')}
+        {emptyHint ?? (mode === 'contacts' ? t('graph.noContactMentions') : t('graph.noMemory'))}
       </div>
     );
   }
@@ -256,28 +229,41 @@ export function MemoryGraph({ nodes, edges, mode, contentRootAbs, emptyHint }: M
       ? Array.from(new Set(nodes.map(n => n.tree_kind ?? '')))
           .filter(Boolean)
           .map(kind => ({
-            label: kind === 'source' ? 'Source' : kind === 'topic' ? 'Topic' : 'Global',
+            label:
+              kind === 'source'
+                ? t('graph.source')
+                : kind === 'topic'
+                  ? t('graph.topic')
+                  : t('graph.global'),
             color: SUMMARY_TREE_COLOR[kind] ?? '#94a3b8',
           }))
       : [
-          { label: 'Document', color: NODE_COLOR.chunk },
-          { label: 'Contact', color: NODE_COLOR.contact },
+          { label: t('graph.document'), color: NODE_COLOR.chunk },
+          { label: t('graph.contact'), color: NODE_COLOR.contact },
         ];
+  const hoveredSummaryPath = hovered?.kind === 'summary' ? summaryWorkspacePath(hovered) : null;
 
   return (
-    <div className="memory-graph rounded-lg border border-stone-100 bg-white">
-      <div className="flex items-center justify-between gap-4 border-b border-stone-100 px-4 py-2">
-        <div className="flex items-center gap-3 text-xs text-stone-500">
-          <span>{nodes.length} nodes</span>
-          <span className="text-stone-300">·</span>
+    <div
+      className="memory-graph rounded-lg border border-stone-100 dark:border-neutral-800 bg-white dark:bg-neutral-900"
+      onMouseLeave={() => setHovered(null)}>
+      <div className="flex items-center justify-between gap-4 border-b border-stone-100 dark:border-neutral-800 px-4 py-2">
+        <div className="flex items-center gap-3 text-xs text-stone-500 dark:text-neutral-400">
           <span>
-            {sim.edges.length} {mode === 'tree' ? 'parent → child' : 'document ↔ contact'} link
-            {sim.edges.length === 1 ? '' : 's'}
+            {nodes.length} {t('graph.nodes')}
+          </span>
+          <span className="text-stone-300 dark:text-neutral-600">·</span>
+          <span>
+            {sim.edges.length}{' '}
+            {mode === 'tree' ? t('graph.parentChild') : t('graph.documentContact')}{' '}
+            {sim.edges.length === 1 ? t('graph.link') : t('graph.links')}
           </span>
         </div>
         <div className="flex items-center gap-3">
           {legend.map(item => (
-            <span key={item.label} className="flex items-center gap-1.5 text-xs text-stone-600">
+            <span
+              key={item.label}
+              className="flex items-center gap-1.5 text-xs text-stone-600 dark:text-neutral-300">
               <span
                 className="inline-block h-2.5 w-2.5 rounded-full"
                 style={{ backgroundColor: item.color }}
@@ -316,12 +302,11 @@ export function MemoryGraph({ nodes, edges, mode, contentRootAbs, emptyHint }: M
                 strokeWidth={isHover ? 1.4 : 0.8}
                 style={{ cursor: 'pointer', transition: 'r 120ms ease' }}
                 onMouseEnter={() => setHovered(n)}
-                onMouseLeave={() => setHovered(prev => (prev?.id === n.id ? null : prev))}
                 onClick={() => {
-                  if (n.kind === 'summary') void openSummaryInObsidian(n, contentRootAbs);
+                  if (n.kind === 'summary') void openSummary(n);
                 }}
                 data-testid={`memory-graph-node-${n.id}`}>
-                <title>{tooltipFor(n)}</title>
+                <title>{tooltipFor(n, t)}</title>
               </circle>
             );
           })}
@@ -329,42 +314,77 @@ export function MemoryGraph({ nodes, edges, mode, contentRootAbs, emptyHint }: M
       </svg>
       {hovered && (
         <div
-          className="border-t border-stone-100 bg-stone-50/70 px-4 py-2 text-xs text-stone-700"
+          className="border-t border-stone-100 dark:border-neutral-800 bg-stone-50/70 px-4 py-2 text-xs text-stone-700 dark:text-neutral-200"
           data-testid="memory-graph-tooltip">
           {hovered.kind === 'summary' ? (
             <>
               <span className="font-mono">L{hovered.level ?? '?'}</span>
-              <span className="text-stone-400"> · </span>
+              <span className="text-stone-400 dark:text-neutral-500"> · </span>
               <span className="capitalize">{hovered.tree_kind}</span>
-              <span className="text-stone-400"> · </span>
+              <span className="text-stone-400 dark:text-neutral-500"> · </span>
               <span>{hovered.tree_scope}</span>
-              <span className="text-stone-400"> · </span>
-              <span>{hovered.child_count ?? 0} children</span>
-              <span className="ml-3 text-stone-400">click to open in Obsidian</span>
+              <span className="text-stone-400 dark:text-neutral-500"> · </span>
+              <span>
+                {hovered.child_count ?? 0} {t('graph.children')}
+              </span>
+              {hoveredSummaryPath && (
+                <>
+                  <span className="ml-3 break-all font-mono text-stone-400 dark:text-neutral-500">
+                    workspace:{hoveredSummaryPath}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid={`memory-graph-preview-${hovered.id}`}
+                    disabled={previewingPath === hoveredSummaryPath}
+                    onClick={() => void previewSummary(hovered)}
+                    className="ml-3 rounded-md border border-stone-200 bg-white px-2 py-1 text-[11px] font-medium text-stone-700 shadow-sm hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800">
+                    {previewingPath === hoveredSummaryPath
+                      ? t('migration.previewRunning')
+                      : t('migration.previewAction')}
+                  </button>
+                </>
+              )}
             </>
           ) : hovered.kind === 'contact' ? (
             <>
-              <span className="font-medium text-violet-700">{hovered.label}</span>
-              <span className="ml-3 text-stone-400">
-                person · canonical id {hovered.id.slice(0, 12)}…
+              <span className="font-medium text-violet-700 dark:text-violet-300">
+                {hovered.label}
+              </span>
+              <span className="ml-3 text-stone-400 dark:text-neutral-500">
+                {t('graph.person')} · canonical id {hovered.id.slice(0, 12)}…
               </span>
             </>
           ) : (
             <>
               <span className="font-medium">{hovered.label || 'chunk'}</span>
-              <span className="ml-3 text-stone-400">document</span>
+              <span className="ml-3 text-stone-400 dark:text-neutral-500">
+                {t('graph.document')}
+              </span>
             </>
           )}
+        </div>
+      )}
+      {preview && (
+        <div
+          className="border-t border-stone-100 bg-white px-4 py-3 dark:border-neutral-800 dark:bg-neutral-950"
+          data-testid="memory-graph-preview">
+          <div className="mb-2 break-all font-mono text-[11px] text-stone-400 dark:text-neutral-500">
+            workspace:{preview.path}
+          </div>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-stone-50 p-3 text-xs text-stone-700 dark:bg-neutral-900 dark:text-neutral-200">
+            {preview.error || preview.contents}
+            {preview.truncated ? '\n…' : ''}
+          </pre>
         </div>
       )}
     </div>
   );
 }
 
-function tooltipFor(n: GraphNode): string {
-  if (n.kind === 'summary') {
-    return `L${n.level ?? 0} · ${n.tree_kind} · ${n.tree_scope ?? ''} · ${n.child_count ?? 0} children`;
-  }
-  if (n.kind === 'contact') return `${n.label} (person)`;
-  return n.label || 'document';
+function tooltipFor(n: GraphNode, t: (key: string, fallback?: string) => string): string {
+  // NOTE: the underlying t() does not interpolate params; placeholders in the
+  // translated string are rendered as-is. Preserved to match prior behavior.
+  if (n.kind === 'summary') return t('graph.tooltip.summary');
+  if (n.kind === 'contact') return t('graph.tooltip.contact');
+  return n.label || t('graph.document');
 }

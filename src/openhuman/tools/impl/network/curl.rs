@@ -6,8 +6,8 @@
 //! `http_request.allowed_domains` so there is one allowlist to reason
 //! about.
 
-use super::url_guard::{normalize_allowed_domains, validate_url};
-use crate::openhuman::security::SecurityPolicy;
+use super::url_guard::{normalize_allowed_domains, validate_url_with_dns_check};
+use crate::openhuman::security::{CommandClass, GateDecision, SecurityPolicy};
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -85,8 +85,8 @@ impl CurlTool {
         Ok(resolved)
     }
 
-    fn validate_url(&self, raw_url: &str) -> anyhow::Result<String> {
-        validate_url(raw_url, &self.allowed_domains)
+    async fn validate_url(&self, raw_url: &str) -> anyhow::Result<String> {
+        validate_url_with_dns_check(raw_url, &self.allowed_domains).await
     }
 
     fn default_filename_from_url(url: &str) -> String {
@@ -145,6 +145,13 @@ impl Tool for CurlTool {
         })
     }
 
+    /// Downloading from the network is the always-ask `Network` bucket — it
+    /// prompts the human in both ask-before-edit and Full; read-only is blocked
+    /// in `execute`.
+    fn external_effect_with_args(&self, _args: &serde_json::Value) -> bool {
+        self.security.gate_decision(CommandClass::Network) == GateDecision::Prompt
+    }
+
     fn permission_level(&self) -> PermissionLevel {
         PermissionLevel::Write
     }
@@ -163,14 +170,16 @@ impl Tool for CurlTool {
 
         if !self.security.can_act() {
             tracing::debug!(target: "[curl]", url = %url, "blocked: autonomy read-only");
-            return Ok(ToolResult::error("Action blocked: autonomy is read-only"));
+            return Ok(ToolResult::error(
+                "[policy-blocked] Action blocked: autonomy is read-only",
+            ));
         }
         if !self.security.record_action() {
             tracing::debug!(target: "[curl]", url = %url, "blocked: rate limit");
             return Ok(ToolResult::error("Action blocked: rate limit exceeded"));
         }
 
-        let url = match self.validate_url(url) {
+        let url = match self.validate_url(url).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::debug!(target: "[curl]", url = %url, reason = %e, "url validation failed");
@@ -466,6 +475,18 @@ mod tests {
         assert!(t.resolve_dest("   ").is_err());
     }
 
+    #[tokio::test]
+    async fn validate_url_rejects_disallowed_domain() {
+        let tmp = TempDir::new().unwrap();
+        let t = tool(&tmp, vec!["example.com"]);
+        let err = t
+            .validate_url("https://evil.test/archive.tar.gz")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("allowed websites"));
+    }
+
     #[test]
     fn default_filename_from_url_basic() {
         assert_eq!(
@@ -548,6 +569,6 @@ mod tests {
             .await
             .unwrap();
         assert!(result.is_error);
-        assert!(result.output().contains("allowed_domains"));
+        assert!(result.output().contains("allowed websites"));
     }
 }

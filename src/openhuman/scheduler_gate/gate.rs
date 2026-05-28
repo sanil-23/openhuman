@@ -24,7 +24,7 @@ use crate::openhuman::scheduler_gate::signals::Signals;
 /// simultaneous Ollama requests have crashed the user's laptop twice.
 ///
 /// Cloud-backend LLM calls bypass this semaphore at the worker layer
-/// (see `memory_tree::jobs::worker::run_once`) because they're
+/// (see `memory::jobs::worker::run_once`) because they're
 /// bandwidth-bound, not RAM-bound, and the worker pool itself bounds
 /// concurrency upstream. Keeping this at 1 preserves the laptop-RAM
 /// contract regardless of backend.
@@ -335,7 +335,7 @@ pub fn set_signed_out(signed_out: bool) {
 /// Use this in any test that exercises a code path that itself calls
 /// [`set_signed_out`] *after* [`init_global`] has promoted [`STATE`].
 /// Notably the JSON-RPC server bootstrap (`run_server_embedded` →
-/// `bootstrap_skill_runtime` → `register_domain_subscribers`) flips
+/// `bootstrap_core_runtime` → `register_domain_subscribers`) flips
 /// the flag to `true` whenever the workspace has no stored session
 /// token, which is the common case for tests using a fresh
 /// `tempfile::tempdir()` workspace.

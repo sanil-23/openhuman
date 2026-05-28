@@ -5,9 +5,7 @@ export type ComposerSendBlockReason =
   | 'usage_limit_reached'
   | 'socket_disconnected';
 
-export type SlashCommandDecision =
-  | { kind: 'new_or_clear'; blockedByWelcomeLock: boolean }
-  | { kind: 'not_handled' };
+export type SlashCommandDecision = { kind: 'new_or_clear' } | { kind: 'not_handled' };
 
 export interface ComposerSendDecisionArgs {
   rawText: string;
@@ -24,17 +22,21 @@ export interface ComposerSendDecision {
 }
 
 export interface ComposerBlockedSendFeedback {
-  showLimitModal: boolean;
   error: { code: 'usage_limit_reached' | 'socket_disconnected'; message: string };
 }
 
-export const handleComposerSlashCommand = (
-  command: string,
-  welcomeLocked: boolean
-): SlashCommandDecision => {
+export interface ComposerKeyDownEventLike {
+  key: string;
+  shiftKey?: boolean;
+  isComposing?: boolean;
+  keyCode?: number;
+  nativeEvent?: { isComposing?: boolean; keyCode?: number };
+}
+
+export const handleComposerSlashCommand = (command: string): SlashCommandDecision => {
   const cmd = command.toLowerCase();
   if (cmd === '/new' || cmd === '/clear') {
-    return { kind: 'new_or_clear', blockedByWelcomeLock: welcomeLocked };
+    return { kind: 'new_or_clear' };
   }
   return { kind: 'not_handled' };
 };
@@ -65,22 +67,36 @@ export const evaluateComposerSend = (args: ComposerSendDecisionArgs): ComposerSe
   return { shouldSend: true, trimmedText };
 };
 
+export const isComposerImeComposing = (
+  event: ComposerKeyDownEventLike,
+  compositionActive = false
+): boolean =>
+  compositionActive ||
+  event.isComposing === true ||
+  event.keyCode === 229 ||
+  event.nativeEvent?.isComposing === true ||
+  event.nativeEvent?.keyCode === 229;
+
+export const shouldSendComposerKeyDown = (
+  event: ComposerKeyDownEventLike,
+  compositionActive = false
+): boolean =>
+  event.key === 'Enter' && !event.shiftKey && !isComposerImeComposing(event, compositionActive);
+
 export const getComposerBlockedSendFeedback = (
   blockReason: ComposerSendBlockReason | undefined
 ): ComposerBlockedSendFeedback | null => {
   if (blockReason === 'usage_limit_reached') {
     return {
-      showLimitModal: true,
       error: {
         code: 'usage_limit_reached',
-        message: 'Usage limit reached. Upgrade or wait for reset.',
+        message: 'Included budget exhausted. Top up credits or upgrade to continue.',
       },
     };
   }
 
   if (blockReason === 'socket_disconnected') {
     return {
-      showLimitModal: false,
       error: {
         code: 'socket_disconnected',
         message:

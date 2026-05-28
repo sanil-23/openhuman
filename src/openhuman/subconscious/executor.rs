@@ -105,7 +105,7 @@ pub async fn execute_task(
     } else {
         // Simple text-only task. Use local model if configured for subconscious
         // tasks, otherwise fall back to the cloud agentic analysis path.
-        if config.local_ai.use_local_for_subconscious() {
+        if config.workload_uses_local("subconscious") {
             debug!(
                 "[subconscious:executor] text task: id={} — using local model",
                 task.id
@@ -199,21 +199,30 @@ async fn execute_with_local_model(
     let prompt_text = prompt::build_text_execution_prompt(task, situation_report, identity_context);
 
     let messages = vec![
-        crate::openhuman::local_ai::ops::LocalAiChatMessage {
-            role: "system".to_string(),
-            content: prompt_text,
-        },
-        crate::openhuman::local_ai::ops::LocalAiChatMessage {
-            role: "user".to_string(),
-            content: "Execute the task now.".to_string(),
-        },
+        crate::openhuman::inference::provider::traits::ChatMessage::system(prompt_text),
+        crate::openhuman::inference::provider::traits::ChatMessage::user("Execute the task now."),
     ];
-
-    let outcome = crate::openhuman::local_ai::ops::local_ai_chat(&config, messages, None)
-        .await
+    let model_id = crate::openhuman::inference::model_ids::effective_chat_model_id(config);
+    let provider_string =
+        match crate::openhuman::inference::local::provider::provider_from_config(config) {
+            crate::openhuman::inference::local::provider::LocalAiProvider::Ollama => {
+                format!("ollama:{model_id}")
+            }
+            crate::openhuman::inference::local::provider::LocalAiProvider::LmStudio => {
+                format!("lmstudio:{model_id}")
+            }
+        };
+    let (provider, model) =
+        crate::openhuman::inference::provider::factory::create_local_chat_provider_from_string(
+            &provider_string,
+            config,
+        )
         .map_err(|e| format!("local model: {e}"))?;
 
-    Ok(outcome.value)
+    provider
+        .chat_with_history(&messages, &model, config.default_temperature)
+        .await
+        .map_err(|e| format!("local model: {e}"))
 }
 
 /// Execute with agentic-v1 at full permissions (write-intent tasks or approved writes).
@@ -259,7 +268,8 @@ async fn agent_chat_with_retry(
 
     loop {
         let result =
-            crate::openhuman::local_ai::ops::agent_chat(config, prompt, None, Some(0.3)).await;
+            crate::openhuman::inference::local::ops::agent_chat(config, prompt, None, Some(0.3))
+                .await;
 
         match result {
             Ok(outcome) => return Ok(outcome.value),

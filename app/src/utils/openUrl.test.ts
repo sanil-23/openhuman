@@ -9,11 +9,15 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vite
 
 const isTauriMock = vi.fn();
 const tauriOpenUrlMock = vi.fn();
+const revealItemInDirMock = vi.fn();
 const addBreadcrumbMock = vi.fn();
 
 vi.mock('./tauriCommands/common', () => ({ isTauri: () => isTauriMock() }));
 
-vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: (url: string) => tauriOpenUrlMock(url) }));
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openUrl: (url: string) => tauriOpenUrlMock(url),
+  revealItemInDir: (path: string) => revealItemInDirMock(path),
+}));
 
 vi.mock('@sentry/react', () => ({
   addBreadcrumb: (...args: unknown[]) => addBreadcrumbMock(...args),
@@ -121,5 +125,54 @@ describe('openUrl', () => {
     const call = addBreadcrumbMock.mock.calls[0]?.[0] as { data?: { url?: string } } | undefined;
     expect(call?.data?.url).not.toContain('secret-redact-me');
     expect(call?.data?.url).not.toContain('/dashboard');
+  });
+
+  it('revealPath dispatches to tauri-plugin-opener under Tauri (#2281 Reveal Folder fallback)', async () => {
+    isTauriMock.mockReturnValue(true);
+    revealItemInDirMock.mockResolvedValue(undefined);
+
+    const { revealPath } = await import('./openUrl');
+    await revealPath('/Users/me/Vault');
+
+    expect(revealItemInDirMock).toHaveBeenCalledWith('/Users/me/Vault');
+  });
+
+  it('revealPath is a no-op outside Tauri (no shell to drive)', async () => {
+    isTauriMock.mockReturnValue(false);
+
+    const { revealPath } = await import('./openUrl');
+    await revealPath('/Users/me/Vault');
+
+    expect(revealItemInDirMock).not.toHaveBeenCalled();
+  });
+
+  it('revealPath propagates underlying tauri-plugin-opener errors to the caller', async () => {
+    isTauriMock.mockReturnValue(true);
+    revealItemInDirMock.mockRejectedValue(new Error('reveal failed'));
+
+    const { revealPath } = await import('./openUrl');
+    await expect(revealPath('/Users/me/Vault')).rejects.toThrow('reveal failed');
+  });
+
+  it('trims surrounding whitespace before classifying an http URL for fallback', async () => {
+    isTauriMock.mockReturnValue(true);
+    tauriOpenUrlMock.mockRejectedValue(
+      new TypeError("Cannot read properties of undefined (reading 'postMessage')")
+    );
+
+    const { openUrl } = await import('./openUrl');
+    await openUrl('  https://tinyhumans.ai/dashboard?token=secret-redact-me  ');
+
+    expect(tauriOpenUrlMock).toHaveBeenCalledWith(
+      'https://tinyhumans.ai/dashboard?token=secret-redact-me'
+    );
+    expect(windowOpenMock).toHaveBeenCalledWith(
+      'https://tinyhumans.ai/dashboard?token=secret-redact-me',
+      '_blank',
+      'noopener,noreferrer'
+    );
+    expect(addBreadcrumbMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ url: 'https://tinyhumans.ai' }) })
+    );
   });
 });

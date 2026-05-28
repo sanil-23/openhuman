@@ -28,10 +28,7 @@ pub async fn register_session(
         "[gameplay_review][rpc] register_session start game_id={} frames={} spoiler_mode={}",
         payload.game_id,
         payload.frames.len(),
-        payload
-            .spoiler_mode
-            .unwrap_or_default()
-            .as_str()
+        payload.spoiler_mode.unwrap_or_default().as_str()
     );
     let session = build_session(payload)?;
     let workspace_dir = workspace_dir().await?;
@@ -43,8 +40,7 @@ pub async fn register_session(
     store::save_session(&workspace_dir, &session)?;
     debug!(
         "[gameplay_review][rpc] register_session complete session_id={} game_id={}",
-        session.session_id,
-        session.game_id
+        session.session_id, session.game_id
     );
     Ok(RpcOutcome::single_log(
         session,
@@ -123,7 +119,10 @@ pub async fn analyze_session(
 }
 
 pub async fn get_session(session_id: String) -> Result<RpcOutcome<GameplayReviewSession>, String> {
-    debug!("[gameplay_review][rpc] get_session start session_id={}", session_id);
+    debug!(
+        "[gameplay_review][rpc] get_session start session_id={}",
+        session_id
+    );
     let workspace_dir = workspace_dir().await?;
     let session = store::load_session(&workspace_dir, &session_id)?
         .ok_or_else(|| format!("gameplay session not found: {session_id}"))?;
@@ -327,9 +326,15 @@ fn build_session(payload: GameplayReviewSessionInput) -> Result<GameplayReviewSe
         session_id,
         game_id: payload.game_id.trim().to_string(),
         session_title: payload.session_title.trim().to_string(),
-        source_label: payload.source_label.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
+        source_label: payload
+            .source_label
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
         spoiler_mode: payload.spoiler_mode.unwrap_or_default(),
-        preset_id: payload.preset_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
+        preset_id: payload
+            .preset_id
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
         imported_at_ms: now,
         analyzed_at_ms: None,
         frames: payload.frames,
@@ -408,7 +413,11 @@ async fn analyze_session_frames(
             }
         };
 
-        let kind = classify_kind(&summary.key_text, &summary.actionable_notes, session.spoiler_mode);
+        let kind = classify_kind(
+            &summary.key_text,
+            &summary.actionable_notes,
+            session.spoiler_mode,
+        );
         let title = highlight_title(&summary.key_text, &frame.file_name, kind);
         let rationale = if summary.actionable_notes.trim().is_empty() {
             summary.key_text.clone()
@@ -502,7 +511,11 @@ fn classify_kind(key_text: &str, notes: &str, spoiler_mode: SpoilerMode) -> High
     if text.contains("mistake") || text.contains("miss") || text.contains("throw") {
         return HighlightKind::Mistake;
     }
-    if text.contains("clutch") || text.contains("highlight") || text.contains("fight") || text.contains("kill") {
+    if text.contains("clutch")
+        || text.contains("highlight")
+        || text.contains("fight")
+        || text.contains("kill")
+    {
         return HighlightKind::Highlight;
     }
     if matches!(spoiler_mode, SpoilerMode::Off) && text.contains("story") {
@@ -512,7 +525,11 @@ fn classify_kind(key_text: &str, notes: &str, spoiler_mode: SpoilerMode) -> High
 }
 
 fn highlight_title(key_text: &str, file_name: &str, kind: HighlightKind) -> String {
-    let source = if key_text.trim().is_empty() { file_name } else { key_text };
+    let source = if key_text.trim().is_empty() {
+        file_name
+    } else {
+        key_text
+    };
     let base = source
         .split(['.', '!', '?', '\n'])
         .next()
@@ -557,7 +574,12 @@ fn draft_metadata(
     highlight_id: Option<&str>,
 ) -> Vec<GameplayPlatformDraft> {
     let filtered = highlight_id
-        .and_then(|needle| analysis.highlights.iter().find(|highlight| highlight.id == needle))
+        .and_then(|needle| {
+            analysis
+                .highlights
+                .iter()
+                .find(|highlight| highlight.id == needle)
+        })
         .cloned()
         .or_else(|| analysis.highlights.first().cloned());
     let highlights = filtered.into_iter().collect::<Vec<_>>();
@@ -590,12 +612,18 @@ fn draft_metadata_from_highlights(
         .iter()
         .map(|platform| GameplayPlatformDraft {
             platform: platform.clone(),
-            title: format!("{} — {} ({})", session.game_id, truncate(&best_title, 64), platform),
+            title: format!(
+                "{} — {} ({})",
+                session.game_id,
+                truncate(&best_title, 64),
+                platform
+            ),
             description: format!(
                 "Session: {}\nFocus: {}\nTop moment: {}\nSpoiler mode: {}",
                 session.session_title,
                 focus,
-                best.map(|highlight| highlight.rationale.clone()).unwrap_or_else(|| "No highlight selected yet.".to_string()),
+                best.map(|highlight| highlight.rationale.clone())
+                    .unwrap_or_else(|| "No highlight selected yet.".to_string()),
                 session.spoiler_mode.as_str(),
             ),
             tags: build_tags(session, best, preset, platform),
@@ -638,7 +666,10 @@ fn build_recap(
     if let Some(preset) = preset {
         recap.push_str(&format!("\nPreset: {}", preset.display_name));
         if !preset.coaching_focus.is_empty() {
-            recap.push_str(&format!("\nCoaching focus: {}", preset.coaching_focus.join(", ")));
+            recap.push_str(&format!(
+                "\nCoaching focus: {}",
+                preset.coaching_focus.join(", ")
+            ));
         }
     }
     if highlights.is_empty() {
@@ -668,19 +699,29 @@ fn default_follow_up_questions(session: &GameplayReviewSession) -> Vec<String> {
 fn spoiler_note(mode: SpoilerMode) -> Option<String> {
     match mode {
         SpoilerMode::Off => Some("Spoiler-safe mode is enabled; avoid story reveals.".to_string()),
-        SpoilerMode::Light => Some("Light spoiler filtering is enabled; keep story beats vague.".to_string()),
+        SpoilerMode::Light => {
+            Some("Light spoiler filtering is enabled; keep story beats vague.".to_string())
+        }
         SpoilerMode::Full => None,
     }
 }
 
 fn matched_highlights(highlights: &[GameplayHighlight], question: &str) -> Vec<GameplayHighlight> {
     let lowered = question.to_ascii_lowercase();
-    let wants_mistakes = lowered.contains("mistake") || lowered.contains("throw") || lowered.contains("bad");
-    let wants_highlights = lowered.contains("best") || lowered.contains("highlight") || lowered.contains("clip") || lowered.contains("post");
+    let wants_mistakes =
+        lowered.contains("mistake") || lowered.contains("throw") || lowered.contains("bad");
+    let wants_highlights = lowered.contains("best")
+        || lowered.contains("highlight")
+        || lowered.contains("clip")
+        || lowered.contains("post");
     highlights
         .iter()
         .filter(|highlight| {
-            (wants_mistakes && matches!(highlight.kind, HighlightKind::Mistake | HighlightKind::Coaching))
+            (wants_mistakes
+                && matches!(
+                    highlight.kind,
+                    HighlightKind::Mistake | HighlightKind::Coaching
+                ))
                 || (wants_highlights && matches!(highlight.kind, HighlightKind::Highlight))
                 || (!wants_mistakes && !wants_highlights)
         })
@@ -704,18 +745,23 @@ fn answer_question(
         }
     }
     if lowered.contains("mistake") || lowered.contains("throw") || lowered.contains("miss") {
-        if let Some(highlight) = analysis
-            .highlights
-            .iter()
-            .find(|highlight| matches!(highlight.kind, HighlightKind::Mistake | HighlightKind::Coaching))
-        {
+        if let Some(highlight) = analysis.highlights.iter().find(|highlight| {
+            matches!(
+                highlight.kind,
+                HighlightKind::Mistake | HighlightKind::Coaching
+            )
+        }) {
             return format!(
                 "Review point for {}: {} — {}",
                 session.session_title, highlight.title, highlight.rationale
             );
         }
     }
-    if lowered.contains("post") || lowered.contains("title") || lowered.contains("description") || lowered.contains("tags") {
+    if lowered.contains("post")
+        || lowered.contains("title")
+        || lowered.contains("description")
+        || lowered.contains("tags")
+    {
         if let Some(draft) = analysis.draft_metadata.first() {
             return format!(
                 "{} draft for {}: {}. Tags: {}",
@@ -766,7 +812,9 @@ mod tests {
     async fn register_and_list_sessions_round_trip() {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = tempdir().unwrap();
-        unsafe { std::env::set_var("OPENHUMAN_WORKSPACE", tmp.path()); }
+        unsafe {
+            std::env::set_var("OPENHUMAN_WORKSPACE", tmp.path());
+        }
 
         let registered = register_session(GameplayReviewSessionInput {
             game_id: "Apex Legends".to_string(),
@@ -785,7 +833,9 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].session_id, registered.session_id);
 
-        unsafe { std::env::remove_var("OPENHUMAN_WORKSPACE"); }
+        unsafe {
+            std::env::remove_var("OPENHUMAN_WORKSPACE");
+        }
     }
 
     #[test]

@@ -15,6 +15,34 @@ fn test_tool(allowed_domains: Vec<&str>) -> HttpRequestTool {
 }
 
 #[test]
+fn zero_limits_fall_back_to_defaults() {
+    // Stale configs (or a bad write) can pass 0; a 0-second timeout fails
+    // every request and a 0-byte cap truncates every body. The constructor
+    // must coerce both to the module defaults — never let 0 reach reqwest.
+    let security = Arc::new(SecurityPolicy {
+        autonomy: AutonomyLevel::Supervised,
+        ..SecurityPolicy::default()
+    });
+    let tool = HttpRequestTool::new(security, vec!["example.com".to_string()], 0, 0);
+    let defaults = crate::openhuman::config::HttpRequestConfig::default();
+    assert_eq!(tool.max_response_size, defaults.max_response_size);
+    assert_eq!(tool.timeout_secs, defaults.timeout_secs);
+    assert_ne!(tool.timeout_secs, 0);
+    assert_ne!(tool.max_response_size, 0);
+}
+
+#[test]
+fn nonzero_limits_are_preserved() {
+    let security = Arc::new(SecurityPolicy {
+        autonomy: AutonomyLevel::Supervised,
+        ..SecurityPolicy::default()
+    });
+    let tool = HttpRequestTool::new(security, vec!["example.com".to_string()], 2048, 12);
+    assert_eq!(tool.max_response_size, 2048);
+    assert_eq!(tool.timeout_secs, 12);
+}
+
+#[test]
 fn validate_accepts_valid_methods() {
     let tool = test_tool(vec!["example.com"]);
     assert!(tool.validate_method("GET").is_ok());
@@ -31,6 +59,17 @@ fn validate_rejects_invalid_method() {
     let tool = test_tool(vec!["example.com"]);
     let err = tool.validate_method("INVALID").unwrap_err().to_string();
     assert!(err.contains("Unsupported HTTP method"));
+}
+
+#[tokio::test]
+async fn validate_url_rejects_disallowed_domain() {
+    let tool = test_tool(vec!["example.com"]);
+    let err = tool
+        .validate_url("https://evil.test/path")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("allowed websites"));
 }
 
 #[tokio::test]

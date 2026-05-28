@@ -7,8 +7,8 @@
 
 use super::types::{Agent, AgentBuilder};
 use crate::openhuman::agent::dispatcher::{NativeToolDispatcher, XmlToolDispatcher};
+use crate::openhuman::inference::provider::{ChatRequest, ConversationMessage, Provider};
 use crate::openhuman::memory::Memory;
-use crate::openhuman::providers::{ChatRequest, ConversationMessage, Provider};
 use crate::openhuman::tools::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -16,7 +16,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 struct MockProvider {
-    responses: Mutex<Vec<crate::openhuman::providers::ChatResponse>>,
+    responses: Mutex<Vec<crate::openhuman::inference::provider::ChatResponse>>,
 }
 
 #[async_trait]
@@ -36,10 +36,10 @@ impl Provider for MockProvider {
         _request: ChatRequest<'_>,
         _model: &str,
         _temperature: f64,
-    ) -> Result<crate::openhuman::providers::ChatResponse> {
+    ) -> Result<crate::openhuman::inference::provider::ChatResponse> {
         let mut guard = self.responses.lock();
         if guard.is_empty() {
-            return Ok(crate::openhuman::providers::ChatResponse {
+            return Ok(crate::openhuman::inference::provider::ChatResponse {
                 text: Some("done".into()),
                 tool_calls: vec![],
                 usage: None,
@@ -56,7 +56,7 @@ impl Provider for MockProvider {
 #[derive(Default)]
 struct RecordingProvider {
     captures: Mutex<Vec<CapturedCall>>,
-    responses: Mutex<Vec<crate::openhuman::providers::ChatResponse>>,
+    responses: Mutex<Vec<crate::openhuman::inference::provider::ChatResponse>>,
 }
 
 #[derive(Clone)]
@@ -82,7 +82,7 @@ impl Provider for RecordingProvider {
         request: ChatRequest<'_>,
         model: &str,
         _temperature: f64,
-    ) -> Result<crate::openhuman::providers::ChatResponse> {
+    ) -> Result<crate::openhuman::inference::provider::ChatResponse> {
         let system_prompt = request
             .messages
             .iter()
@@ -95,7 +95,7 @@ impl Provider for RecordingProvider {
 
         let mut guard = self.responses.lock();
         if guard.is_empty() {
-            return Ok(crate::openhuman::providers::ChatResponse {
+            return Ok(crate::openhuman::inference::provider::ChatResponse {
                 text: Some("done".into()),
                 tool_calls: vec![],
                 usage: None,
@@ -154,8 +154,9 @@ fn build_minimal_agent_with_definition_name(definition_name: Option<&str>) -> Ag
         backend: "none".into(),
         ..crate::openhuman::config::MemoryConfig::default()
     };
-    let mem: Arc<dyn Memory> =
-        Arc::from(crate::openhuman::memory::create_memory(&memory_cfg, &workspace_path).unwrap());
+    let mem: Arc<dyn Memory> = Arc::from(
+        crate::openhuman::memory_store::create_memory(&memory_cfg, &workspace_path).unwrap(),
+    );
 
     let mut builder = Agent::builder()
         .provider(provider)
@@ -181,37 +182,22 @@ fn build_minimal_agent_with_definition_name(definition_name: Option<&str>) -> Ag
 /// `Agent::from_config_for_agent` carried `agent_definition_name =
 /// "main"` at runtime regardless of which id the caller asked for.
 ///
-/// In the current codebase only two ids actually reach
-/// `from_config_for_agent` in production: `"orchestrator"` (via the
-/// `Agent::from_config` legacy wrapper and the post-onboarding web
-/// dispatch path) and `"welcome"` (via `welcome_proactive` and the
-/// pre-onboarding web dispatch path). The orchestrator case is
-/// benign — `"main"` is already an alias for orchestrator everywhere
-/// downstream, so the behavior is a no-op. The welcome case is the
-/// one the user sees: welcome sessions were being misfiled on disk
-/// as `sessions/DDMMYYYY/main_*.md` instead of `welcome_*.md`, and
-/// the `agent:` line inside each transcript's `<!-- session_transcript
-/// -->` metadata header stamped `agent: main` instead of
-/// `agent: welcome`. Skills_agent and the other typed sub-agents are
+/// In the current codebase the user-facing path is `"orchestrator"`,
+/// and the same builder is also used by several direct session agents.
+/// A fallback to `"main"` silently misfiles transcripts on disk and
+/// stamps the wrong agent metadata into them. Typed sub-agents are
 /// unaffected because they're spawned through `subagent_runner` and
 /// never touch the `from_config_for_agent` / builder fallback path.
 ///
 /// This test pins the builder contract the fix relies on: calling
 /// `.agent_definition_name(id)` on the builder chain produces an
 /// `Agent` whose [`Agent::agent_definition_name`] accessor returns
-/// that id verbatim. `"welcome"` and `"orchestrator"` exercise the
-/// two ids that reach `from_config_for_agent` today; `"integrations_agent"`
-/// and `"trigger_triage"` are defensive coverage so that if a
-/// future commit adds a new top-level caller for one of those ids
-/// the builder contract is already pinned.
+/// that id verbatim. `"orchestrator"` covers the user-facing chat path;
+/// the others are defensive coverage so a future top-level caller still
+/// inherits the contract.
 #[test]
 fn agent_builder_threads_agent_definition_name_when_set() {
-    for expected in [
-        "welcome",
-        "integrations_agent",
-        "orchestrator",
-        "trigger_triage",
-    ] {
+    for expected in ["integrations_agent", "orchestrator", "trigger_triage"] {
         let agent = build_minimal_agent_with_definition_name(Some(expected));
         assert_eq!(
             agent.agent_definition_name(),
@@ -228,10 +214,8 @@ fn agent_builder_threads_agent_definition_name_when_set() {
 /// direct builder users (tests, CLI harnesses) rely on, and
 /// documents the exact misbehaviour the threading fix prevents —
 /// `build_session_agent_inner` used to hit this fallback even when
-/// a caller asked for `welcome`, because the `.agent_definition_name`
-/// setter was missing from the builder chain. The result was that
-/// welcome sessions landed on disk as `main_*.md` with `agent: main`
-/// stamped into their transcript metadata header.
+/// a caller asked for a concrete agent id, because the
+/// `.agent_definition_name` setter was missing from the builder chain.
 #[test]
 fn agent_builder_falls_back_to_main_when_definition_name_unset() {
     let agent = build_minimal_agent_with_definition_name(None);
@@ -242,13 +226,41 @@ fn agent_builder_falls_back_to_main_when_definition_name_unset() {
     );
 }
 
+#[test]
+fn set_connected_integrations_marks_session_initialized_and_updates_hash() {
+    let mut agent = build_minimal_agent_with_definition_name(Some("orchestrator"));
+    assert!(
+        !agent.connected_integrations_initialized,
+        "fresh builder-built agents should start with placeholder integration state"
+    );
+
+    agent.set_connected_integrations(vec![
+        crate::openhuman::context::prompt::ConnectedIntegration {
+            toolkit: "gmail".into(),
+            description: "Email".into(),
+            tools: vec![],
+            gated_tools: vec![],
+            connected: true,
+            non_active_status: None,
+        },
+    ]);
+
+    assert!(agent.connected_integrations_initialized);
+    assert_eq!(agent.connected_integrations().len(), 1);
+    assert_eq!(agent.connected_integrations()[0].toolkit, "gmail");
+    assert_eq!(
+        agent.last_seen_integrations_hash,
+        crate::openhuman::composio::connected_set_hash(agent.connected_integrations())
+    );
+}
+
 #[tokio::test]
 async fn turn_without_tools_returns_text() {
     let workspace = tempfile::TempDir::new().expect("temp workspace");
     let workspace_path = workspace.path().to_path_buf();
 
     let provider = Box::new(MockProvider {
-        responses: Mutex::new(vec![crate::openhuman::providers::ChatResponse {
+        responses: Mutex::new(vec![crate::openhuman::inference::provider::ChatResponse {
             text: Some("hello".into()),
             tool_calls: vec![],
             usage: None,
@@ -259,8 +271,9 @@ async fn turn_without_tools_returns_text() {
         backend: "none".into(),
         ..crate::openhuman::config::MemoryConfig::default()
     };
-    let mem: Arc<dyn Memory> =
-        Arc::from(crate::openhuman::memory::create_memory(&memory_cfg, &workspace_path).unwrap());
+    let mem: Arc<dyn Memory> = Arc::from(
+        crate::openhuman::memory_store::create_memory(&memory_cfg, &workspace_path).unwrap(),
+    );
 
     let mut agent = Agent::builder()
         .provider(provider)
@@ -282,16 +295,16 @@ async fn turn_with_native_dispatcher_handles_tool_results_variant() {
 
     let provider = Box::new(MockProvider {
         responses: Mutex::new(vec![
-            crate::openhuman::providers::ChatResponse {
+            crate::openhuman::inference::provider::ChatResponse {
                 text: Some(String::new()),
-                tool_calls: vec![crate::openhuman::providers::ToolCall {
+                tool_calls: vec![crate::openhuman::inference::provider::ToolCall {
                     id: "tc1".into(),
                     name: "echo".into(),
                     arguments: "{}".into(),
                 }],
                 usage: None,
             },
-            crate::openhuman::providers::ChatResponse {
+            crate::openhuman::inference::provider::ChatResponse {
                 text: Some("done".into()),
                 tool_calls: vec![],
                 usage: None,
@@ -303,8 +316,9 @@ async fn turn_with_native_dispatcher_handles_tool_results_variant() {
         backend: "none".into(),
         ..crate::openhuman::config::MemoryConfig::default()
     };
-    let mem: Arc<dyn Memory> =
-        Arc::from(crate::openhuman::memory::create_memory(&memory_cfg, &workspace_path).unwrap());
+    let mem: Arc<dyn Memory> = Arc::from(
+        crate::openhuman::memory_store::create_memory(&memory_cfg, &workspace_path).unwrap(),
+    );
 
     let mut agent = Agent::builder()
         .provider(provider)
@@ -330,7 +344,7 @@ async fn turn_with_native_dispatcher_persists_fallback_tool_calls() {
 
     let provider = Box::new(MockProvider {
         responses: Mutex::new(vec![
-            crate::openhuman::providers::ChatResponse {
+            crate::openhuman::inference::provider::ChatResponse {
                 text: Some(
                     "Checking...\n<tool_call>{\"name\":\"echo\",\"arguments\":{}}</tool_call>"
                         .into(),
@@ -338,7 +352,7 @@ async fn turn_with_native_dispatcher_persists_fallback_tool_calls() {
                 tool_calls: vec![],
                 usage: None,
             },
-            crate::openhuman::providers::ChatResponse {
+            crate::openhuman::inference::provider::ChatResponse {
                 text: Some("done".into()),
                 tool_calls: vec![],
                 usage: None,
@@ -350,8 +364,9 @@ async fn turn_with_native_dispatcher_persists_fallback_tool_calls() {
         backend: "none".into(),
         ..crate::openhuman::config::MemoryConfig::default()
     };
-    let mem: Arc<dyn Memory> =
-        Arc::from(crate::openhuman::memory::create_memory(&memory_cfg, &workspace_path).unwrap());
+    let mem: Arc<dyn Memory> = Arc::from(
+        crate::openhuman::memory_store::create_memory(&memory_cfg, &workspace_path).unwrap(),
+    );
 
     let mut agent = Agent::builder()
         .provider(provider)
@@ -388,6 +403,16 @@ async fn turn_with_native_dispatcher_persists_fallback_tool_calls() {
 /// - AgentDefinitionRegistry::global lookup
 /// - run_subagent → run_inner_loop with the parent's provider
 /// - Result returned as a ToolResult and threaded back into history
+///
+/// Uses the `#[cfg(test)]`-only `__test_inherit_echo` sub-agent
+/// (`ModelSpec::Inherit`) rather than `researcher`. After #1710,
+/// sub-agents with a `Hint(workload)` spec build a fresh provider via
+/// `create_chat_provider(...)` and therefore can't share this test's
+/// `MockProvider` — so a Hint sub-agent here would leak the scripted
+/// chain. `Inherit` keeps `parent.provider`, which is exactly the
+/// plumbing this test asserts. Provider *routing* for Hint sub-agents
+/// is covered independently by
+/// `subagent_runner::ops::tests::resolve_subagent_provider_*`.
 #[tokio::test]
 async fn turn_dispatches_spawn_subagent_through_full_path() {
     use crate::openhuman::agent::harness::AgentDefinitionRegistry;
@@ -405,25 +430,25 @@ async fn turn_dispatches_spawn_subagent_through_full_path() {
     //   3. Parent turn iter 1 — fold sub-agent result into "Based on the research, X is Y."
     let provider = Box::new(MockProvider {
         responses: Mutex::new(vec![
-            crate::openhuman::providers::ChatResponse {
+            crate::openhuman::inference::provider::ChatResponse {
                 text: Some(String::new()),
-                tool_calls: vec![crate::openhuman::providers::ToolCall {
+                tool_calls: vec![crate::openhuman::inference::provider::ToolCall {
                     id: "call-spawn".into(),
                     name: "spawn_subagent".into(),
                     arguments: serde_json::json!({
-                        "agent_id": "researcher",
+                        "agent_id": "__test_inherit_echo",
                         "prompt": "find out about X"
                     })
                     .to_string(),
                 }],
                 usage: None,
             },
-            crate::openhuman::providers::ChatResponse {
+            crate::openhuman::inference::provider::ChatResponse {
                 text: Some("X is Y".into()),
                 tool_calls: vec![],
                 usage: None,
             },
-            crate::openhuman::providers::ChatResponse {
+            crate::openhuman::inference::provider::ChatResponse {
                 text: Some("Based on the research, X is Y.".into()),
                 tool_calls: vec![],
                 usage: None,
@@ -435,8 +460,9 @@ async fn turn_dispatches_spawn_subagent_through_full_path() {
         backend: "none".into(),
         ..crate::openhuman::config::MemoryConfig::default()
     };
-    let mem: Arc<dyn Memory> =
-        Arc::from(crate::openhuman::memory::create_memory(&memory_cfg, &workspace_path).unwrap());
+    let mem: Arc<dyn Memory> = Arc::from(
+        crate::openhuman::memory_store::create_memory(&memory_cfg, &workspace_path).unwrap(),
+    );
 
     // Tools include SpawnSubagentTool so the parent can call it.
     let tools: Vec<Box<dyn Tool>> = vec![Box::new(SpawnSubagentTool::new())];
@@ -500,17 +526,17 @@ async fn system_prompt_and_model_are_byte_stable_across_turns() {
 
     let provider = Arc::new(RecordingProvider {
         responses: Mutex::new(vec![
-            crate::openhuman::providers::ChatResponse {
+            crate::openhuman::inference::provider::ChatResponse {
                 text: Some("first".into()),
                 tool_calls: vec![],
                 usage: None,
             },
-            crate::openhuman::providers::ChatResponse {
+            crate::openhuman::inference::provider::ChatResponse {
                 text: Some("second".into()),
                 tool_calls: vec![],
                 usage: None,
             },
-            crate::openhuman::providers::ChatResponse {
+            crate::openhuman::inference::provider::ChatResponse {
                 text: Some("third".into()),
                 tool_calls: vec![],
                 usage: None,
@@ -523,8 +549,9 @@ async fn system_prompt_and_model_are_byte_stable_across_turns() {
         backend: "none".into(),
         ..crate::openhuman::config::MemoryConfig::default()
     };
-    let mem: Arc<dyn Memory> =
-        Arc::from(crate::openhuman::memory::create_memory(&memory_cfg, &workspace_path).unwrap());
+    let mem: Arc<dyn Memory> = Arc::from(
+        crate::openhuman::memory_store::create_memory(&memory_cfg, &workspace_path).unwrap(),
+    );
 
     let mut agent = Agent::builder()
         .provider_arc(provider.clone() as Arc<dyn Provider>)
@@ -680,8 +707,8 @@ fn seed_resume_from_messages_primes_cached_transcript() {
 fn seed_resume_from_messages_is_noop_on_warm_agent() {
     let mut agent = build_minimal_agent_with_definition_name(Some("orchestrator"));
     agent.cached_transcript_messages = Some(vec![
-        crate::openhuman::providers::ChatMessage::system("warm prefix"),
-        crate::openhuman::providers::ChatMessage::user("hi"),
+        crate::openhuman::inference::provider::ChatMessage::system("warm prefix"),
+        crate::openhuman::inference::provider::ChatMessage::user("hi"),
     ]);
     agent
         .seed_resume_from_messages(vec![("user".into(), "different".into())], "different")
@@ -720,4 +747,95 @@ fn seed_resume_from_messages_preserves_unmatched_trailing_user() {
     assert_eq!(cached.len(), 4);
     assert_eq!(cached[3].role, "user");
     assert_eq!(cached[3].content, "stranded follow-up");
+}
+
+#[test]
+fn seed_resume_from_messages_respects_history_window_bound() {
+    let mut agent = build_minimal_agent_with_definition_name(Some("orchestrator"));
+    agent.config.max_history_messages = 4;
+    let prior = vec![
+        ("user".to_string(), "u1".to_string()),
+        ("agent".to_string(), "a1".to_string()),
+        ("user".to_string(), "u2".to_string()),
+        ("agent".to_string(), "a2".to_string()),
+        ("user".to_string(), "u3".to_string()),
+        ("agent".to_string(), "a3".to_string()),
+    ];
+    agent
+        .seed_resume_from_messages(prior, "new turn")
+        .expect("seed");
+
+    let cached = agent
+        .cached_transcript_messages
+        .as_ref()
+        .expect("cache populated");
+    // max_history_messages=4 keeps [system + last 3 messages].
+    assert_eq!(cached.len(), 4);
+    assert_eq!(cached[0].role, "system");
+    assert_eq!(cached[1].content, "a2");
+    assert_eq!(cached[2].content, "u3");
+    assert_eq!(cached[3].content, "a3");
+}
+
+#[test]
+fn bound_cached_transcript_messages_without_system_prefix_keeps_tail() {
+    let mut agent = build_minimal_agent_with_definition_name(Some("orchestrator"));
+    agent.config.max_history_messages = 3;
+
+    let messages = vec![
+        crate::openhuman::inference::provider::ChatMessage::user("u1"),
+        crate::openhuman::inference::provider::ChatMessage::assistant("a1"),
+        crate::openhuman::inference::provider::ChatMessage::user("u2"),
+        crate::openhuman::inference::provider::ChatMessage::assistant("a2"),
+        crate::openhuman::inference::provider::ChatMessage::user("u3"),
+    ];
+    let bounded = agent.bound_cached_transcript_messages(messages);
+    assert_eq!(bounded.len(), 3);
+    assert_eq!(bounded[0].content, "u2");
+    assert_eq!(bounded[1].content, "a2");
+    assert_eq!(bounded[2].content, "u3");
+}
+
+/// The cached-transcript resume path operates on wire-form `ChatMessage`s. When
+/// the window cut lands so the tail opens on a `tool` result whose `tool_calls`
+/// opener fell outside the window, `bound_cached_transcript_messages` must snap
+/// past it — a leading `tool` message has no preceding `tool_calls` and the
+/// provider 400s (surfacing as "Something went wrong").
+#[test]
+fn bound_cached_transcript_messages_snaps_past_leading_orphan_tool() {
+    use crate::openhuman::inference::provider::ChatMessage;
+
+    let mut agent = build_minimal_agent_with_definition_name(Some("orchestrator"));
+    agent.config.max_history_messages = 3;
+
+    // 5 messages, cap 3: the tail slice is [tool(a), user(u2), assistant(a2)];
+    // the assistant `tool_calls` opener fell outside the window.
+    let messages = vec![
+        ChatMessage::assistant(
+            r#"{"content":"calling","tool_calls":[{"id":"call_a","name":"shell","arguments":"{}"}]}"#,
+        ),
+        ChatMessage::tool(r#"{"tool_call_id":"call_a","content":"orphaned"}"#),
+        ChatMessage::user("u2"),
+        ChatMessage::assistant("a2"),
+        ChatMessage::user("u3"),
+    ];
+
+    let bounded = agent.bound_cached_transcript_messages(messages);
+
+    assert!(
+        bounded.first().map(|m| m.role.as_str()) != Some("tool"),
+        "window must not open on an orphaned tool result"
+    );
+    assert!(
+        !bounded.iter().any(|m| m.role == "tool"),
+        "the orphaned tool result must be dropped"
+    );
+    // tail [tool, u2, a2, u3] -> drop leading tool -> [u2, a2, u3].
+    assert_eq!(
+        bounded
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>(),
+        vec!["u2", "a2", "u3"]
+    );
 }
