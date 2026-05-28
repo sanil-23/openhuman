@@ -74,12 +74,44 @@ pub fn schemas(function: &str) -> ControllerSchema {
             namespace: "gameplay_review",
             function: "register_session",
             description: "Register a gameplay session from imported keyframes.",
-            inputs: vec![FieldSchema {
-                name: "session",
-                ty: TypeSchema::Ref("GameplayReviewSessionInput"),
-                comment: "Imported gameplay session metadata and frames.",
-                required: true,
-            }],
+            inputs: vec![
+                FieldSchema {
+                    name: "game_id",
+                    ty: TypeSchema::String,
+                    comment: "Game identifier.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "session_title",
+                    ty: TypeSchema::String,
+                    comment: "Human-readable session title.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "source_label",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::String)),
+                    comment: "Optional label describing where the footage came from.",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "spoiler_mode",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::Ref("SpoilerMode"))),
+                    comment: "Optional spoiler-mode override for this session.",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "preset_id",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::String)),
+                    comment: "Optional coaching preset to apply.",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "frames",
+                    ty: TypeSchema::Array(Box::new(TypeSchema::Ref("GameplayFrameInput"))),
+                    comment: "Captured keyframes for the session.",
+                    required: true,
+                },
+            ],
             outputs: vec![json_output("session", "Stored gameplay review session.")],
         },
         "analyze_session" => ControllerSchema {
@@ -87,12 +119,26 @@ pub fn schemas(function: &str) -> ControllerSchema {
             function: "analyze_session",
             description:
                 "Analyze a gameplay session, generate highlights, and draft clip metadata.",
-            inputs: vec![FieldSchema {
-                name: "analysis",
-                ty: TypeSchema::Ref("GameplayReviewAnalysisInput"),
-                comment: "Analysis request with optional highlight cap and platform targets.",
-                required: true,
-            }],
+            inputs: vec![
+                FieldSchema {
+                    name: "session_id",
+                    ty: TypeSchema::String,
+                    comment: "Session identifier to analyze.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "max_highlights",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::U64)),
+                    comment: "Optional cap on the number of highlights to generate.",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "platforms",
+                    ty: TypeSchema::Array(Box::new(TypeSchema::String)),
+                    comment: "Target platforms for clip drafts (e.g. youtube, tiktok).",
+                    required: false,
+                },
+            ],
             outputs: vec![json_output("session", "Analyzed gameplay review session.")],
         },
         "get_session" => ControllerSchema {
@@ -123,12 +169,44 @@ pub fn schemas(function: &str) -> ControllerSchema {
             namespace: "gameplay_review",
             function: "set_preset",
             description: "Save a game-specific coaching preset.",
-            inputs: vec![FieldSchema {
-                name: "preset",
-                ty: TypeSchema::Ref("GameplayPresetInput"),
-                comment: "Game preset definition.",
-                required: true,
-            }],
+            inputs: vec![
+                FieldSchema {
+                    name: "game_id",
+                    ty: TypeSchema::String,
+                    comment: "Game identifier.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "display_name",
+                    ty: TypeSchema::String,
+                    comment: "Human-readable preset name.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "coaching_focus",
+                    ty: TypeSchema::Array(Box::new(TypeSchema::String)),
+                    comment: "Areas of focus for coaching commentary.",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "audio_feedback",
+                    ty: TypeSchema::Bool,
+                    comment: "Whether to surface audio cues in highlight summaries.",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "spoiler_mode",
+                    ty: TypeSchema::Ref("SpoilerMode"),
+                    comment: "Spoiler-handling mode for this preset.",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "notes",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::String)),
+                    comment: "Optional free-form preset notes.",
+                    required: false,
+                },
+            ],
             outputs: vec![json_output("preset", "Saved gameplay review preset.")],
         },
         "list_presets" => ControllerSchema {
@@ -142,12 +220,20 @@ pub fn schemas(function: &str) -> ControllerSchema {
             namespace: "gameplay_review",
             function: "ask_session",
             description: "Ask a question against a stored gameplay session.",
-            inputs: vec![FieldSchema {
-                name: "question",
-                ty: TypeSchema::Ref("GameplayReviewQuestionInput"),
-                comment: "Question and session id.",
-                required: true,
-            }],
+            inputs: vec![
+                FieldSchema {
+                    name: "session_id",
+                    ty: TypeSchema::String,
+                    comment: "Session identifier to query.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "question",
+                    ty: TypeSchema::String,
+                    comment: "Question text to ask against the session.",
+                    required: true,
+                },
+            ],
             outputs: vec![json_output(
                 "answer",
                 "Question answer with matched highlights.",
@@ -157,12 +243,26 @@ pub fn schemas(function: &str) -> ControllerSchema {
             namespace: "gameplay_review",
             function: "draft_clip_metadata",
             description: "Draft clip titles, descriptions, and tags for one gameplay highlight.",
-            inputs: vec![FieldSchema {
-                name: "clip",
-                ty: TypeSchema::Ref("GameplayReviewClipInput"),
-                comment: "Clip draft request.",
-                required: true,
-            }],
+            inputs: vec![
+                FieldSchema {
+                    name: "session_id",
+                    ty: TypeSchema::String,
+                    comment: "Session identifier holding the highlight.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "platform",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::String)),
+                    comment: "Optional target platform (defaults to all configured).",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "highlight_id",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::String)),
+                    comment: "Optional highlight to focus on (defaults to all).",
+                    required: false,
+                },
+            ],
             outputs: vec![json_output("drafts", "Draft metadata for clip publishing.")],
         },
         _ => ControllerSchema {
