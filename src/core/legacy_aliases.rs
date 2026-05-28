@@ -353,6 +353,32 @@ mod tests {
     }
 
     #[test]
+    fn parse_frontend_legacy_aliases_accepts_bare_identifier_keys_and_skips_comments() {
+        // Prettier strips redundant quotes from keys that are valid JS
+        // identifiers, so the canonical form for a simple key like
+        // `health_snapshot` is unquoted. The parser must accept both
+        // `'foo':` and bare `foo:`, and must ignore `//` comment lines
+        // in the LEGACY_METHOD_ALIASES body.
+        let source = "export const CORE_RPC_METHODS = {\n  alphaMethod: 'openhuman.alpha',\n  betaMethod: 'openhuman.beta',\n} as const;\n\nexport const LEGACY_METHOD_ALIASES: Record<string, CoreRpcMethod> = {\n  // legacy aliases for the alpha method\n  'openhuman.legacy_alpha': CORE_RPC_METHODS.alphaMethod,\n  beta_legacy: CORE_RPC_METHODS.betaMethod,\n};\n";
+        let core_methods = parse_core_rpc_methods(source);
+        let aliases = parse_frontend_legacy_aliases(source, &core_methods);
+        assert_eq!(
+            aliases.get("openhuman.legacy_alpha").map(String::as_str),
+            Some("openhuman.alpha"),
+            "quoted-key entry should still resolve"
+        );
+        assert_eq!(
+            aliases.get("beta_legacy").map(String::as_str),
+            Some("openhuman.beta"),
+            "bare-identifier key should resolve (Prettier-normalized form)"
+        );
+        assert!(
+            !aliases.keys().any(|k| k.contains("//") || k.contains("legacy aliases")),
+            "comment text must not be captured as a key"
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "legacy alias references unknown CORE_RPC_METHODS")]
     fn parse_frontend_legacy_aliases_panics_on_unknown_core_method_ref() {
         let source = "export const CORE_RPC_METHODS = {\n  alphaMethod: 'openhuman.alpha',\n} as const;\n\nexport const LEGACY_METHOD_ALIASES: Record<string, CoreRpcMethod> = {\n  'openhuman.legacy_alpha': CORE_RPC_METHODS.doesNotExist,\n};\n";
