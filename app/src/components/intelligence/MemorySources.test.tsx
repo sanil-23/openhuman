@@ -21,10 +21,10 @@ describe('isMoreRecentConnection', () => {
     // The whole point of the fix: a newer EXPIRED supersedes an older
     // ACTIVE, because the new EXPIRED is the user's actual current
     // truth (they re-authorized and that fresh auth then died).
-    const older_active = conn('gmail', 'ACTIVE', '2026-01-01T00:00:00Z');
-    const newer_expired = conn('gmail', 'EXPIRED', '2026-05-26T00:00:00Z');
-    expect(isMoreRecentConnection(newer_expired, older_active)).toBe(true);
-    expect(isMoreRecentConnection(older_active, newer_expired)).toBe(false);
+    const olderActive = conn('gmail', 'ACTIVE', '2026-01-01T00:00:00Z');
+    const newerExpired = conn('gmail', 'EXPIRED', '2026-05-26T00:00:00Z');
+    expect(isMoreRecentConnection(newerExpired, olderActive)).toBe(true);
+    expect(isMoreRecentConnection(olderActive, newerExpired)).toBe(false);
   });
 
   it('a row with createdAt beats a row missing it', () => {
