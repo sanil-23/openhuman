@@ -223,7 +223,7 @@ mod tests {
         let compact = body
             .lines()
             .map(str::trim)
-            .filter(|line| !line.is_empty())
+            .filter(|line| !line.is_empty() && !line.starts_with("//"))
             .collect::<Vec<_>>()
             .join(" ");
         let mut aliases = BTreeMap::new();
@@ -235,7 +235,14 @@ mod tests {
             let (legacy, target_expr) = entry
                 .split_once(':')
                 .unwrap_or_else(|| panic!("expected legacy alias entry, got `{entry}`"));
-            let legacy = quoted_value(legacy);
+            // Prettier strips quotes from keys that are valid JS identifiers
+            // (e.g. `health_snapshot`), so accept both `'foo':` and bare `foo:`.
+            let legacy_trimmed = legacy.trim();
+            let legacy = if legacy_trimmed.starts_with('\'') || legacy_trimmed.starts_with('"') {
+                quoted_value(legacy)
+            } else {
+                legacy_trimmed.to_string()
+            };
             let target_expr = target_expr.trim();
             let canonical = if let Some(key) = target_expr.strip_prefix("CORE_RPC_METHODS.") {
                 core_methods
