@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { ConfirmationModal } from '../components/intelligence/ConfirmationModal';
+import DiagramViewerTab from '../components/intelligence/DiagramViewerTab';
 import { GameplayReviewWorkspace } from '../components/intelligence/GameplayReviewWorkspace';
 import IntelligenceCallsTab from '../components/intelligence/IntelligenceCallsTab';
 import IntelligenceDreamsTab from '../components/intelligence/IntelligenceDreamsTab';
@@ -20,7 +21,14 @@ import type {
   ToastNotification,
 } from '../types/intelligence';
 
-type IntelligenceTab = 'memory' | 'gameplay' | 'subconscious' | 'calls' | 'dreams' | 'tasks';
+type IntelligenceTab =
+  | 'memory'
+  | 'gameplay'
+  | 'subconscious'
+  | 'calls'
+  | 'dreams'
+  | 'tasks'
+  | 'diagram';
 
 export default function Intelligence() {
   const { t } = useT();
@@ -93,6 +101,7 @@ export default function Intelligence() {
     { id: 'gameplay', label: t('memory.tab.gameplay') },
     { id: 'subconscious', label: t('memory.tab.subconscious') },
     { id: 'tasks', label: 'Tasks' },
+    { id: 'diagram', label: t('memory.tab.diagram') },
     { id: 'calls', label: t('memory.tab.calls') },
     { id: 'dreams', label: t('memory.tab.dreams') },
   ];
@@ -173,6 +182,8 @@ export default function Intelligence() {
             )}
 
             {activeTab === 'tasks' && <IntelligenceTasksTab />}
+
+            {activeTab === 'diagram' && <DiagramViewerTab />}
 
             {activeTab === 'calls' && <IntelligenceCallsTab onToast={addToast} />}
 
