@@ -724,6 +724,19 @@ mod tests {
     }
 
     #[test]
+    fn resolver_uses_personality_branch_for_builtin_profile() {
+        // `load_profiles` returns built-in profiles for any empty workspace, so
+        // the personality branch is reachable with no fixture file. "research"
+        // is a built-in profile backed by the "researcher" agent.
+        let dir = tempfile::tempdir().unwrap();
+        let r = resolve_executor(dir.path(), Some("research"));
+        assert_eq!(r.label, "personality:research");
+        assert_eq!(r.agent_id, "researcher");
+        let suffix = r.prompt_suffix.expect("personality preamble present");
+        assert!(suffix.contains("acting as the personality `research`"));
+    }
+
+    #[test]
     fn resolver_degrades_to_default_for_unresolved_handle() {
         let dir = tempfile::tempdir().unwrap();
         let r = resolve_executor(dir.path(), Some("no-such-executor-xyz"));
