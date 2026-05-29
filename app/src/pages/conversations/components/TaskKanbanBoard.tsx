@@ -24,6 +24,24 @@ const COLUMN_DEFS: ColumnDef[] = [
 
 const STATUS_INDEX = new Map(COLUMN_DEFS.map((column, index) => [column.status, index]));
 
+/** Label key for *every* status, including the approval-flow statuses that
+ *  don't own a kanban column. Drives the edit dialog's status `<select>` so a
+ *  card whose status is `awaiting_approval`/`ready`/`rejected` renders a
+ *  matching option instead of a controlled-select value with no option (which
+ *  React warns about and which renders as the first option, hiding the real
+ *  status from the user). */
+const STATUS_LABEL_KEYS: Record<TaskBoardCardStatus, string> = {
+  todo: 'conversations.taskKanban.todo',
+  awaiting_approval: 'conversations.taskKanban.awaitingApproval',
+  ready: 'conversations.taskKanban.ready',
+  in_progress: 'conversations.taskKanban.inProgress',
+  blocked: 'conversations.taskKanban.blocked',
+  done: 'conversations.taskKanban.done',
+  rejected: 'conversations.taskKanban.rejected',
+};
+
+const ALL_STATUSES = Object.keys(STATUS_LABEL_KEYS) as TaskBoardCardStatus[];
+
 /** Whether a status owns a kanban column (vs the approval-flow statuses that
  *  are bucketed into an existing column). */
 function isColumnStatus(status: TaskBoardCardStatus): boolean {
@@ -329,9 +347,9 @@ function TaskBriefDialog({
                   value={status}
                   onChange={e => setStatus(e.target.value as TaskBoardCardStatus)}
                   className="w-full rounded-md border border-stone-200 bg-white px-2 py-1.5 text-sm text-stone-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-50">
-                  {COLUMN_DEFS.map(column => (
-                    <option key={column.status} value={column.status}>
-                      {t(column.labelKey)}
+                  {ALL_STATUSES.map(s => (
+                    <option key={s} value={s}>
+                      {t(STATUS_LABEL_KEYS[s])}
                     </option>
                   ))}
                 </select>

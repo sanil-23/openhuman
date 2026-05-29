@@ -54,4 +54,25 @@ describe('TaskKanbanBoard approval surface', () => {
     // An approval-flow card without onDecidePlan shows no approve/reject controls.
     expect(screen.queryByTitle('chat.approval.approve')).toBeNull();
   });
+
+  it('edit dialog status select has a matching option for approval-flow statuses', () => {
+    // Regression: the dialog <select> must carry an <option> for every status,
+    // not just the four column statuses — otherwise an awaiting_approval card
+    // renders a controlled select with no matching option (React warns and the
+    // value silently shows as the first option, hiding the real status).
+    render(
+      <TaskKanbanBoard
+        board={board([card({ id: 'a', status: 'awaiting_approval', title: 'Needs approval' })])}
+        onUpdateCard={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByText('conversations.taskKanban.briefButton'));
+
+    // The status select shows the awaiting_approval label as its selected
+    // value, proving a matching option exists (no fallback to 'todo').
+    expect(
+      screen.getByDisplayValue('conversations.taskKanban.awaitingApproval')
+    ).toBeInTheDocument();
+  });
 });
