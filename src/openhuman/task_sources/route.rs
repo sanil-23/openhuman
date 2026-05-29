@@ -19,7 +19,7 @@ use crate::openhuman::todos::ops::{
 };
 use crate::openhuman::{scheduler_gate, todos};
 
-use super::types::{EnrichedTask, SourceTarget, TaskSource};
+use super::types::{EnrichedTask, FilterSpec, SourceTarget, TaskSource};
 
 /// Stable thread id whose board collects every ingested task.
 pub const TASK_SOURCES_THREAD_ID: &str = "task-sources";
@@ -112,11 +112,26 @@ fn add_card(
         Some(notes_parts.join("\n"))
     };
 
+    // Objective: the bare upstream title (the card `content`/title is the
+    // `[provider] title` display form; the objective is the clean goal the
+    // executing agent works toward).
+    let objective = {
+        let t = task.title.trim();
+        (!t.is_empty()).then(|| t.to_string())
+    };
+
+    // Stamp the source identifiers the downstream dispatcher / write-back
+    // needs (provider + repo + issue id + url) plus the enrichment urgency
+    // used for prioritisation. This is the only writer of `source_metadata`.
+    let source_metadata = build_source_metadata(source, enriched);
+
     let snapshot = todo_add(
         &location,
         &content,
         CardPatch {
             notes,
+            objective,
+            source_metadata: Some(source_metadata),
             ..Default::default()
         },
     )
@@ -137,6 +152,34 @@ fn add_card(
         "[task_sources:route] card added to task-sources board"
     );
     Ok(new_card_id)
+}
+
+/// Build the card's `source_metadata` from the originating source + task:
+/// the provider/repo/issue identifiers a later dispatcher or external
+/// write-back needs to address the upstream item, plus the enrichment
+/// urgency used to prioritise pickup. Repo is only present for GitHub
+/// sources (the other providers don't carry a repo concept).
+fn build_source_metadata(source: &TaskSource, enriched: &EnrichedTask) -> serde_json::Value {
+    let task = &enriched.task;
+    let mut meta = json!({
+        "provider": task.provider,
+        "source_id": source.id,
+        "external_id": task.external_id,
+        "urgency": enriched.urgency,
+    });
+    if let Some(url) = task.url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        meta["url"] = json!(url);
+    }
+    if let FilterSpec::Github {
+        repo: Some(repo), ..
+    } = &source.filter
+    {
+        let repo = repo.trim();
+        if !repo.is_empty() {
+            meta["repo"] = json!(repo);
+        }
+    }
+    meta
 }
 
 /// Dispatch a triage turn for a proactive task, gated by scheduler
@@ -228,6 +271,9 @@ pub fn board_cards(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::openhuman::task_sources::types::ProviderSlug;
+    use crate::openhuman::task_sources::NormalizedTask;
+    use chrono::Utc;
 
     #[test]
     fn provider_label_titlecases_known_and_unknown() {
@@ -235,5 +281,93 @@ mod tests {
         assert_eq!(provider_label("clickup"), "ClickUp");
         assert_eq!(provider_label("asana"), "Asana");
         assert_eq!(provider_label(""), "");
+    }
+
+    fn github_source(repo: Option<&str>) -> TaskSource {
+        TaskSource {
+            id: "ts-1".into(),
+            provider: ProviderSlug::Github,
+            connection_id: None,
+            name: None,
+            enabled: true,
+            filter: FilterSpec::Github {
+                repo: repo.map(str::to_string),
+                labels: vec![],
+                assignee_is_me: true,
+                state: None,
+                extra: json!({}),
+            },
+            interval_secs: 1800,
+            target: SourceTarget::AgentTodoProactive,
+            max_tasks_per_fetch: 25,
+            created_at: Utc::now(),
+            last_fetch_at: None,
+            last_status: None,
+        }
+    }
+
+    fn enriched(external_id: &str, url: Option<&str>, urgency: f32) -> EnrichedTask {
+        let task = NormalizedTask {
+            external_id: external_id.into(),
+            provider: "github".into(),
+            title: "Fix the bug".into(),
+            url: url.map(str::to_string),
+            ..Default::default()
+        };
+        EnrichedTask {
+            task,
+            summary: "Fix the bug".into(),
+            urgency,
+            linked_people: vec![],
+            linked_memory_ids: vec![],
+            agent_prompt: "do it".into(),
+            enriched_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn source_metadata_carries_github_repo_and_identifiers() {
+        let src = github_source(Some("octo/repo"));
+        let e = enriched("123", Some("https://github.com/octo/repo/issues/123"), 0.7);
+        let meta = build_source_metadata(&src, &e);
+        assert_eq!(meta["provider"], json!("github"));
+        assert_eq!(meta["source_id"], json!("ts-1"));
+        assert_eq!(meta["external_id"], json!("123"));
+        assert_eq!(meta["repo"], json!("octo/repo"));
+        assert_eq!(
+            meta["url"],
+            json!("https://github.com/octo/repo/issues/123")
+        );
+        let urgency = meta["urgency"].as_f64().expect("urgency is a number");
+        assert!((urgency - 0.7).abs() < 1e-6, "urgency was {urgency}");
+    }
+
+    #[test]
+    fn source_metadata_omits_absent_repo_and_url() {
+        let src = github_source(None);
+        let e = enriched("9", None, 0.4);
+        let meta = build_source_metadata(&src, &e);
+        assert!(meta.get("repo").is_none());
+        assert!(meta.get("url").is_none());
+        assert_eq!(meta["external_id"], json!("9"));
+        let urgency = meta["urgency"].as_f64().expect("urgency is a number");
+        assert!((urgency - 0.4).abs() < 1e-6, "urgency was {urgency}");
+    }
+
+    #[test]
+    fn source_metadata_has_no_repo_for_non_github_provider() {
+        let mut src = github_source(Some("octo/repo"));
+        // A non-GitHub filter carries no repo concept.
+        src.provider = ProviderSlug::Linear;
+        src.filter = FilterSpec::Linear {
+            team_id: None,
+            assignee_is_me: true,
+            state: None,
+            extra: json!({}),
+        };
+        let e = enriched("LIN-5", None, 0.5);
+        let meta = build_source_metadata(&src, &e);
+        assert!(meta.get("repo").is_none());
+        assert_eq!(meta["source_id"], json!("ts-1"));
     }
 }

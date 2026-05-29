@@ -291,6 +291,7 @@ fn handle_add(params: Map<String, Value>) -> ControllerFuture {
             evidence: p.evidence,
             notes: p.notes,
             blocker: p.blocker,
+            source_metadata: None,
         };
         tracing::debug!(thread_id = %p.thread_id, "[rpc][todos] add entry");
         snapshot_to_json(ops::add(&loc, &p.content, patch)?)
@@ -314,6 +315,7 @@ fn handle_edit(params: Map<String, Value>) -> ControllerFuture {
             evidence: p.evidence,
             notes: p.notes,
             blocker: p.blocker,
+            source_metadata: None,
         };
         tracing::debug!(thread_id = %p.thread_id, id = %p.id, "[rpc][todos] edit entry");
         snapshot_to_json(ops::edit(&loc, &p.id, patch)?)

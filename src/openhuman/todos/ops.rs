@@ -68,6 +68,9 @@ pub struct CardPatch {
     pub evidence: Option<Vec<String>>,
     pub notes: Option<String>,
     pub blocker: Option<String>,
+    /// Provider/source identifiers for a task-source-ingested card. `Some`
+    /// sets the card's `source_metadata`; `None` leaves it untouched.
+    pub source_metadata: Option<serde_json::Value>,
 }
 
 /// Where to load/save the working set of cards.
@@ -261,6 +264,7 @@ pub fn add(
         evidence: patch.evidence.unwrap_or_default(),
         notes: patch.notes.and_then(non_empty),
         blocker: patch.blocker.and_then(non_empty),
+        source_metadata: patch.source_metadata,
         order: cards.len() as u32,
         updated_at: Utc::now().to_rfc3339(),
     };
@@ -321,6 +325,9 @@ pub fn edit(location: &BoardLocation, id: &str, patch: CardPatch) -> Result<Todo
     }
     if let Some(blocker) = patch.blocker {
         card.blocker = non_empty(blocker);
+    }
+    if let Some(source_metadata) = patch.source_metadata {
+        card.source_metadata = Some(source_metadata);
     }
     card.updated_at = Utc::now().to_rfc3339();
     enforce_single_in_progress(&cards)?;
@@ -534,6 +541,62 @@ mod tests {
     }
 
     #[test]
+    fn source_metadata_round_trips_through_add_and_edit() {
+        let dir = tempdir().unwrap();
+        let loc = thread_loc(dir.path(), "t1");
+        let added = add(
+            &loc,
+            "ingested task",
+            CardPatch {
+                source_metadata: Some(serde_json::json!({
+                    "provider": "github",
+                    "external_id": "7",
+                })),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let id = added.cards[0].id.clone();
+        assert_eq!(
+            added.cards[0].source_metadata.as_ref().unwrap()["external_id"],
+            serde_json::json!("7")
+        );
+
+        // A subsequent edit with `Some(..)` replaces the stamped metadata.
+        let snap = edit(
+            &loc,
+            &id,
+            CardPatch {
+                source_metadata: Some(serde_json::json!({
+                    "provider": "github",
+                    "external_id": "8",
+                })),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            snap.cards[0].source_metadata.as_ref().unwrap()["external_id"],
+            serde_json::json!("8")
+        );
+
+        // An edit that leaves `source_metadata: None` preserves the value.
+        let snap2 = edit(
+            &loc,
+            &id,
+            CardPatch {
+                notes: Some("touch".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            snap2.cards[0].source_metadata.as_ref().unwrap()["external_id"],
+            serde_json::json!("8")
+        );
+    }
+
+    #[test]
     fn edit_can_clear_approval_mode() {
         let dir = tempdir().unwrap();
         let loc = thread_loc(dir.path(), "t1");
@@ -609,6 +672,7 @@ mod tests {
                 evidence: Vec::new(),
                 notes: None,
                 blocker: None,
+                source_metadata: None,
                 order: 0,
                 updated_at: String::new(),
             },
@@ -625,6 +689,7 @@ mod tests {
                 evidence: Vec::new(),
                 notes: None,
                 blocker: None,
+                source_metadata: None,
                 order: 1,
                 updated_at: String::new(),
             },

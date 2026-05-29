@@ -27,6 +27,10 @@ export interface TaskBoardCard {
   evidence?: string[];
   notes?: string | null;
   blocker?: string | null;
+  /** Provider/source identifiers for a card ingested from a task source
+   *  (`{provider, source_id, external_id, url, repo?, urgency}`); absent on
+   *  agent/UI-authored cards. */
+  sourceMetadata?: Record<string, unknown> | null;
   order: number;
   updatedAt: string;
 }
