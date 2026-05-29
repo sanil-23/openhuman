@@ -17,14 +17,21 @@
 //! executor from the default agent to a resolved personality/skill; this module
 //! keeps the default-agent path so the pipeline runs end-to-end first.
 
+use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::openhuman::agent::harness::definition::{AgentDefinitionRegistry, PromptSource};
 use crate::openhuman::agent::harness::session::Agent;
 use crate::openhuman::agent::harness::subagent_runner::with_autonomous_iter_cap;
+use crate::openhuman::agent::personality_paths::PersonalityContext;
 use crate::openhuman::agent::task_board::{TaskBoardCard, TaskCardStatus};
 use crate::openhuman::config::Config;
 use crate::openhuman::todos::ops::{self, BoardLocation, CardPatch};
+
+/// Max chars of a personality SOUL.md / MEMORY.md or skill guideline block
+/// folded into the agent's system-prompt suffix.
+const EXECUTOR_PREAMBLE_MAX_CHARS: usize = 800;
 
 /// Tool-iteration ceiling for an autonomous task run. Matches the skill-run
 /// cap — a task brief is the same shape of bounded autonomous work.
@@ -168,10 +175,21 @@ pub async fn dispatch_card(
         "[task_dispatcher] card claimed (→in_progress), spawning autonomous run"
     );
 
+    // Resolve which executor runs this card: default agent, a personality, or
+    // a skill — one autonomous-run interface, three presets (G4 + G3).
+    let executor = resolve_executor(&config.workspace_dir, card.assigned_agent.as_deref());
+    tracing::info!(
+        card_id = %card_id,
+        run_id = %run_id,
+        executor = %executor.label,
+        agent_id = %executor.agent_id,
+        "[task_dispatcher] card claimed (→in_progress), spawning autonomous run"
+    );
+
     let run_id_for_return = run_id.clone();
     let location_for_run = location.clone();
     tokio::spawn(async move {
-        let outcome = run_autonomous(config, &prompt, &run_id).await;
+        let outcome = run_autonomous(config, &executor, &prompt, &run_id).await;
         write_back(&location_for_run, &card_id, &run_id, outcome);
     });
 
@@ -180,9 +198,114 @@ pub async fn dispatch_card(
     })
 }
 
-/// Run the orchestrator agent for a single autonomous turn using the
-/// already-loaded config.
-async fn run_autonomous(mut config: Config, prompt: &str, run_id: &str) -> Result<String, String> {
+/// A resolved executor: which built-in agent definition to build, an optional
+/// system-prompt suffix carrying a personality identity or skill guidelines,
+/// and a label for logs/telemetry.
+#[derive(Debug, Clone, PartialEq)]
+struct ResolvedExecutor {
+    agent_id: String,
+    prompt_suffix: Option<String>,
+    label: String,
+}
+
+impl ResolvedExecutor {
+    fn default_agent() -> Self {
+        Self {
+            agent_id: "orchestrator".to_string(),
+            prompt_suffix: None,
+            label: "default".to_string(),
+        }
+    }
+}
+
+/// Map a card's `assigned_agent` handle to one of three executor presets:
+/// **personality** (scoped SOUL/MEMORY folded into the prompt suffix, run as
+/// that profile's agent), **skill** (orchestrator seeded with the skill's
+/// `SKILL.md` guidelines), or **built-in agent**. An unset or unresolved handle
+/// degrades to the default `orchestrator` — "use the personality if valid,
+/// otherwise the default agent."
+fn resolve_executor(workspace_dir: &Path, assigned: Option<&str>) -> ResolvedExecutor {
+    let Some(handle) = assigned.map(str::trim).filter(|s| !s.is_empty()) else {
+        return ResolvedExecutor::default_agent();
+    };
+    if handle == "orchestrator" {
+        return ResolvedExecutor::default_agent();
+    }
+
+    // 1) Personality (#2895): a user-defined profile with scoped identity.
+    if let Ok(state) = crate::openhuman::agent::profiles::load_profiles(workspace_dir) {
+        if let Some(profile) = state.profiles.iter().find(|p| p.id == handle) {
+            let ctx = PersonalityContext::from_profile(workspace_dir, profile.clone());
+            let mut preamble = format!(
+                "You are acting as the personality `{}` (\"{}\"). {}",
+                profile.id, profile.name, profile.description
+            );
+            if let Some(soul) = &ctx.soul_md_override {
+                preamble.push_str("\n\n[Personality SOUL.md]\n");
+                preamble.push_str(&truncate_chars(soul, EXECUTOR_PREAMBLE_MAX_CHARS));
+            }
+            if let Some(mem) = &ctx.memory_md_override {
+                preamble.push_str("\n\n[Personality MEMORY.md]\n");
+                preamble.push_str(&truncate_chars(mem, EXECUTOR_PREAMBLE_MAX_CHARS));
+            }
+            return ResolvedExecutor {
+                agent_id: profile.agent_id.clone(),
+                prompt_suffix: Some(preamble),
+                label: format!("personality:{handle}"),
+            };
+        }
+    }
+
+    // 2) Skill (#2824): the same autonomous run, seeded with SKILL.md.
+    if let Some(skill) = crate::openhuman::skills::registry::get_skill(workspace_dir, handle) {
+        let guidelines = match &skill.definition.system_prompt {
+            PromptSource::Inline(s) => truncate_chars(s, EXECUTOR_PREAMBLE_MAX_CHARS),
+            _ => String::new(),
+        };
+        let suffix = format!(
+            "You are executing this task as the skill `{handle}`. Follow these skill \
+             guidelines exactly:\n\n{guidelines}"
+        );
+        return ResolvedExecutor {
+            agent_id: "orchestrator".to_string(),
+            prompt_suffix: Some(suffix),
+            label: format!("skill:{handle}"),
+        };
+    }
+
+    // 3) Built-in agent definition.
+    if AgentDefinitionRegistry::global()
+        .and_then(|r| r.get(handle))
+        .is_some()
+    {
+        return ResolvedExecutor {
+            agent_id: handle.to_string(),
+            prompt_suffix: None,
+            label: format!("agent:{handle}"),
+        };
+    }
+
+    // 4) Unresolved → degrade to the default agent (don't fail the card).
+    tracing::warn!(
+        handle = %handle,
+        "[task_dispatcher] assigned executor did not resolve to a personality/skill/agent; \
+         using default orchestrator"
+    );
+    ResolvedExecutor {
+        label: "default-fallback".to_string(),
+        ..ResolvedExecutor::default_agent()
+    }
+}
+
+/// Run the resolved executor as a single autonomous turn using the
+/// already-loaded config. The executor's prompt suffix (personality identity or
+/// skill guidelines) rides in the system prompt; the card goal is the turn input.
+async fn run_autonomous(
+    mut config: Config,
+    executor: &ResolvedExecutor,
+    prompt: &str,
+    run_id: &str,
+) -> Result<String, String> {
     config.agent.max_tool_iterations = TASK_RUN_MAX_ITERATIONS;
     // Match skill-run egress handling: only widen to the permissive default
     // when the operator hasn't configured an explicit allow-list.
@@ -190,11 +313,17 @@ async fn run_autonomous(mut config: Config, prompt: &str, run_id: &str) -> Resul
         config.http_request.allowed_domains = vec!["*".to_string()];
     }
 
-    let mut agent = Agent::from_config_for_agent(&config, "orchestrator")
-        .map_err(|e| format!("build agent: {e:#}"))?;
+    let mut agent = Agent::from_config_for_agent_with_profile(
+        &config,
+        &executor.agent_id,
+        None,
+        executor.prompt_suffix.clone(),
+    )
+    .map_err(|e| format!("build agent: {e:#}"))?;
     agent.set_event_context(run_id.to_string(), "task");
     agent.set_agent_definition_name(format!(
-        "orchestrator-task-{}",
+        "task-{}-{}",
+        executor.label,
         run_id.get(..8).unwrap_or(run_id)
     ));
 
@@ -511,5 +640,25 @@ mod tests {
             card_with("todo-high", TaskCardStatus::Todo, Some(0.9), 1),
         ];
         assert_eq!(pick_next_todo(&cards).unwrap().id, "todo-high");
+    }
+
+    #[test]
+    fn resolver_defaults_to_orchestrator_for_unset_or_orchestrator_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        for handle in [None, Some(""), Some("   "), Some("orchestrator")] {
+            let r = resolve_executor(dir.path(), handle);
+            assert_eq!(r.agent_id, "orchestrator");
+            assert_eq!(r.label, "default");
+            assert!(r.prompt_suffix.is_none());
+        }
+    }
+
+    #[test]
+    fn resolver_degrades_to_default_for_unresolved_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = resolve_executor(dir.path(), Some("no-such-executor-xyz"));
+        assert_eq!(r.agent_id, "orchestrator");
+        assert_eq!(r.label, "default-fallback");
+        assert!(r.prompt_suffix.is_none());
     }
 }
