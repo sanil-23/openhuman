@@ -26,8 +26,13 @@ use super::types::{
 };
 
 /// Compute an edit-aware content hash for a task. Two fetches of the
-/// same `external_id` whose title/body/status/updated_at differ produce
+/// same `external_id` whose title/body/status/updated_at/url differ produce
 /// different hashes, so an *edited* upstream item re-ingests.
+///
+/// `url` is part of the canonical form because it is load-bearing downstream
+/// (it lands in the card's `source_metadata`/notes and drives external
+/// write-back); a provider that edits the URL without advancing `updated_at`
+/// would otherwise leave a stale link on the board.
 ///
 /// Uses SHA-256 over a canonical field-delimited representation so the
 /// digest is stable across Rust/toolchain versions (the dedup key is
@@ -35,11 +40,12 @@ use super::types::{
 /// re-ingests after a toolchain bump).
 pub fn content_hash(task: &NormalizedTask) -> String {
     let canonical = format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
         task.title,
         task.body.as_deref().unwrap_or(""),
         task.status.as_deref().unwrap_or(""),
         task.updated_at.as_deref().unwrap_or(""),
+        task.url.as_deref().unwrap_or(""),
     );
     let digest = Sha256::digest(canonical.as_bytes());
     format!("{digest:x}")
