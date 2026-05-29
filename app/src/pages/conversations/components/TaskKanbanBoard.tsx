@@ -24,11 +24,34 @@ const COLUMN_DEFS: ColumnDef[] = [
 
 const STATUS_INDEX = new Map(COLUMN_DEFS.map((column, index) => [column.status, index]));
 
+/** Whether a status owns a kanban column (vs the approval-flow statuses that
+ *  are bucketed into an existing column). */
+function isColumnStatus(status: TaskBoardCardStatus): boolean {
+  return STATUS_INDEX.has(status);
+}
+
+/** Map a card status to the column it renders under. The approval-flow
+ *  statuses don't get their own columns: pre-execution ones sit in `todo`,
+ *  `rejected` sits with `blocked`. */
+function columnFor(status: TaskBoardCardStatus): TaskBoardCardStatus {
+  switch (status) {
+    case 'awaiting_approval':
+    case 'ready':
+      return 'todo';
+    case 'rejected':
+      return 'blocked';
+    default:
+      return status;
+  }
+}
+
 interface TaskKanbanBoardProps {
   board: TaskBoard;
   disabled?: boolean;
   onMove?: (card: TaskBoardCard, status: TaskBoardCardStatus) => void;
   onUpdateCard?: (card: TaskBoardCard, nextCard: TaskBoardCard) => void;
+  /** Approve/reject a card awaiting plan approval. */
+  onDecidePlan?: (card: TaskBoardCard, approve: boolean) => void;
 }
 
 export function TaskKanbanBoard({
@@ -36,6 +59,7 @@ export function TaskKanbanBoard({
   disabled = false,
   onMove,
   onUpdateCard,
+  onDecidePlan,
 }: TaskKanbanBoardProps) {
   const { t } = useT();
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
@@ -55,7 +79,7 @@ export function TaskKanbanBoard({
   );
 
   for (const card of [...board.cards].sort((a, b) => a.order - b.order)) {
-    cardsByStatus[card.status]?.push(card);
+    cardsByStatus[columnFor(card.status)]?.push(card);
   }
 
   const moveCard = (card: TaskBoardCard, direction: -1 | 1) => {
@@ -97,7 +121,26 @@ export function TaskKanbanBoard({
                     <p className="min-w-0 flex-1 break-words text-xs font-medium leading-snug text-stone-800 dark:text-neutral-100">
                       {card.title}
                     </p>
-                    {onMove && (
+                    {card.status === 'awaiting_approval' && onDecidePlan ? (
+                      <div className="flex flex-shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          title={t('chat.approval.approve')}
+                          disabled={disabled}
+                          onClick={() => onDecidePlan(card, true)}
+                          className="rounded-md bg-ocean-600 px-1.5 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-ocean-700 disabled:opacity-40">
+                          {t('chat.approval.approve')}
+                        </button>
+                        <button
+                          type="button"
+                          title={t('chat.approval.deny')}
+                          disabled={disabled}
+                          onClick={() => onDecidePlan(card, false)}
+                          className="rounded-md border border-stone-200 px-1.5 py-0.5 text-[10px] font-medium text-stone-600 transition-colors hover:bg-stone-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800">
+                          {t('chat.approval.deny')}
+                        </button>
+                      </div>
+                    ) : onMove && isColumnStatus(card.status) ? (
                       <div className="flex flex-shrink-0 items-center gap-0.5">
                         <button
                           type="button"
@@ -118,7 +161,7 @@ export function TaskKanbanBoard({
                           <LuArrowRight className="h-3 w-3" />
                         </button>
                       </div>
-                    )}
+                    ) : null}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {card.assignedAgent && (
