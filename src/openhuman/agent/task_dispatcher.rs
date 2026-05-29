@@ -100,6 +100,20 @@ pub fn build_task_prompt(card: &TaskBoardCard) -> String {
         if let Some(u) = url {
             lines.push(format!("Source link: {u}"));
         }
+        // G9b — agent-driven external write-back. When the upstream item is
+        // addressable (provider + id), instruct the agent to close the loop on
+        // the source itself via its integration tools. Runs under the
+        // connection's existing write scope (no extra approval gate); if it
+        // can't, it reports that instead of failing.
+        if provider.is_some() && external_id.is_some() {
+            lines.push(format!(
+                "\nWhen the task is complete, record the outcome on the upstream source ({}): use \
+                 your integration tools to add a comment summarising the resolution and, if the \
+                 work fully addresses it, close/resolve the item. If you lack the permission or \
+                 connection to do so, say so in your final summary instead of guessing.",
+                origin.trim()
+            ));
+        }
     }
 
     lines.push(
@@ -567,6 +581,30 @@ mod tests {
     fn prompt_omits_source_block_without_metadata() {
         let p = build_task_prompt(&card(Some("Do it")));
         assert!(!p.contains("memory_recall"));
+        assert!(!p.contains("record the outcome on the upstream source"));
+    }
+
+    #[test]
+    fn prompt_includes_external_writeback_when_addressable() {
+        let mut c = card(Some("Resolve issue"));
+        c.source_metadata = Some(json!({
+            "provider": "github",
+            "repo": "octo/repo",
+            "external_id": "123",
+        }));
+        let p = build_task_prompt(&c);
+        assert!(p.contains("record the outcome on the upstream source"));
+        assert!(p.contains("close/resolve the item"));
+    }
+
+    #[test]
+    fn prompt_omits_writeback_when_not_addressable() {
+        // Urgency-only metadata (no provider/external_id) can't address an
+        // upstream item, so no write-back instruction.
+        let mut c = card(Some("Do it"));
+        c.source_metadata = Some(json!({ "urgency": 0.5 }));
+        let p = build_task_prompt(&c);
+        assert!(!p.contains("record the outcome on the upstream source"));
     }
 
     #[test]
