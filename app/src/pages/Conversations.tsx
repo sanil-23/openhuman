@@ -84,6 +84,7 @@ import {
   getComposerBlockedSendFeedback,
   handleComposerSlashCommand,
 } from './conversations/composerSendDecision';
+import { runDecidePlan } from './conversations/taskPlanActions';
 import {
   type AgentBubblePosition,
   buildAcceptedInlineCompletion,
@@ -1120,19 +1121,6 @@ const Conversations = ({
     }
   };
 
-  const handleDecidePlan = async (card: TaskBoardCard, approve: boolean): Promise<void> => {
-    if (!selectedThreadId) return;
-    try {
-      const saved = await threadApi.decidePlan(selectedThreadId, card.id, approve);
-      if (saved) {
-        dispatch(setTaskBoardForThread({ threadId: selectedThreadId, board: saved }));
-      }
-    } catch (error) {
-      debug('decidePlan failed: %o', error);
-      setSendAdvisory(t('conversations.taskKanban.updateFailed'));
-    }
-  };
-
   const handleUpdateTaskCard = async (
     card: TaskBoardCard,
     nextCard: TaskBoardCard
@@ -1598,7 +1586,14 @@ const Conversations = ({
                     void handleUpdateTaskCard(card, nextCard);
                   }}
                   onDecidePlan={(card, approve) => {
-                    void handleDecidePlan(card, approve);
+                    void runDecidePlan({
+                      threadId: selectedThreadId,
+                      card,
+                      approve,
+                      dispatch,
+                      notify: setSendAdvisory,
+                      t,
+                    });
                   }}
                 />
               )}
