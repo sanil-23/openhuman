@@ -92,14 +92,23 @@ pub async fn apply_decision(run: TriageRun, envelope: &TriggerEnvelope) -> anyho
             // firing both is safe. Non-card triggers (composio/webhook/cron)
             // fall through to the one-shot triage sub-agent below.
             if let Some(link) = &envelope.card_link {
+                use crate::openhuman::agent::task_dispatcher::DispatchOutcome;
                 match dispatch_linked_card(link).await {
-                    Ok(run_id) => {
+                    Ok(DispatchOutcome::Running { run_id }) => {
                         tracing::info!(
                             card_id = %link.card_id,
                             run_id = %run_id,
                             "[triage::escalation] task-card dispatched to deterministic runner"
                         );
                         events::publish_escalated(envelope, "task_dispatcher");
+                    }
+                    Ok(DispatchOutcome::AwaitingApproval) => {
+                        // Parked for plan approval (autonomy gate). Not an
+                        // escalation yet — the approval flow resumes it.
+                        tracing::info!(
+                            card_id = %link.card_id,
+                            "[triage::escalation] task-card parked awaiting plan approval"
+                        );
                     }
                     Err(reason) => {
                         // A failed claim (another card already in progress, or
@@ -301,7 +310,9 @@ async fn dispatch_target_agent(agent_id: &str, prompt: &str) -> anyhow::Result<S
 /// dispatcher (claim → autonomous run → write-back). Errors (card not found,
 /// or claim rejected because another card is already in progress) propagate to
 /// the caller, which treats them as benign skips.
-async fn dispatch_linked_card(link: &TaskCardLink) -> Result<String, String> {
+async fn dispatch_linked_card(
+    link: &TaskCardLink,
+) -> Result<crate::openhuman::agent::task_dispatcher::DispatchOutcome, String> {
     let snapshot = crate::openhuman::todos::ops::list(&link.location)?;
     let card = snapshot
         .cards

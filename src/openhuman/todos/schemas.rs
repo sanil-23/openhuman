@@ -19,6 +19,7 @@ pub fn all_controller_schemas() -> Vec<ControllerSchema> {
         schemas("add"),
         schemas("edit"),
         schemas("update_status"),
+        schemas("decide_plan"),
         schemas("remove"),
         schemas("replace"),
         schemas("clear"),
@@ -42,6 +43,10 @@ pub fn all_registered_controllers() -> Vec<RegisteredController> {
         RegisteredController {
             schema: schemas("update_status"),
             handler: handle_update_status,
+        },
+        RegisteredController {
+            schema: schemas("decide_plan"),
+            handler: handle_decide_plan,
         },
         RegisteredController {
             schema: schemas("remove"),
@@ -137,7 +142,27 @@ pub fn schemas(function: &str) -> ControllerSchema {
             inputs: vec![
                 thread_id_input(),
                 required_string("id", "Card identifier."),
-                required_string("status", "New status (todo|in_progress|blocked|done)."),
+                required_string(
+                    "status",
+                    "New status (todo|awaiting_approval|ready|in_progress|blocked|done|rejected).",
+                ),
+            ],
+            outputs: vec![snapshot_output()],
+        },
+        "decide_plan" => ControllerSchema {
+            namespace: "todos",
+            function: "decide_plan",
+            description: "Approve or reject a card awaiting plan approval \
+                          (approve → ready/runnable; reject → rejected).",
+            inputs: vec![
+                thread_id_input(),
+                required_string("id", "Card identifier."),
+                FieldSchema {
+                    name: "approve",
+                    ty: TypeSchema::Bool,
+                    comment: "true to approve (card becomes runnable), false to reject.",
+                    required: true,
+                },
             ],
             outputs: vec![snapshot_output()],
         },
@@ -261,6 +286,13 @@ struct RemoveParams {
 }
 
 #[derive(Debug, Deserialize)]
+struct DecidePlanParams {
+    thread_id: String,
+    id: String,
+    approve: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct ReplaceParams {
     thread_id: String,
     cards: Vec<TaskBoardCard>,
@@ -334,6 +366,20 @@ fn handle_update_status(params: Map<String, Value>) -> ControllerFuture {
             "[rpc][todos] update_status entry"
         );
         snapshot_to_json(ops::update_status(&loc, &p.id, status)?)
+    })
+}
+
+fn handle_decide_plan(params: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move {
+        let p = parse::<DecidePlanParams>(params)?;
+        let loc = thread_location(&p.thread_id).await?;
+        tracing::debug!(
+            thread_id = %p.thread_id,
+            id = %p.id,
+            approve = p.approve,
+            "[rpc][todos] decide_plan entry"
+        );
+        snapshot_to_json(ops::decide_plan(&loc, &p.id, p.approve)?)
     })
 }
 

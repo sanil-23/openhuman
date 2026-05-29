@@ -656,6 +656,10 @@ pub enum DomainEvent {
         provider: String,
         error: String,
     },
+    /// A task-board card needs human plan approval before the dispatcher will
+    /// execute it (emitted when `autonomy.require_task_plan_approval` is on and
+    /// the dispatcher parks a `todo` card at `awaiting_approval`).
+    TaskPlanAwaitingApproval { card_id: String, thread_id: String },
 }
 
 impl DomainEvent {
@@ -747,6 +751,8 @@ impl DomainEvent {
             | Self::TaskSourceTaskIngested { .. }
             | Self::TaskSourceFetchFailed { .. } => "task_sources",
 
+            Self::TaskPlanAwaitingApproval { .. } => "agent",
+
             Self::ApprovalRequested { .. } | Self::ApprovalDecided { .. } => "approval",
 
             Self::McpServerInstalled { .. }
@@ -837,6 +843,7 @@ impl DomainEvent {
             Self::TaskSourceFetched { .. } => "TaskSourceFetched",
             Self::TaskSourceTaskIngested { .. } => "TaskSourceTaskIngested",
             Self::TaskSourceFetchFailed { .. } => "TaskSourceFetchFailed",
+            Self::TaskPlanAwaitingApproval { .. } => "TaskPlanAwaitingApproval",
         }
     }
 

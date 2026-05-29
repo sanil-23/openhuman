@@ -36,11 +36,14 @@ fn maybe_scratch_lock(location: &BoardLocation) -> Option<MutexGuard<'static, ()
 pub fn parse_status(raw: &str) -> Result<TaskCardStatus, String> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "todo" | "pending" => Ok(TaskCardStatus::Todo),
+        "awaiting_approval" | "awaiting-approval" => Ok(TaskCardStatus::AwaitingApproval),
+        "ready" | "approved" => Ok(TaskCardStatus::Ready),
         "in_progress" | "in-progress" | "inprogress" | "started" => Ok(TaskCardStatus::InProgress),
         "blocked" => Ok(TaskCardStatus::Blocked),
         "done" | "completed" | "complete" => Ok(TaskCardStatus::Done),
+        "rejected" | "denied" => Ok(TaskCardStatus::Rejected),
         other => Err(format!(
-            "invalid status '{other}' (expected todo|in_progress|blocked|done)"
+            "invalid status '{other}' (expected todo|awaiting_approval|ready|in_progress|blocked|done|rejected)"
         )),
     }
 }
@@ -161,10 +164,12 @@ pub fn render_markdown(cards: &[TaskBoardCard]) -> String {
     let mut out = String::new();
     for card in cards {
         let marker = match card.status {
-            TaskCardStatus::Todo => "[ ]",
+            TaskCardStatus::Todo | TaskCardStatus::Ready => "[ ]",
+            TaskCardStatus::AwaitingApproval => "[?]",
             TaskCardStatus::InProgress => "[~]",
             TaskCardStatus::Blocked => "[!]",
             TaskCardStatus::Done => "[x]",
+            TaskCardStatus::Rejected => "[-]",
         };
         out.push_str("- ");
         out.push_str(marker);
@@ -352,6 +357,34 @@ pub fn update_status(
     )
 }
 
+/// Resolve a plan-approval decision: approve (→`Ready`, so the dispatcher runs
+/// it) or reject (→`Rejected`). Errors unless the card is currently
+/// `AwaitingApproval`, so a stale/duplicate decision can't resurrect a card
+/// that already moved on.
+pub fn decide_plan(
+    location: &BoardLocation,
+    id: &str,
+    approve: bool,
+) -> Result<TodosSnapshot, String> {
+    let cards = load_cards(location)?;
+    let current = cards
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| format!("todo id '{id}' not found"))?;
+    if current.status != TaskCardStatus::AwaitingApproval {
+        return Err(format!(
+            "card '{id}' is not awaiting approval (status: {})",
+            current.status.as_str()
+        ));
+    }
+    let new_status = if approve {
+        TaskCardStatus::Ready
+    } else {
+        TaskCardStatus::Rejected
+    };
+    update_status(location, id, new_status)
+}
+
 /// Remove a card by id. Errors if `id` is unknown.
 pub fn remove(location: &BoardLocation, id: &str) -> Result<TodosSnapshot, String> {
     tracing::debug!(
@@ -485,6 +518,13 @@ mod tests {
         );
         assert_eq!(parse_status("blocked").unwrap(), TaskCardStatus::Blocked);
         assert_eq!(parse_status("done").unwrap(), TaskCardStatus::Done);
+        assert_eq!(
+            parse_status("awaiting_approval").unwrap(),
+            TaskCardStatus::AwaitingApproval
+        );
+        assert_eq!(parse_status("ready").unwrap(), TaskCardStatus::Ready);
+        assert_eq!(parse_status("approved").unwrap(), TaskCardStatus::Ready);
+        assert_eq!(parse_status("rejected").unwrap(), TaskCardStatus::Rejected);
         assert!(parse_status("nope").is_err());
     }
 
@@ -594,6 +634,27 @@ mod tests {
             snap2.cards[0].source_metadata.as_ref().unwrap()["external_id"],
             serde_json::json!("8")
         );
+    }
+
+    #[test]
+    fn decide_plan_approves_and_rejects_only_when_awaiting() {
+        let dir = tempdir().unwrap();
+        let loc = thread_loc(dir.path(), "t1");
+        let added = add(&loc, "task", CardPatch::default()).unwrap();
+        let id = added.cards[0].id.clone();
+
+        // A todo card isn't awaiting approval yet → decision rejected.
+        assert!(decide_plan(&loc, &id, true).is_err());
+
+        // Park it, then approve → Ready.
+        update_status(&loc, &id, TaskCardStatus::AwaitingApproval).unwrap();
+        let approved = decide_plan(&loc, &id, true).unwrap();
+        assert_eq!(approved.cards[0].status, TaskCardStatus::Ready);
+
+        // Re-park, then reject → Rejected.
+        update_status(&loc, &id, TaskCardStatus::AwaitingApproval).unwrap();
+        let rejected = decide_plan(&loc, &id, false).unwrap();
+        assert_eq!(rejected.cards[0].status, TaskCardStatus::Rejected);
     }
 
     #[test]

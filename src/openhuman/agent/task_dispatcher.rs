@@ -104,20 +104,59 @@ pub fn build_task_prompt(card: &TaskBoardCard) -> String {
     lines.join("\n")
 }
 
-/// Dispatch one card: claim it, run an autonomous turn, write the result back.
+/// Outcome of a dispatch attempt.
+#[derive(Debug)]
+pub enum DispatchOutcome {
+    /// The card was claimed and a detached autonomous run was spawned.
+    Running { run_id: String },
+    /// Plan approval is required; the card was parked at `awaiting_approval`
+    /// and a `TaskPlanAwaitingApproval` event was emitted. No run was spawned.
+    AwaitingApproval,
+}
+
+/// Dispatch one card: gate on plan approval, claim it, run an autonomous turn,
+/// write the result back.
 ///
-/// Returns the dispatch `run_id` once the card is claimed and the detached run
-/// has been spawned. Returns `Err` *without* spawning if the claim fails — most
-/// commonly because another card on the board is already `in_progress`
-/// (`enforce_single_in_progress`), which is the intended per-board throttle; the
-/// caller (poller) simply tries again on its next tick.
-pub async fn dispatch_card(location: BoardLocation, card: TaskBoardCard) -> Result<String, String> {
+/// Returns `Ok(Running)` once the card is claimed and the detached run is
+/// spawned, `Ok(AwaitingApproval)` if the card was parked for human approval,
+/// or `Err` *without* spawning if the claim fails — most commonly because
+/// another card on the board is already `in_progress`
+/// (`enforce_single_in_progress`), the intended per-board throttle; the poller
+/// retries next tick.
+pub async fn dispatch_card(
+    location: BoardLocation,
+    card: TaskBoardCard,
+) -> Result<DispatchOutcome, String> {
     let card_id = card.id.clone();
+
+    let config = Config::load_or_init()
+        .await
+        .map_err(|e| format!("load config: {e:#}"))?;
+
+    // Plan-approval gate: when required, a `todo` card is parked for human
+    // approval before it can run. `Ready` cards have already been approved, so
+    // they bypass the gate; `todo` cards with approval disabled run directly.
+    if config.autonomy.require_task_plan_approval && card.status == TaskCardStatus::Todo {
+        ops::update_status(&location, &card_id, TaskCardStatus::AwaitingApproval).map_err(|e| {
+            format!("[task_dispatcher] park-for-approval failed for {card_id}: {e}")
+        })?;
+        if let Some(thread_id) = location.thread_id() {
+            crate::core::event_bus::publish_global(
+                crate::core::event_bus::DomainEvent::TaskPlanAwaitingApproval {
+                    card_id: card_id.clone(),
+                    thread_id: thread_id.to_string(),
+                },
+            );
+        }
+        tracing::info!(card_id = %card_id, "[task_dispatcher] parked card awaiting plan approval");
+        return Ok(DispatchOutcome::AwaitingApproval);
+    }
+
     let prompt = build_task_prompt(&card);
 
-    // Claim the card. The Todo→InProgress transition doubles as the lock:
-    // `enforce_single_in_progress` rejects a second concurrent in-progress
-    // card, so a failed claim means "something else is running" → skip.
+    // Claim the card. Todo|Ready→InProgress; `enforce_single_in_progress`
+    // rejects a second concurrent in-progress card, so a failed claim means
+    // "something else is running" → skip.
     ops::update_status(&location, &card_id, TaskCardStatus::InProgress)
         .map_err(|e| format!("[task_dispatcher] claim failed for card {card_id}: {e}"))?;
 
@@ -126,24 +165,24 @@ pub async fn dispatch_card(location: BoardLocation, card: TaskBoardCard) -> Resu
         card_id = %card_id,
         run_id = %run_id,
         prompt_chars = prompt.chars().count(),
-        "[task_dispatcher] card claimed (todo→in_progress), spawning autonomous run"
+        "[task_dispatcher] card claimed (→in_progress), spawning autonomous run"
     );
 
     let run_id_for_return = run_id.clone();
     let location_for_run = location.clone();
     tokio::spawn(async move {
-        let outcome = run_autonomous(&prompt, &run_id).await;
+        let outcome = run_autonomous(config, &prompt, &run_id).await;
         write_back(&location_for_run, &card_id, &run_id, outcome);
     });
 
-    Ok(run_id_for_return)
+    Ok(DispatchOutcome::Running {
+        run_id: run_id_for_return,
+    })
 }
 
-/// Build the orchestrator agent fresh and run a single autonomous turn.
-async fn run_autonomous(prompt: &str, run_id: &str) -> Result<String, String> {
-    let mut config = Config::load_or_init()
-        .await
-        .map_err(|e| format!("load config: {e:#}"))?;
+/// Run the orchestrator agent for a single autonomous turn using the
+/// already-loaded config.
+async fn run_autonomous(mut config: Config, prompt: &str, run_id: &str) -> Result<String, String> {
     config.agent.max_tool_iterations = TASK_RUN_MAX_ITERATIONS;
     // Match skill-run egress handling: only widen to the permissive default
     // when the operator hasn't configured an explicit allow-list.
@@ -305,12 +344,14 @@ pub(crate) async fn poll_once() -> Result<(), String> {
     dispatch_card(location, card).await.map(|_| ())
 }
 
-/// Highest-urgency `todo` card (urgency from `source_metadata.urgency`,
-/// default 0.0; ties broken toward the lower board `order`). Returns a clone.
+/// Highest-urgency dispatchable card (`todo` or approved `ready`; urgency from
+/// `source_metadata.urgency`, default 0.0; ties broken toward the lower board
+/// `order`). Returns a clone. `dispatch_card` then either runs a `ready` card
+/// or parks a `todo` one for approval, per the autonomy setting.
 fn pick_next_todo(cards: &[TaskBoardCard]) -> Option<TaskBoardCard> {
     cards
         .iter()
-        .filter(|c| c.status == TaskCardStatus::Todo)
+        .filter(|c| matches!(c.status, TaskCardStatus::Todo | TaskCardStatus::Ready))
         .max_by(|a, b| {
             card_urgency(a)
                 .partial_cmp(&card_urgency(b))
@@ -449,5 +490,26 @@ mod tests {
     fn poller_returns_none_when_no_todo_cards() {
         let cards = vec![card_with("a", TaskCardStatus::Done, Some(0.9), 0)];
         assert!(pick_next_todo(&cards).is_none());
+    }
+
+    #[test]
+    fn poller_dispatches_ready_cards_and_skips_approval_states() {
+        // Approved `ready` cards are dispatchable; `awaiting_approval` and
+        // `rejected` are not.
+        let cards = vec![
+            card_with("await", TaskCardStatus::AwaitingApproval, Some(0.99), 0),
+            card_with("rej", TaskCardStatus::Rejected, Some(0.95), 1),
+            card_with("ready", TaskCardStatus::Ready, Some(0.5), 2),
+        ];
+        assert_eq!(pick_next_todo(&cards).unwrap().id, "ready");
+    }
+
+    #[test]
+    fn poller_prefers_higher_urgency_across_todo_and_ready() {
+        let cards = vec![
+            card_with("ready-low", TaskCardStatus::Ready, Some(0.3), 0),
+            card_with("todo-high", TaskCardStatus::Todo, Some(0.9), 1),
+        ];
+        assert_eq!(pick_next_todo(&cards).unwrap().id, "todo-high");
     }
 }
