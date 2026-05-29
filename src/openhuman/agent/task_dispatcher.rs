@@ -1,10 +1,11 @@
 //! Deterministic task-card dispatcher.
 //!
-//! Turns a [`TaskBoardCard`] into work: it **claims** the card (flips it to
-//! `in_progress`, which `todos::ops::enforce_single_in_progress` makes a
-//! per-board mutual-exclusion lock), runs a single **autonomous agent turn**
-//! toward the card's objective, and **writes the outcome back** to the board
-//! (`done` + evidence on success, `blocked` + reason on failure).
+//! Turns a [`TaskBoardCard`] into work: it **claims** the card via a
+//! compare-and-set (re-load the board and transition only a `Todo`/`Ready`
+//! card to `in_progress`, so a stale/concurrent re-dispatch of the same card
+//! is rejected), runs a single **autonomous agent turn** toward the card's
+//! objective, and **writes the outcome back** to the board (`done` + evidence
+//! on success, `blocked` + reason on failure).
 //!
 //! This is the one executor both dispatch paths converge on:
 //! - the **board poller** (cards that arrived without a proactive trigger), and
@@ -89,7 +90,9 @@ pub fn build_task_prompt(card: &TaskBoardCard) -> String {
         if let Some(id) = external_id {
             origin.push_str(&format!("#{id}"));
         }
-        if !origin.trim().is_empty() {
+        // Gate on a known provider so the origin string is always meaningful
+        // (an id-only card would render "#123" with a leading space).
+        if provider.is_some() {
             lines.push(format!(
                 "\nThis task originates from {}. Its activity has been ingested into memory — use \
                  your memory_recall tool to pull related context (prior discussion, linked items) \
@@ -140,10 +143,9 @@ pub enum DispatchOutcome {
 ///
 /// Returns `Ok(Running)` once the card is claimed and the detached run is
 /// spawned, `Ok(AwaitingApproval)` if the card was parked for human approval,
-/// or `Err` *without* spawning if the claim fails — most commonly because
-/// another card on the board is already `in_progress`
-/// (`enforce_single_in_progress`), the intended per-board throttle; the poller
-/// retries next tick.
+/// or `Err` *without* spawning when the card is no longer claimable — its
+/// freshly-loaded status isn't `Todo`/`Ready` (already running/done, or another
+/// dispatcher won the claim). Benign: the poller retries next tick.
 pub async fn dispatch_card(
     location: BoardLocation,
     card: TaskBoardCard,
@@ -154,10 +156,32 @@ pub async fn dispatch_card(
         .await
         .map_err(|e| format!("load config: {e:#}"))?;
 
+    // Claim CAS: re-load the card's CURRENT status before acting. The passed-in
+    // `card` may be stale — the poller and the proactive triage arm can target
+    // the same card, and a re-triggered card may already be running or done.
+    // Only `Todo`/`Ready` are claimable. This is what actually dedupes a
+    // double-dispatch: `enforce_single_in_progress` alone does NOT, because
+    // re-flipping an already-`InProgress` card to `InProgress` keeps the count
+    // at one (→ `Ok`). Thread boards aren't lock-serialised, so a narrow TOCTOU
+    // window between this read and the write remains; a fully race-free claim
+    // needs a per-thread-locked compare-and-set `ops` primitive (follow-up).
+    let current_status = ops::list(&location)
+        .map_err(|e| format!("[task_dispatcher] reload before claim failed for {card_id}: {e}"))?
+        .cards
+        .into_iter()
+        .find(|c| c.id == card_id)
+        .map(|c| c.status)
+        .ok_or_else(|| format!("[task_dispatcher] card {card_id} not found on board; skipping"))?;
+    if !matches!(current_status, TaskCardStatus::Todo | TaskCardStatus::Ready) {
+        return Err(format!(
+            "[task_dispatcher] card {card_id} not claimable (status: {}); skipping",
+            current_status.as_str()
+        ));
+    }
+
     // Plan-approval gate: when required, a `todo` card is parked for human
-    // approval before it can run. `Ready` cards have already been approved, so
-    // they bypass the gate; `todo` cards with approval disabled run directly.
-    if config.autonomy.require_task_plan_approval && card.status == TaskCardStatus::Todo {
+    // approval before it can run. `Ready` (already approved) bypasses.
+    if config.autonomy.require_task_plan_approval && current_status == TaskCardStatus::Todo {
         ops::update_status(&location, &card_id, TaskCardStatus::AwaitingApproval).map_err(|e| {
             format!("[task_dispatcher] park-for-approval failed for {card_id}: {e}")
         })?;
@@ -175,19 +199,11 @@ pub async fn dispatch_card(
 
     let prompt = build_task_prompt(&card);
 
-    // Claim the card. Todo|Ready→InProgress; `enforce_single_in_progress`
-    // rejects a second concurrent in-progress card, so a failed claim means
-    // "something else is running" → skip.
+    // Claim: Todo|Ready→InProgress.
     ops::update_status(&location, &card_id, TaskCardStatus::InProgress)
         .map_err(|e| format!("[task_dispatcher] claim failed for card {card_id}: {e}"))?;
 
     let run_id = uuid::Uuid::new_v4().to_string();
-    tracing::info!(
-        card_id = %card_id,
-        run_id = %run_id,
-        prompt_chars = prompt.chars().count(),
-        "[task_dispatcher] card claimed (→in_progress), spawning autonomous run"
-    );
 
     // Resolve which executor runs this card: default agent, a personality, or
     // a skill — one autonomous-run interface, three presets (G4 + G3).
@@ -197,6 +213,7 @@ pub async fn dispatch_card(
         run_id = %run_id,
         executor = %executor.label,
         agent_id = %executor.agent_id,
+        prompt_chars = prompt.chars().count(),
         "[task_dispatcher] card claimed (→in_progress), spawning autonomous run"
     );
 
@@ -314,6 +331,20 @@ fn resolve_executor(workspace_dir: &Path, assigned: Option<&str>) -> ResolvedExe
 /// Run the resolved executor as a single autonomous turn using the
 /// already-loaded config. The executor's prompt suffix (personality identity or
 /// skill guidelines) rides in the system prompt; the card goal is the turn input.
+///
+/// SECURITY / threat model (prompt injection): the card objective/content and
+/// `source_metadata` derive from external, attacker-influenceable text (e.g. a
+/// GitHub issue body anyone in a watched repo can file), and this background
+/// run is gate-free at the per-tool level (background turns auto-allow, like
+/// skill runs) while `build_task_prompt` may instruct it to write back to the
+/// upstream item. The interactive checkpoint is therefore the up-front
+/// **plan-approval gate** (`require_task_plan_approval`), which a human reviews
+/// before the run starts — not per-action egress/write approval. Egress is
+/// widened to `*` only when the operator set no explicit allow-list (matching
+/// skill runs, since real task work needs broad reach: git, package registries,
+/// provider APIs). Tightening egress to the source provider's domains for
+/// source-ingested runs is a considered follow-up (it would break general task
+/// work, so it needs to key off provenance) — tracked for a later PR.
 async fn run_autonomous(
     mut config: Config,
     executor: &ResolvedExecutor,
@@ -322,7 +353,8 @@ async fn run_autonomous(
 ) -> Result<String, String> {
     config.agent.max_tool_iterations = TASK_RUN_MAX_ITERATIONS;
     // Match skill-run egress handling: only widen to the permissive default
-    // when the operator hasn't configured an explicit allow-list.
+    // when the operator hasn't configured an explicit allow-list. See the
+    // threat-model note above on why `*` is the default here.
     if config.http_request.allowed_domains.is_empty() {
         config.http_request.allowed_domains = vec!["*".to_string()];
     }
@@ -698,5 +730,67 @@ mod tests {
         assert_eq!(r.agent_id, "orchestrator");
         assert_eq!(r.label, "default-fallback");
         assert!(r.prompt_suffix.is_none());
+    }
+
+    fn board_loc(dir: &std::path::Path) -> BoardLocation {
+        BoardLocation::Thread {
+            workspace_dir: dir.to_path_buf(),
+            thread_id: "t1".to_string(),
+        }
+    }
+
+    #[test]
+    fn write_back_marks_done_with_evidence_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let loc = board_loc(dir.path());
+        let id = ops::add(&loc, "do the thing", CardPatch::default())
+            .unwrap()
+            .cards[0]
+            .id
+            .clone();
+        ops::update_status(&loc, &id, TaskCardStatus::InProgress).unwrap();
+
+        write_back(
+            &loc,
+            &id,
+            "run-1",
+            Ok("completed: opened PR #5".to_string()),
+        );
+
+        let card = ops::list(&loc)
+            .unwrap()
+            .cards
+            .into_iter()
+            .find(|c| c.id == id)
+            .unwrap();
+        assert_eq!(card.status, TaskCardStatus::Done);
+        assert!(card.evidence.iter().any(|e| e.contains("opened PR #5")));
+    }
+
+    #[test]
+    fn write_back_marks_blocked_with_reason_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let loc = board_loc(dir.path());
+        let id = ops::add(&loc, "do the thing", CardPatch::default())
+            .unwrap()
+            .cards[0]
+            .id
+            .clone();
+        ops::update_status(&loc, &id, TaskCardStatus::InProgress).unwrap();
+
+        write_back(&loc, &id, "run-1", Err("agent build failed".to_string()));
+
+        let card = ops::list(&loc)
+            .unwrap()
+            .cards
+            .into_iter()
+            .find(|c| c.id == id)
+            .unwrap();
+        assert_eq!(card.status, TaskCardStatus::Blocked);
+        assert!(card
+            .blocker
+            .as_deref()
+            .unwrap_or_default()
+            .contains("agent build failed"));
     }
 }

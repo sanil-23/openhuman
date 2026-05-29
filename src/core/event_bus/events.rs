@@ -659,6 +659,14 @@ pub enum DomainEvent {
     /// A task-board card needs human plan approval before the dispatcher will
     /// execute it (emitted when `autonomy.require_task_plan_approval` is on and
     /// the dispatcher parks a `todo` card at `awaiting_approval`).
+    ///
+    /// Surfacing: the parked card is persisted with status `awaiting_approval`,
+    /// so the kanban board renders it with inline Approve/Reject on the next
+    /// board fetch/refresh — that is the current (poll-based) surface and the
+    /// reason this telemetry event has no dedicated subscriber yet. A realtime
+    /// socket bridge (à la `ApprovalRequested` → `approval_request`) is a
+    /// deliberate follow-up; emitting the event now lets that bridge attach
+    /// without a schema change.
     TaskPlanAwaitingApproval { card_id: String, thread_id: String },
 }
 
