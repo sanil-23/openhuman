@@ -205,6 +205,34 @@ fn frontmatter_parsing() {
 }
 
 #[test]
+fn parse_node_markdown_uses_deterministic_fallback_timestamps() {
+    // #2944: `updated_at` now flows into the system prompt as a freshness
+    // stamp, and the renderer relies on byte-stable output for KV-cache
+    // reuse. Legacy nodes that predate the `created_at`/`updated_at`
+    // frontmatter must therefore fall back deterministically — never to
+    // `Utc::now()`, which would change on every read and masquerade an
+    // undated node as "fresh today".
+
+    // No timestamps at all → both fall back to UNIX_EPOCH (renders as an
+    // unmistakably ancient date rather than today's).
+    let raw = "---\nnode_id: \"root\"\nlevel: root\n---\n\nUndated summary.";
+    let node = parse_node_markdown_pub(raw, "ns", "root").unwrap();
+    assert_eq!(node.created_at, DateTime::<Utc>::UNIX_EPOCH);
+    assert_eq!(node.updated_at, DateTime::<Utc>::UNIX_EPOCH);
+
+    // `created_at` present but `updated_at` missing → `updated_at` falls
+    // back to `created_at`, its best estimate of last-touched.
+    let raw =
+        "---\nnode_id: \"root\"\nlevel: root\ncreated_at: 2026-05-25T09:00:00Z\n---\n\nSummary.";
+    let node = parse_node_markdown_pub(raw, "ns", "root").unwrap();
+    let created = DateTime::parse_from_rfc3339("2026-05-25T09:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    assert_eq!(node.created_at, created);
+    assert_eq!(node.updated_at, created);
+}
+
+#[test]
 fn validate_node_id_accepts_valid() {
     assert!(validate_node_id("root").is_ok());
     assert!(validate_node_id("2024").is_ok());
