@@ -378,6 +378,59 @@ mod tests {
         assert!((urgency - 0.4).abs() < 1e-6, "urgency was {urgency}");
     }
 
+    fn temp_config() -> (tempfile::TempDir, Config) {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..Config::default()
+        };
+        std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        (tmp, config)
+    }
+
+    #[test]
+    fn add_card_stamps_objective_assigned_agent_and_metadata() {
+        let (_tmp, config) = temp_config();
+        let mut src = github_source(Some("octo/repo"));
+        // Whitespace around the executor must be trimmed into assigned_agent.
+        src.assigned_executor = Some("  agent-x  ".into());
+        let e = enriched("123", Some("https://github.com/octo/repo/issues/123"), 0.7);
+
+        add_card(&config, &src, &e, None).expect("add_card succeeds");
+
+        let cards = board_cards(&config).expect("board_cards");
+        assert_eq!(cards.len(), 1);
+        let card = &cards[0];
+        // Display title is the `[provider] title` form; objective is the bare title.
+        assert_eq!(card.title, "[GitHub] Fix the bug");
+        assert_eq!(card.objective.as_deref(), Some("Fix the bug"));
+        assert_eq!(card.assigned_agent.as_deref(), Some("agent-x"));
+        let meta = card
+            .source_metadata
+            .as_ref()
+            .expect("source_metadata present");
+        assert_eq!(meta["external_id"], json!("123"));
+        assert_eq!(meta["repo"], json!("octo/repo"));
+    }
+
+    #[test]
+    fn add_card_drops_whitespace_only_assigned_executor() {
+        let (_tmp, config) = temp_config();
+        let mut src = github_source(None);
+        src.assigned_executor = Some("   ".into());
+        let e = enriched("9", None, 0.4);
+
+        add_card(&config, &src, &e, None).expect("add_card succeeds");
+
+        let cards = board_cards(&config).expect("board_cards");
+        assert_eq!(cards.len(), 1);
+        assert!(
+            cards[0].assigned_agent.is_none(),
+            "whitespace-only executor should not assign the card"
+        );
+    }
+
     #[test]
     fn source_metadata_has_no_repo_for_non_github_provider() {
         let mut src = github_source(Some("octo/repo"));
