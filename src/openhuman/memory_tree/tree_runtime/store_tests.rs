@@ -278,13 +278,34 @@ fn collect_root_summaries_respects_per_namespace_cap() {
     // Per-namespace cap of 10 should clip the body.
     let result = collect_root_summaries_with_caps(&config.workspace_dir, 10, 10_000);
     assert_eq!(result.len(), 1);
-    let (ns, body) = &result[0];
+    let (ns, body, _updated_at) = &result[0];
     assert_eq!(ns, "ns");
     assert!(
         body.starts_with("xxxxxxxxxx"),
         "expected the first 10 x's, got: {body}"
     );
     assert!(body.contains("[... truncated]"));
+}
+
+#[test]
+fn collect_root_summaries_carries_root_updated_at() {
+    // #2944: the namespace root's `updated_at` must survive the
+    // disk round-trip so the prompt renderer can stamp memory freshness.
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp);
+
+    let fixed = chrono::DateTime::parse_from_rfc3339("2026-05-25T09:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut node = make_node("ns", "root", "summary body");
+    node.updated_at = fixed;
+    write_node(&config, &node).unwrap();
+
+    let result = collect_root_summaries_with_caps(&config.workspace_dir, 1000, 10_000);
+    assert_eq!(result.len(), 1);
+    let (ns, _body, updated_at) = &result[0];
+    assert_eq!(ns, "ns");
+    assert_eq!(*updated_at, fixed, "root updated_at must round-trip");
 }
 
 #[test]

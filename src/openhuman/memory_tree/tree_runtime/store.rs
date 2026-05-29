@@ -341,14 +341,19 @@ pub fn get_tree_status(config: &Config, namespace: &str) -> Result<TreeStatus> {
 /// and silently dropped — user memory is best-effort context, never a
 /// hard requirement for running a turn or rendering a prompt dump.
 ///
-/// Returns a stable-ordered `Vec<(namespace, body)>` so byte-identical
-/// inputs produce byte-identical output across process restarts (the
-/// renderer downstream relies on this for KV-cache prefix reuse).
+/// Returns a stable-ordered `Vec<(namespace, body, updated_at)>` so
+/// byte-identical inputs produce byte-identical output across process
+/// restarts (the renderer downstream relies on this for KV-cache prefix
+/// reuse). The `updated_at` is the namespace root node's timestamp, so
+/// the prompt renderer can stamp how current each summary is and the
+/// model never serves stale memory as today's (#2944). A plain tuple
+/// (rather than a prompt-layer struct) keeps this module free of any
+/// `agent::prompts` dependency.
 pub fn collect_root_summaries_with_caps(
     workspace_dir: &Path,
     per_namespace_cap: usize,
     total_cap: usize,
-) -> Vec<(String, String)> {
+) -> Vec<(String, String, DateTime<Utc>)> {
     // The store functions all read `config.workspace_dir` and nothing
     // else, so we shim a tiny `Config` from the caller's path. Cheap
     // (a few allocations) and avoids forcing every call site to thread
@@ -440,7 +445,7 @@ pub fn collect_root_summaries_with_caps(
             running_total = total_chars,
             "[tree_summarizer] including namespace in root-summary collection"
         );
-        out.push((ns, final_body));
+        out.push((ns, final_body, node.updated_at));
     }
 
     tracing::info!(
