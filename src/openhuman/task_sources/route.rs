@@ -125,12 +125,22 @@ fn add_card(
     // used for prioritisation. This is the only writer of `source_metadata`.
     let source_metadata = build_source_metadata(source, enriched);
 
+    // G7: pre-assign the card to the source's configured executor so the
+    // dispatcher runs it deterministically (no LLM router). Unset → unassigned.
+    let assigned_agent = source
+        .assigned_executor
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
     let snapshot = todo_add(
         &location,
         &content,
         CardPatch {
             notes,
             objective,
+            assigned_agent,
             source_metadata: Some(source_metadata),
             ..Default::default()
         },
@@ -313,6 +323,7 @@ mod tests {
             interval_secs: 1800,
             target: SourceTarget::AgentTodoProactive,
             max_tasks_per_fetch: 25,
+            assigned_executor: None,
             created_at: Utc::now(),
             last_fetch_at: None,
             last_status: None,
