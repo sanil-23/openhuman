@@ -44,7 +44,7 @@ pub async fn route_enriched(
             Ok(card_id)
         }
         SourceTarget::AgentTodoProactive => {
-            dispatch_triage(source, enriched).await?;
+            dispatch_triage(config, source, enriched, &card_id).await?;
             Ok(card_id)
         }
     }
@@ -185,7 +185,12 @@ fn build_source_metadata(source: &TaskSource, enriched: &EnrichedTask) -> serde_
 /// Dispatch a triage turn for a proactive task, gated by scheduler
 /// capacity. Card creation already happened; a gated-off or deferred
 /// turn is non-fatal — the task still sits on the board.
-async fn dispatch_triage(source: &TaskSource, enriched: &EnrichedTask) -> Result<(), String> {
+async fn dispatch_triage(
+    config: &Config,
+    source: &TaskSource,
+    enriched: &EnrichedTask,
+    card_id: &str,
+) -> Result<(), String> {
     // Respect background-AI throttling. When the gate denies capacity
     // (Off / paused), we keep the card but skip the proactive turn.
     let Some(_permit) = scheduler_gate::wait_for_capacity().await else {
@@ -207,11 +212,19 @@ async fn dispatch_triage(source: &TaskSource, enriched: &EnrichedTask) -> Result
         "sourceId": source.id,
     });
 
+    // Link the envelope to the board card so triage's escalation arm routes
+    // it through the deterministic dispatcher (claim → autonomous run →
+    // write-back) instead of the one-shot triage sub-agent.
+    let location = BoardLocation::Thread {
+        workspace_dir: config.workspace_dir.clone(),
+        thread_id: TASK_SOURCES_THREAD_ID.to_string(),
+    };
     let envelope = TriggerEnvelope::from_external(
         &format!("task_sources:{}", source.id),
         "external task ingested",
         payload,
-    );
+    )
+    .with_task_card(card_id.to_string(), location);
 
     let outcome = run_triage(&envelope)
         .await

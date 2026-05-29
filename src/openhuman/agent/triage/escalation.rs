@@ -27,7 +27,7 @@ use crate::openhuman::agent::Agent;
 use crate::openhuman::config::Config;
 
 use super::decision::TriageAction;
-use super::envelope::TriggerEnvelope;
+use super::envelope::{TaskCardLink, TriggerEnvelope};
 use super::evaluator::TriageRun;
 use super::events;
 
@@ -84,6 +84,35 @@ pub async fn apply_decision(run: TriageRun, envelope: &TriggerEnvelope) -> anyho
                 reason = %run.decision.reason,
                 "[triage::escalation] dispatching sub-agent"
             );
+
+            // ── Unified task-board path ───────────────────────
+            // A trigger linked to a board card is handed to the deterministic
+            // dispatcher (claim → autonomous run → write-back). The claim
+            // (todo→in_progress) deduplicates against the board poller, so
+            // firing both is safe. Non-card triggers (composio/webhook/cron)
+            // fall through to the one-shot triage sub-agent below.
+            if let Some(link) = &envelope.card_link {
+                match dispatch_linked_card(link).await {
+                    Ok(run_id) => {
+                        tracing::info!(
+                            card_id = %link.card_id,
+                            run_id = %run_id,
+                            "[triage::escalation] task-card dispatched to deterministic runner"
+                        );
+                        events::publish_escalated(envelope, "task_dispatcher");
+                    }
+                    Err(reason) => {
+                        // A failed claim (another card already in progress, or
+                        // the card vanished) is benign — the poller retries.
+                        tracing::info!(
+                            card_id = %link.card_id,
+                            reason = %reason,
+                            "[triage::escalation] task-card dispatch skipped (claim failed?)"
+                        );
+                    }
+                }
+                return Ok(());
+            }
 
             // ── External-effect approval gate (#1339) ─────────
             // React / Escalate fire a sub-agent that may call
@@ -266,6 +295,20 @@ async fn dispatch_target_agent(agent_id: &str, prompt: &str) -> anyhow::Result<S
     );
 
     Ok(outcome.output)
+}
+
+/// Load the linked card from its board and hand it to the deterministic task
+/// dispatcher (claim → autonomous run → write-back). Errors (card not found,
+/// or claim rejected because another card is already in progress) propagate to
+/// the caller, which treats them as benign skips.
+async fn dispatch_linked_card(link: &TaskCardLink) -> Result<String, String> {
+    let snapshot = crate::openhuman::todos::ops::list(&link.location)?;
+    let card = snapshot
+        .cards
+        .into_iter()
+        .find(|c| c.id == link.card_id)
+        .ok_or_else(|| format!("card `{}` not found on board", link.card_id))?;
+    crate::openhuman::agent::task_dispatcher::dispatch_card(link.location.clone(), card).await
 }
 
 #[cfg(test)]
