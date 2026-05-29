@@ -165,23 +165,28 @@ pub async fn dispatch_card(
     // at one (→ `Ok`). Thread boards aren't lock-serialised, so a narrow TOCTOU
     // window between this read and the write remains; a fully race-free claim
     // needs a per-thread-locked compare-and-set `ops` primitive (follow-up).
-    let current_status = ops::list(&location)
+    // Re-load the full current card (not just its status): the passed-in `card`
+    // can be stale (edited between selection and claim), so the run must use the
+    // fresh objective / plan / assigned_agent, not the snapshot the caller held.
+    let fresh_card = ops::list(&location)
         .map_err(|e| format!("[task_dispatcher] reload before claim failed for {card_id}: {e}"))?
         .cards
         .into_iter()
         .find(|c| c.id == card_id)
-        .map(|c| c.status)
         .ok_or_else(|| format!("[task_dispatcher] card {card_id} not found on board; skipping"))?;
-    if !matches!(current_status, TaskCardStatus::Todo | TaskCardStatus::Ready) {
+    if !matches!(
+        fresh_card.status,
+        TaskCardStatus::Todo | TaskCardStatus::Ready
+    ) {
         return Err(format!(
             "[task_dispatcher] card {card_id} not claimable (status: {}); skipping",
-            current_status.as_str()
+            fresh_card.status.as_str()
         ));
     }
 
     // Plan-approval gate: when required, a `todo` card is parked for human
     // approval before it can run. `Ready` (already approved) bypasses.
-    if config.autonomy.require_task_plan_approval && current_status == TaskCardStatus::Todo {
+    if config.autonomy.require_task_plan_approval && fresh_card.status == TaskCardStatus::Todo {
         ops::update_status(&location, &card_id, TaskCardStatus::AwaitingApproval).map_err(|e| {
             format!("[task_dispatcher] park-for-approval failed for {card_id}: {e}")
         })?;
@@ -197,7 +202,7 @@ pub async fn dispatch_card(
         return Ok(DispatchOutcome::AwaitingApproval);
     }
 
-    let prompt = build_task_prompt(&card);
+    let prompt = build_task_prompt(&fresh_card);
 
     // Claim: Todo|Ready→InProgress.
     ops::update_status(&location, &card_id, TaskCardStatus::InProgress)
@@ -207,7 +212,7 @@ pub async fn dispatch_card(
 
     // Resolve which executor runs this card: default agent, a personality, or
     // a skill — one autonomous-run interface, three presets (G4 + G3).
-    let executor = resolve_executor(&config.workspace_dir, card.assigned_agent.as_deref());
+    let executor = resolve_executor(&config.workspace_dir, fresh_card.assigned_agent.as_deref());
     tracing::info!(
         card_id = %card_id,
         run_id = %run_id,

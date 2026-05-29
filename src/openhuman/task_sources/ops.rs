@@ -85,6 +85,7 @@ pub async fn add(
     tracing::info!(
         source_id = %source.id,
         provider = %source.provider.as_str(),
+        assigned_executor = ?source.assigned_executor,
         "[task_sources:ops] add created source"
     );
     Ok(RpcOutcome::new(source, vec![]))
