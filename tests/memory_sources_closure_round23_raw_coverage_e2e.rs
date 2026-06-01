@@ -220,7 +220,9 @@ async fn round23_memory_sources_status_registry_and_readers_cover_remaining_edge
     let enabled_composio = memory_sources::list_enabled_by_kind(SourceKind::Composio)
         .await
         .expect("enabled composio");
-    assert_eq!(enabled_composio.len(), 1);
+    // #3113 sync-flow redesign: a freshly-inserted Composio source is no longer
+    // reported as enabled here (it requires an active connection first).
+    assert_eq!(enabled_composio.len(), 0);
 
     let composio_reader =
         openhuman_core::openhuman::memory_sources::readers::composio::ComposioReader;
