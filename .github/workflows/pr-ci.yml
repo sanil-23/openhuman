@@ -315,14 +315,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run cargo llvm-cov for openhuman core
-        # Serialize test execution (`--test-threads=1`). Several raw-coverage
-        # tests share process-global state beyond env vars (e.g. the toolkit /
-        # connection registry exercised by tools_approval_channels), which the
-        # per-test env_lock does not guard. Under llvm-cov's slower
-        # instrumentation the parallel default widens those races into flaky
-        # failures (e.g. unknown_toolkit suggestions). Serialized, they are
-        # hermetic.
-        run: bash scripts/ci-cancel-aware.sh cargo llvm-cov --no-fail-fast -p openhuman --lcov --output-path lcov-core.info -- --test-threads=1
+        run: bash scripts/ci-cancel-aware.sh cargo llvm-cov --no-fail-fast -p openhuman --lcov --output-path lcov-core.info
         env:
           CARGO_BUILD_JOBS: "2"
 
