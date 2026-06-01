@@ -1,6 +1,16 @@
 //! Eager prefetch of recent memory-tree activity into the orchestrator's
 //! session context (Phase 4 follow-on, #710 wiring).
 //!
+//! NOTE (#3170): this loader is **not currently wired into the agent turn
+//! loop**. The unconditional 7-day digest injection was removed because it
+//! duplicated the on-demand memory-tree retrieval tools (the smart
+//! multi-strategy walk, #3077) and — unlike those tools — ignored the
+//! memory-tree on/off toggle (which only gates the ingestion scheduler, not
+//! this read path). The module is retained so an opt-in eager digest can be
+//! re-wired behind a proper read-side gate later. Its public surface is
+//! still exercised by `tests/inference_agent_raw_coverage_e2e.rs`. The
+//! historical behavior is described below for that future re-wiring.
+//!
 //! The orchestrator answers "what happened this week?" / "what's been going
 //! on with X?" style questions out of the user's own ingested memory. We
 //! pre-load a 7-day recap on the session's first turn AND periodically
