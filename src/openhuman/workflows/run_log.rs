@@ -39,11 +39,11 @@ fn short(s: &str) -> &str {
 }
 
 /// `<runs_dir>/<skill>_<UTC ts>_<short run id>.log`.
-pub fn run_log_path(workspace: &Path, skill_id: &str, run_id: &str) -> PathBuf {
+pub fn run_log_path(workspace: &Path, workflow_id: &str, run_id: &str) -> PathBuf {
     let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     runs_dir(workspace).join(format!(
         "{}_{}_{}.log",
-        sanitize(skill_id),
+        sanitize(workflow_id),
         ts,
         sanitize(short(run_id))
     ))
@@ -77,7 +77,7 @@ fn truncate(s: &str, n: usize) -> String {
 /// Write the run header (skill, inputs, the resolved task prompt).
 pub async fn write_header(
     path: &Path,
-    skill_id: &str,
+    workflow_id: &str,
     run_id: &str,
     inputs: &Value,
     task_prompt: &str,
@@ -89,7 +89,7 @@ pub async fn write_header(
          inputs : {inputs}\n\n\
          --- task prompt ---\n{prompt}\n\n\
          --- steps ---",
-        skill = skill_id,
+        skill = workflow_id,
         run = run_id,
         start = chrono::Utc::now().to_rfc3339(),
         inputs = serde_json::to_string(inputs).unwrap_or_default(),
@@ -232,7 +232,7 @@ pub fn detect_repeated_line(
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct ScannedRun {
     pub run_id: String,
-    pub skill_id: String,
+    pub workflow_id: String,
     /// Header `started:` timestamp (RFC3339); empty if header was malformed.
     pub started: String,
     /// `"DONE"` / `"DEGENERATE"` / `"FAILED"` / `"RUNNING"` (running ⇔ no footer yet).
@@ -248,11 +248,11 @@ pub struct ScannedRun {
 
 /// Scan `<workspace>/skills/.runs/` for run-log files, parse their header +
 /// footer, and return a vec sorted by `started` *descending* (most-recent
-/// first). When `skill_id` is `Some(_)`, only entries whose header
-/// `skill_id` matches are returned. `limit` caps the result (post-filter,
+/// first). When `workflow_id` is `Some(_)`, only entries whose header
+/// `workflow_id` matches are returned. `limit` caps the result (post-filter,
 /// post-sort) so the panel can render a short list cheaply. Malformed
 /// files are skipped silently — never blocks the response.
-pub fn scan_runs(workspace: &Path, skill_id: Option<&str>, limit: usize) -> Vec<ScannedRun> {
+pub fn scan_runs(workspace: &Path, workflow_id: Option<&str>, limit: usize) -> Vec<ScannedRun> {
     let dir = runs_dir(workspace);
     let mut runs: Vec<ScannedRun> = Vec::new();
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -325,14 +325,14 @@ pub fn scan_runs(workspace: &Path, skill_id: Option<&str>, limit: usize) -> Vec<
             // Malformed header — skip rather than show a half-row.
             continue;
         }
-        if let Some(want) = skill_id {
+        if let Some(want) = workflow_id {
             if sid != want {
                 continue;
             }
         }
         runs.push(ScannedRun {
             run_id: rid,
-            skill_id: sid,
+            workflow_id: sid,
             started,
             status,
             duration_ms,
@@ -602,10 +602,10 @@ mod tests {
             .unwrap()
             .starts_with("2026-05-28T08:01:30"));
 
-        // Filter by skill_id
+        // Filter by workflow_id
         let only_pr = scan_runs(tmp.path(), Some("pr-review-shepherd"), 10);
         assert_eq!(only_pr.len(), 1);
-        assert_eq!(only_pr[0].skill_id, "pr-review-shepherd");
+        assert_eq!(only_pr[0].workflow_id, "pr-review-shepherd");
 
         // Limit caps the result post-sort
         let one = scan_runs(tmp.path(), None, 1);

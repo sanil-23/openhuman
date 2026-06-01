@@ -49,7 +49,7 @@ struct WorkflowsListParams {
 
 #[derive(Debug, Deserialize)]
 struct WorkflowsReadResourceParams {
-    skill_id: String,
+    workflow_id: String,
     relative_path: String,
 }
 
@@ -159,7 +159,7 @@ struct WorkflowsListResult {
 
 #[derive(Debug, Serialize)]
 struct WorkflowsReadResourceResult {
-    skill_id: String,
+    workflow_id: String,
     relative_path: String,
     content: String,
     bytes: usize,
@@ -276,7 +276,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             description: "Start a skill in the background: run the orchestrator agent focused by the skill's SKILL.md + the given inputs, streaming every step to a per-run log file. Validates required inputs and returns immediately with a run id and the log path.",
             inputs: vec![
                 FieldSchema {
-                    name: "skill_id",
+                    name: "workflow_id",
                     ty: TypeSchema::String,
                     comment: "Id of the skill to run (matches WorkflowDefinition.id).",
                     required: true,
@@ -302,7 +302,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
                     required: true,
                 },
                 FieldSchema {
-                    name: "skill_id",
+                    name: "workflow_id",
                     ty: TypeSchema::String,
                     comment: "Echo of the requested skill id.",
                     required: true,
@@ -321,7 +321,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             description: "Read a single bundled SKILL resource file, hardened against traversal, symlink escape, and oversized payloads.",
             inputs: vec![
                 FieldSchema {
-                    name: "skill_id",
+                    name: "workflow_id",
                     ty: TypeSchema::String,
                     comment: "Name of the skill (matches WorkflowSummary.id / Workflow.name).",
                     required: true,
@@ -335,7 +335,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             ],
             outputs: vec![
                 FieldSchema {
-                    name: "skill_id",
+                    name: "workflow_id",
                     ty: TypeSchema::String,
                     comment: "Echo of the requested skill id.",
                     required: true,
@@ -526,10 +526,10 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
         "workflows_recent_runs" => ControllerSchema {
             namespace: "skills",
             function: "recent_runs",
-            description: "List recent autonomous skill runs by scanning `<workspace>/skills/.runs/`. Returns one entry per log file (header: skill_id, run_id, started; footer: status, duration_ms, finished) sorted by `started` descending. `status` is `RUNNING` while the footer hasn't landed yet, then `DONE` / `DEGENERATE` / `FAILED`. Optionally filter by `skill_id` to scope to one skill; `limit` (default 20, max 100) caps the result. Cheap: reads the files top-to-bottom and short-circuits — no schema parsing of the streaming body.",
+            description: "List recent autonomous skill runs by scanning `<workspace>/skills/.runs/`. Returns one entry per log file (header: workflow_id, run_id, started; footer: status, duration_ms, finished) sorted by `started` descending. `status` is `RUNNING` while the footer hasn't landed yet, then `DONE` / `DEGENERATE` / `FAILED`. Optionally filter by `workflow_id` to scope to one skill; `limit` (default 20, max 100) caps the result. Cheap: reads the files top-to-bottom and short-circuits — no schema parsing of the streaming body.",
             inputs: vec![
                 FieldSchema {
-                    name: "skill_id",
+                    name: "workflow_id",
                     ty: TypeSchema::String,
                     comment: "Optional: restrict results to runs of one skill (e.g. \"github-issue-crusher\"). Omit to return runs across every skill.",
                     required: false,
@@ -544,7 +544,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             outputs: vec![FieldSchema {
                 name: "runs",
                 ty: TypeSchema::Json,
-                comment: "Array of `{ run_id, skill_id, started, status, duration_ms, finished, log_path }` — see crate::openhuman::workflows::run_log::ScannedRun.",
+                comment: "Array of `{ run_id, workflow_id, started, status, duration_ms, finished, log_path }` — see crate::openhuman::workflows::run_log::ScannedRun.",
                 required: true,
             }],
         },
@@ -553,7 +553,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             function: "describe",
             description: "Describe a single skill by id — returns its display name, summary, and the declared `[[inputs]]` block. Used by the Settings → Skills Runner panel to render dynamic input controls and let the user fill in the right fields before clicking Run Now or scheduling a cron. `skills_list` does NOT carry `inputs` (it stays the lightweight enumeration); call this once per skill the user picks.",
             inputs: vec![FieldSchema {
-                name: "skill_id",
+                name: "workflow_id",
                 ty: TypeSchema::String,
                 comment: "Workflow id from `skills_list` (e.g. \"github-issue-crusher\", \"pr-review-shepherd\", \"dev-workflow\").",
                 required: true,
@@ -660,7 +660,7 @@ fn handle_workflows_list(params: Map<String, Value>) -> ControllerFuture {
 
 #[derive(serde::Deserialize)]
 struct WorkflowsDescribeParams {
-    skill_id: String,
+    workflow_id: String,
 }
 
 /// One input declaration as serialised over the wire to the FE form
@@ -695,8 +695,8 @@ fn handle_workflows_describe(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<WorkflowsDescribeParams>(params)?;
         let workspace = resolve_workspace_dir().await;
-        let skill = registry::get_workflow(&workspace, &payload.skill_id)
-            .ok_or_else(|| format!("workflows_describe: unknown skill '{}'", payload.skill_id))?;
+        let skill = registry::get_workflow(&workspace, &payload.workflow_id)
+            .ok_or_else(|| format!("workflows_describe: unknown skill '{}'", payload.workflow_id))?;
         let inputs = skill
             .inputs
             .iter()
@@ -763,7 +763,7 @@ fn handle_workflows_read_run_log(params: Map<String, Value>) -> ControllerFuture
 #[derive(serde::Deserialize)]
 struct WorkflowsRecentRunsParams {
     #[serde(default)]
-    skill_id: Option<String>,
+    workflow_id: Option<String>,
     #[serde(default)]
     limit: Option<u32>,
 }
@@ -782,10 +782,10 @@ fn handle_workflows_recent_runs(params: Map<String, Value>) -> ControllerFuture 
         let payload = deserialize_params::<WorkflowsRecentRunsParams>(params)?;
         let limit = payload.limit.unwrap_or(20).min(100) as usize;
         let workspace = resolve_workspace_dir().await;
-        let runs = run_log::scan_runs(&workspace, payload.skill_id.as_deref(), limit);
+        let runs = run_log::scan_runs(&workspace, payload.workflow_id.as_deref(), limit);
         tracing::debug!(
             count = runs.len(),
-            filter = ?payload.skill_id,
+            filter = ?payload.workflow_id,
             limit,
             "[skills][rpc] recent_runs"
         );
@@ -798,17 +798,17 @@ fn handle_workflows_recent_runs(params: Map<String, Value>) -> ControllerFuture 
 
 #[derive(serde::Deserialize)]
 struct WorkflowsRunParams {
-    skill_id: String,
+    workflow_id: String,
     #[serde(default)]
     inputs: Option<Value>,
 }
 
 /// Outcome of [`spawn_workflow_run_background`]: the new run's `run_id`, the
-/// canonical `skill_id` the registry resolved it to, and the path of the
+/// canonical `workflow_id` the registry resolved it to, and the path of the
 /// streaming log file every step + the footer get written to.
 pub(crate) struct WorkflowRunStarted {
     pub run_id: String,
-    pub skill_id: String,
+    pub workflow_id: String,
     pub log_path: std::path::PathBuf,
 }
 
@@ -892,7 +892,7 @@ pub(crate) async fn spawn_workflow_run_background(
                 );
             }
             tracing::warn!(
-                skill_id = %skill.definition.id,
+                workflow_id = %skill.definition.id,
                 gate = "github",
                 tag = %tag,
                 gate_log = %gate_log_path.display(),
@@ -901,7 +901,7 @@ pub(crate) async fn spawn_workflow_run_background(
             return Err(format!("[preflight:github:{tag}] {body}"));
         }
         tracing::info!(
-            skill_id = %skill.definition.id,
+            workflow_id = %skill.definition.id,
             "[skills] spawn_workflow_run_background: github preflight passed"
         );
     }
@@ -914,16 +914,16 @@ pub(crate) async fn spawn_workflow_run_background(
         _ => String::new(),
     };
     let inputs_block = registry::render_inputs_block(&skill.inputs, &inputs);
-    let skill_id = skill.definition.id.clone();
+    let workflow_id = skill.definition.id.clone();
     let task_prompt = format!(
-        "You are running a single skill: **{skill_id}**. Follow these guidelines exactly and \
+        "You are running a single skill: **{workflow_id}**. Follow these guidelines exactly and \
          focus solely on completing this one task — do not pick up unrelated work.\n\n\
          # Workflow guidelines\n{guidelines}\n\n{inputs_block}",
     );
     let run_id = uuid::Uuid::new_v4().to_string();
-    let log_path = run_log::run_log_path(&workspace, &skill_id, &run_id);
+    let log_path = run_log::run_log_path(&workspace, &workflow_id, &run_id);
     tracing::info!(
-        skill_id = %skill_id,
+        workflow_id = %workflow_id,
         run_id = %run_id,
         log = %log_path.display(),
         "[skills] spawn_workflow_run_background: starting orchestrator run"
@@ -937,13 +937,13 @@ pub(crate) async fn spawn_workflow_run_background(
         .unwrap_or(crate::openhuman::agent::turn_origin::AgentTurnOrigin::Cli);
     {
         let run_id = run_id.clone();
-        let skill_id = skill_id.clone();
+        let workflow_id = workflow_id.clone();
         let inputs = inputs.clone();
         let log_path = log_path.clone();
         let inherited_origin = inherited_origin.clone();
         tokio::spawn(async move {
             if let Err(e) =
-                run_log::write_header(&log_path, &skill_id, &run_id, &inputs, &task_prompt).await
+                run_log::write_header(&log_path, &workflow_id, &run_id, &inputs, &task_prompt).await
             {
                 tracing::warn!(run_id = %run_id, error = %e, "[skills] workflow_run: header write failed");
             }
@@ -1036,7 +1036,7 @@ pub(crate) async fn spawn_workflow_run_background(
 
     Ok(WorkflowRunStarted {
         run_id,
-        skill_id,
+        workflow_id,
         log_path,
     })
 }
@@ -1073,7 +1073,7 @@ pub(crate) async fn await_run_outcome(
 fn handle_workflows_run(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<WorkflowsRunParams>(params)?;
-        let started = match spawn_workflow_run_background(payload.skill_id, payload.inputs).await {
+        let started = match spawn_workflow_run_background(payload.workflow_id, payload.inputs).await {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
@@ -1081,7 +1081,7 @@ fn handle_workflows_run(params: Map<String, Value>) -> ControllerFuture {
             serde_json::json!({
                 "run_id": started.run_id,
                 "status": "started",
-                "skill_id": started.skill_id,
+                "workflow_id": started.workflow_id,
                 "log": started.log_path.display().to_string(),
             }),
             Vec::new(),
@@ -1093,18 +1093,18 @@ fn handle_workflows_read_resource(params: Map<String, Value>) -> ControllerFutur
     Box::pin(async move {
         let payload = deserialize_params::<WorkflowsReadResourceParams>(params)?;
         tracing::debug!(
-            skill_id = %payload.skill_id,
+            workflow_id = %payload.workflow_id,
             relative_path = %payload.relative_path,
             "[skills][rpc] read_resource"
         );
         let workspace = resolve_workspace_dir().await;
         let relative = Path::new(&payload.relative_path);
-        match read_skill_resource(workspace.as_path(), &payload.skill_id, relative) {
+        match read_skill_resource(workspace.as_path(), &payload.workflow_id, relative) {
             Ok(content) => {
                 let bytes = content.len();
                 to_json(RpcOutcome::new(
                     WorkflowsReadResourceResult {
-                        skill_id: payload.skill_id,
+                        workflow_id: payload.workflow_id,
                         relative_path: payload.relative_path,
                         content,
                         bytes,

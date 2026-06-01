@@ -27,7 +27,7 @@ describe('skillsApi', () => {
   });
 
   describe('describeSkill', () => {
-    it('calls openhuman.workflows_describe with skill_id', async () => {
+    it('calls openhuman.workflows_describe with workflow_id', async () => {
       mockCallCoreRpc.mockResolvedValue({
         id: 'dev-workflow',
         name: 'Dev Workflow',
@@ -38,7 +38,7 @@ describe('skillsApi', () => {
       expect(mockCallCoreRpc).toHaveBeenCalledWith(
         expect.objectContaining({
           method: 'openhuman.workflows_describe',
-          params: { skill_id: 'dev-workflow' },
+          params: { workflow_id: 'dev-workflow' },
         })
       );
       expect(result.id).toBe('dev-workflow');
@@ -46,7 +46,7 @@ describe('skillsApi', () => {
 
     it('unwraps data-envelope shape', async () => {
       mockCallCoreRpc.mockResolvedValue({
-        data: { id: 'x', name: 'X', description: '', inputs: [], skill_id: 'x' },
+        data: { id: 'x', name: 'X', description: '', inputs: [], workflow_id: 'x' },
       });
       const result = await skillsApi.describeSkill('x');
       expect(result.id).toBe('x');
@@ -54,13 +54,13 @@ describe('skillsApi', () => {
   });
 
   describe('runSkill', () => {
-    it('calls openhuman.workflows_run with skill_id and inputs', async () => {
-      mockCallCoreRpc.mockResolvedValue({ run_id: 'run-1', skill_id: 's', log: '/tmp/log' });
+    it('calls openhuman.workflows_run with workflow_id and inputs', async () => {
+      mockCallCoreRpc.mockResolvedValue({ run_id: 'run-1', workflow_id: 's', log: '/tmp/log' });
       const result = await skillsApi.runSkill('s', { repo: 'owner/repo' });
       expect(mockCallCoreRpc).toHaveBeenCalledWith(
         expect.objectContaining({
           method: 'openhuman.workflows_run',
-          params: { skill_id: 's', inputs: { repo: 'owner/repo' } },
+          params: { workflow_id: 's', inputs: { repo: 'owner/repo' } },
         })
       );
       expect(result.run_id).toBe('run-1');
@@ -110,12 +110,12 @@ describe('skillsApi', () => {
       expect(Array.isArray(result)).toBe(true);
     });
 
-    it('passes skill_id filter when provided', async () => {
+    it('passes workflow_id filter when provided', async () => {
       mockCallCoreRpc.mockResolvedValue({ runs: [] });
       await skillsApi.recentRuns('dev-workflow', 5);
       expect(mockCallCoreRpc).toHaveBeenCalledWith(
         expect.objectContaining({
-          params: expect.objectContaining({ skill_id: 'dev-workflow', limit: 5 }),
+          params: expect.objectContaining({ workflow_id: 'dev-workflow', limit: 5 }),
         })
       );
     });

@@ -67,7 +67,7 @@ export interface SkillResourceContent {
 }
 
 interface RawSkillsReadResourceResult {
-  skill_id: string;
+  workflow_id: string;
   relative_path: string;
   content: string;
   bytes: number;
@@ -220,11 +220,11 @@ export const skillsApi = {
       Envelope<RawSkillsReadResourceResult> | RawSkillsReadResourceResult
     >({
       method: 'openhuman.workflows_read_resource',
-      params: { skill_id: skillId, relative_path: relativePath },
+      params: { workflow_id: skillId, relative_path: relativePath },
     });
     const raw = unwrapEnvelope(response);
     const normalized: SkillResourceContent = {
-      skillId: raw.skill_id,
+      skillId: raw.workflow_id,
       relativePath: raw.relative_path,
       content: raw.content,
       bytes: raw.bytes,
@@ -338,7 +338,7 @@ export const skillsApi = {
     log('describeSkill: request skillId=%s', skillId);
     const response = await callCoreRpc<Envelope<SkillDescription> | SkillDescription>({
       method: 'openhuman.workflows_describe',
-      params: { skill_id: skillId },
+      params: { workflow_id: skillId },
     });
     const raw = unwrapEnvelope(response);
     log('describeSkill: response inputs=%d', raw.inputs.length);
@@ -348,7 +348,7 @@ export const skillsApi = {
   /**
    * Fire-and-forget invocation of `openhuman.workflows_run`. Returns
    * immediately with the new background run's `run_id`, the canonical
-   * `skill_id`, and the log path the run is streaming into; the actual
+   * `workflow_id`, and the log path the run is streaming into; the actual
    * autonomous work continues in the background and finishes with
    * status `DONE` / `DEGENERATE` / `FAILED` in the run log.
    */
@@ -356,7 +356,7 @@ export const skillsApi = {
     log('runSkill: request skillId=%s', skillId);
     const response = await callCoreRpc<Envelope<SkillRunStarted> | SkillRunStarted>({
       method: 'openhuman.workflows_run',
-      params: { skill_id: skillId, inputs },
+      params: { workflow_id: skillId, inputs },
     });
     const raw = unwrapEnvelope(response);
     log('runSkill: response runId=%s log=%s', raw.run_id, raw.log);
@@ -395,7 +395,7 @@ export const skillsApi = {
   recentRuns: async (skillId?: string, limit?: number): Promise<ScannedRun[]> => {
     log('recentRuns: request skillId=%s limit=%s', skillId ?? '*', limit ?? 'default');
     const params: Record<string, unknown> = {};
-    if (skillId !== undefined) params.skill_id = skillId;
+    if (skillId !== undefined) params.workflow_id = skillId;
     if (limit !== undefined) params.limit = limit;
     const response = await callCoreRpc<Envelope<{ runs: ScannedRun[] }> | { runs: ScannedRun[] }>({
       method: 'openhuman.workflows_recent_runs',
@@ -432,7 +432,7 @@ export interface SkillDescription {
 export interface SkillRunStarted {
   run_id: string;
   status: string; // "started"
-  skill_id: string;
+  workflow_id: string;
   log: string; // absolute path to the streaming log
 }
 
@@ -463,7 +463,7 @@ export interface RunLogSlice {
  */
 export interface ScannedRun {
   run_id: string;
-  skill_id: string;
+  workflow_id: string;
   /** RFC3339-with-trailing-`UTC` timestamp from the log header. */
   started: string;
   status: 'RUNNING' | 'DONE' | 'DEGENERATE' | 'FAILED' | string;

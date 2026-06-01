@@ -277,7 +277,7 @@ impl Tool for RunWorkflowTool {
                 Ok(started) => Ok(ToolResult::success(
                     json!({
                         "run_id": started.run_id,
-                        "workflow_id": started.skill_id,
+                        "workflow_id": started.workflow_id,
                         "status": "started",
                         "log": started.log_path.display().to_string(),
                         "note": "fire-and-forget — runs independently to a terminal state. \
@@ -304,7 +304,7 @@ impl Tool for RunWorkflowTool {
             Err(e) => return Ok(ToolResult::error(format!("run_workflow: {e}"))),
         };
         tracing::debug!(
-            workflow_id = %started.skill_id,
+            workflow_id = %started.workflow_id,
             run_id = %started.run_id,
             wait_seconds,
             "[run_workflow] spawned; awaiting result inline"
@@ -316,7 +316,7 @@ impl Tool for RunWorkflowTool {
         .await;
         Ok(outcome_to_result(
             &started.run_id,
-            &started.skill_id,
+            &started.workflow_id,
             &started.log_path,
             outcome,
         ))

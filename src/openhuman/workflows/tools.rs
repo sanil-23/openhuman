@@ -190,7 +190,7 @@ impl Tool for WorkflowReadResourceTool {
             read_skill_resource(&self.workspace_dir, &skill_id, Path::new(&relative_path))
                 .map_err(|e| anyhow::anyhow!("read_workflow_resource: {e}"))?;
         Ok(ToolResult::success(serde_json::to_string(&json!({
-            "skill_id": skill_id,
+            "workflow_id": skill_id,
             "relative_path": relative_path,
             "content": content,
         }))?))

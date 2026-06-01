@@ -1322,7 +1322,7 @@ export const SkillsRunnerBody = ({ headerText, className }: SkillsRunnerBodyProp
                         <span className="font-mono text-stone-700 dark:text-stone-300">
                           {r.run_id.slice(0, 8)}
                         </span>
-                        <span className="text-stone-600 dark:text-stone-400">{r.skill_id}</span>
+                        <span className="text-stone-600 dark:text-stone-400">{r.workflow_id}</span>
                         <span className="text-stone-500 dark:text-stone-400 ml-auto">{dur}</span>
                       </div>
                       <div className="text-stone-500 dark:text-stone-400 truncate pl-5">
