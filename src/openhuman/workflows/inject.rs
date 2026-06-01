@@ -499,7 +499,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::openhuman::skills::{Skill, SkillFrontmatter};
+    use crate::openhuman::workflows::{Skill, SkillFrontmatter};
     use std::collections::HashMap;
 
     fn skill(name: &str, description: &str) -> Skill {

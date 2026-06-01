@@ -11,7 +11,7 @@
 //! driving the PR to mergeable.
 //!
 //! Implementation simply delegates to
-//! `crate::openhuman::skills::schemas::spawn_skill_run_background` — the
+//! `crate::openhuman::workflows::schemas::spawn_skill_run_background` — the
 //! same helper `openhuman.skills_run` JSON-RPC uses. Errors before the
 //! spawn (unknown skill, missing required inputs) come back to the
 //! orchestrator as a normal `ToolResult::error` so the model can correct
@@ -22,7 +22,7 @@
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::openhuman::skills::schemas::spawn_skill_run_background;
+use crate::openhuman::workflows::schemas::spawn_skill_run_background;
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
 
 /// Tool name surfaced to the LLM's function-calling schema.

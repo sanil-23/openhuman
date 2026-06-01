@@ -12,7 +12,7 @@ use super::ops_types::{
 /// Create-a-Skill form.
 ///
 /// Wire shape (kebab-case-free, mirrors what
-/// `crate::openhuman::skills::registry::SkillInput` expects when the
+/// `crate::openhuman::workflows::registry::SkillInput` expects when the
 /// emitted `skill.toml` is parsed back at run time):
 ///
 /// ```json

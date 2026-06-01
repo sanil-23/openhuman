@@ -3,7 +3,7 @@ pub use types::*;
 mod connected_identities;
 pub use connected_identities::render_connected_identities;
 
-use crate::openhuman::skills::Skill;
+use crate::openhuman::workflows::Skill;
 use crate::openhuman::tools::Tool;
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};

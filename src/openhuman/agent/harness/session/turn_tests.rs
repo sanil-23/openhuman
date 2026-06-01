@@ -444,7 +444,7 @@ fn trim_history_snaps_past_orphaned_tool_results() {
 fn build_parent_context_and_sanitize_helpers_cover_snapshot_paths() {
     let mut agent = make_agent(None);
     agent.last_memory_context = Some("remember this".into());
-    agent.skills = vec![crate::openhuman::skills::Skill {
+    agent.skills = vec![crate::openhuman::workflows::Skill {
         name: "demo".into(),
         ..Default::default()
     }];

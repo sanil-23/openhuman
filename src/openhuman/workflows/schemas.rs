@@ -25,7 +25,7 @@ use serde_json::{Map, Value};
 use crate::core::all::{ControllerFuture, RegisteredController};
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
 use crate::openhuman::config::Config;
-use crate::openhuman::skills::ops::{
+use crate::openhuman::workflows::ops::{
     create_skill, discover_skills, install_skill_from_url, is_workspace_trusted,
     read_skill_resource, uninstall_skill, CreateSkillParams, InstallSkillFromUrlParams, Skill,
     SkillCreateInputDef, SkillScope, UninstallSkillParams,
@@ -34,7 +34,7 @@ use crate::rpc::RpcOutcome;
 
 use crate::openhuman::agent::harness::session::Agent;
 use crate::openhuman::agent::harness::subagent_runner::with_autonomous_iter_cap;
-use crate::openhuman::skills::{preflight, registry, run_log};
+use crate::openhuman::workflows::{preflight, registry, run_log};
 
 /// Iteration cap for an autonomous skill run (orchestrator + sub-agents). High
 /// enough to "run until done", while the repeated-failure circuit breaker still
@@ -538,7 +538,7 @@ pub fn skills_schemas(function: &str) -> ControllerSchema {
             outputs: vec![FieldSchema {
                 name: "runs",
                 ty: TypeSchema::Json,
-                comment: "Array of `{ run_id, skill_id, started, status, duration_ms, finished, log_path }` — see crate::openhuman::skills::run_log::ScannedRun.",
+                comment: "Array of `{ run_id, skill_id, started, status, duration_ms, finished, log_path }` — see crate::openhuman::workflows::run_log::ScannedRun.",
                 required: true,
             }],
         },

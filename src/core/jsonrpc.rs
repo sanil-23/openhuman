@@ -1512,7 +1512,7 @@ async fn run_server_inner(
                 // Seed bundled default skills into <workspace>/skills/ so they
                 // ship with the system — discoverable (skills_list) and runnable
                 // — without a manual drop. Idempotent; never clobbers user edits.
-                crate::openhuman::skills::registry::seed_default_skills(&cfg.workspace_dir);
+                crate::openhuman::workflows::registry::seed_default_skills(&cfg.workspace_dir);
                 // Boot-time Sentry user binding — issue #3135. If the user is
                 // already signed in (typical desktop restart), the auth-profile
                 // store has their `user_id` *now*, before any background loop

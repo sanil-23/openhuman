@@ -200,7 +200,7 @@ impl AgentBuilder {
     }
 
     /// Sets the skills available to the agent.
-    pub fn skills(mut self, skills: Vec<crate::openhuman::skills::Skill>) -> Self {
+    pub fn skills(mut self, skills: Vec<crate::openhuman::workflows::Skill>) -> Self {
         self.skills = Some(skills);
         self
     }
@@ -1553,7 +1553,7 @@ impl Agent {
             .model_name(model_name)
             .temperature(effective_temperature)
             .workspace_dir(config.workspace_dir.clone())
-            .skills(crate::openhuman::skills::load_skills(&config.workspace_dir))
+            .skills(crate::openhuman::workflows::load_skills(&config.workspace_dir))
             .auto_save(config.memory.auto_save)
             .post_turn_hooks(post_turn_hooks)
             .learning_enabled(config.learning.enabled)

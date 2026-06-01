@@ -35,7 +35,7 @@ pub use crate::openhuman::screen_intelligence::tools::*;
 pub use crate::openhuman::search::tools::*;
 pub use crate::openhuman::security::tools::*;
 pub use crate::openhuman::service::tools::*;
-pub use crate::openhuman::skills::tools::*;
+pub use crate::openhuman::workflows::tools::*;
 pub use crate::openhuman::task_sources::tools::*;
 pub use crate::openhuman::team::tools::*;
 pub use crate::openhuman::threads::tools::*;

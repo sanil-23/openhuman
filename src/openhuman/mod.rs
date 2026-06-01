@@ -93,7 +93,7 @@ pub mod search;
 pub mod security;
 pub mod service;
 pub mod session_db;
-pub mod skills;
+pub mod workflows;
 pub mod socket;
 pub mod startup;
 pub mod subconscious;

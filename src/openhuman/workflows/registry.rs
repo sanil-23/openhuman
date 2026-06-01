@@ -48,7 +48,7 @@ pub enum IdentityMatch {
 
 /// `[github]` block in `skill.toml`. Optional; absent ⇒ no GitHub
 /// preflight gate runs for this skill. Present + `required = true` ⇒
-/// the preflight described in [`crate::openhuman::skills::schemas`]'s
+/// the preflight described in [`crate::openhuman::workflows::schemas`]'s
 /// `preflight_github_gate` runs before the orchestrator boots.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkillGithubConfig {
@@ -82,7 +82,7 @@ pub struct SkillDefinition {
     /// Optional GitHub preflight gate. When `Some(..)` with
     /// `required = true`, the preflight runs before the orchestrator
     /// boots — see
-    /// [`crate::openhuman::skills::schemas::spawn_skill_run_background`].
+    /// [`crate::openhuman::workflows::schemas::spawn_skill_run_background`].
     #[serde(default)]
     pub github: Option<SkillGithubConfig>,
 }

@@ -385,10 +385,10 @@ impl Agent {
         // Match installed SKILL.md skills against the user message and
         // prepend their bodies ahead of the memory-context block so the
         // LLM sees them at the top of the user turn. See the module
-        // docs on [`crate::openhuman::skills::inject`] for the matching
+        // docs on [`crate::openhuman::workflows::inject`] for the matching
         // heuristic and size cap rationale.
         let enriched = {
-            use crate::openhuman::skills::inject;
+            use crate::openhuman::workflows::inject;
             let matches = inject::match_skills(&self.skills, user_message);
             if matches.is_empty() {
                 log::debug!(

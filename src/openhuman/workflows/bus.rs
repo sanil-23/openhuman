@@ -12,7 +12,7 @@
 //! in without touching the bus machinery.
 
 use crate::core::event_bus::{subscribe_global, DomainEvent, EventHandler, SubscriptionHandle};
-use crate::openhuman::skills::Skill;
+use crate::openhuman::workflows::Skill;
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -229,7 +229,7 @@ pub fn register_skill_cleanup_subscriber() {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::openhuman::skills::ops_types::{Skill, SkillFrontmatter};
+    use crate::openhuman::workflows::ops_types::{Skill, SkillFrontmatter};
 
     fn skill_with_triggers(name: &str, triggers: Vec<&str>) -> Skill {
         Skill {

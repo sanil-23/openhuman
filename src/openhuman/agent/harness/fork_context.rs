@@ -14,7 +14,7 @@ use crate::openhuman::agent::progress::AgentProgress;
 use crate::openhuman::config::AgentConfig;
 use crate::openhuman::inference::provider::Provider;
 use crate::openhuman::memory::Memory;
-use crate::openhuman::skills::Skill;
+use crate::openhuman::workflows::Skill;
 use crate::openhuman::tools::{Tool, ToolSpec};
 use std::path::PathBuf;
 use std::sync::Arc;

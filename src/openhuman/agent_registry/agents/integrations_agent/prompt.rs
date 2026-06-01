@@ -18,7 +18,7 @@ use crate::openhuman::context::prompt::{
     render_safety, render_tools, render_user_files, render_workspace, ConnectedIntegration,
     PromptContext,
 };
-use crate::openhuman::skills::Skill;
+use crate::openhuman::workflows::Skill;
 use anyhow::Result;
 use std::fmt::Write;
 use std::path::Path;
