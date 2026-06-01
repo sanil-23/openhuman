@@ -195,64 +195,64 @@ struct SkillsUninstallResult {
     scope: SkillScope,
 }
 
-pub fn all_skills_controller_schemas() -> Vec<ControllerSchema> {
+pub fn all_workflows_controller_schemas() -> Vec<ControllerSchema> {
     vec![
-        skills_schemas("skills_list"),
-        skills_schemas("skills_describe"),
-        skills_schemas("skills_recent_runs"),
-        skills_schemas("skills_read_run_log"),
-        skills_schemas("skills_read_resource"),
-        skills_schemas("skills_create"),
-        skills_schemas("skills_install_from_url"),
-        skills_schemas("skills_uninstall"),
-        skills_schemas("skills_run"),
+        workflows_schemas("workflows_list"),
+        workflows_schemas("workflows_describe"),
+        workflows_schemas("workflows_recent_runs"),
+        workflows_schemas("workflows_read_run_log"),
+        workflows_schemas("workflows_read_resource"),
+        workflows_schemas("workflows_create"),
+        workflows_schemas("workflows_install_from_url"),
+        workflows_schemas("workflows_uninstall"),
+        workflows_schemas("workflows_run"),
     ]
 }
 
-pub fn all_skills_registered_controllers() -> Vec<RegisteredController> {
+pub fn all_workflows_registered_controllers() -> Vec<RegisteredController> {
     vec![
         RegisteredController {
-            schema: skills_schemas("skills_list"),
-            handler: handle_skills_list,
+            schema: workflows_schemas("workflows_list"),
+            handler: handle_workflows_list,
         },
         RegisteredController {
-            schema: skills_schemas("skills_describe"),
-            handler: handle_skills_describe,
+            schema: workflows_schemas("workflows_describe"),
+            handler: handle_workflows_describe,
         },
         RegisteredController {
-            schema: skills_schemas("skills_recent_runs"),
-            handler: handle_skills_recent_runs,
+            schema: workflows_schemas("workflows_recent_runs"),
+            handler: handle_workflows_recent_runs,
         },
         RegisteredController {
-            schema: skills_schemas("skills_read_run_log"),
-            handler: handle_skills_read_run_log,
+            schema: workflows_schemas("workflows_read_run_log"),
+            handler: handle_workflows_read_run_log,
         },
         RegisteredController {
-            schema: skills_schemas("skills_read_resource"),
-            handler: handle_skills_read_resource,
+            schema: workflows_schemas("workflows_read_resource"),
+            handler: handle_workflows_read_resource,
         },
         RegisteredController {
-            schema: skills_schemas("skills_create"),
-            handler: handle_skills_create,
+            schema: workflows_schemas("workflows_create"),
+            handler: handle_workflows_create,
         },
         RegisteredController {
-            schema: skills_schemas("skills_install_from_url"),
-            handler: handle_skills_install_from_url,
+            schema: workflows_schemas("workflows_install_from_url"),
+            handler: handle_workflows_install_from_url,
         },
         RegisteredController {
-            schema: skills_schemas("skills_uninstall"),
-            handler: handle_skills_uninstall,
+            schema: workflows_schemas("workflows_uninstall"),
+            handler: handle_workflows_uninstall,
         },
         RegisteredController {
-            schema: skills_schemas("skills_run"),
-            handler: handle_skills_run,
+            schema: workflows_schemas("workflows_run"),
+            handler: handle_workflows_run,
         },
     ]
 }
 
-pub fn skills_schemas(function: &str) -> ControllerSchema {
+pub fn workflows_schemas(function: &str) -> ControllerSchema {
     match function {
-        "skills_list" => ControllerSchema {
+        "workflows_list" => ControllerSchema {
             namespace: "skills",
             function: "list",
             description: "List SKILL.md and legacy skills discovered in the user home and workspace.",
@@ -264,7 +264,7 @@ pub fn skills_schemas(function: &str) -> ControllerSchema {
                 required: true,
             }],
         },
-        "skills_run" => ControllerSchema {
+        "workflows_run" => ControllerSchema {
             namespace: "skills",
             function: "run",
             description: "Start a skill in the background: run the orchestrator agent focused by the skill's SKILL.md + the given inputs, streaming every step to a per-run log file. Validates required inputs and returns immediately with a run id and the log path.",
@@ -309,7 +309,7 @@ pub fn skills_schemas(function: &str) -> ControllerSchema {
                 },
             ],
         },
-        "skills_read_resource" => ControllerSchema {
+        "workflows_read_resource" => ControllerSchema {
             namespace: "skills",
             function: "read_resource",
             description: "Read a single bundled SKILL resource file, hardened against traversal, symlink escape, and oversized payloads.",
@@ -354,7 +354,7 @@ pub fn skills_schemas(function: &str) -> ControllerSchema {
                 },
             ],
         },
-        "skills_create" => ControllerSchema {
+        "workflows_create" => ControllerSchema {
             namespace: "skills",
             function: "create",
             description: "Scaffold a new SKILL.md skill under the user or workspace scope.",
@@ -415,7 +415,7 @@ pub fn skills_schemas(function: &str) -> ControllerSchema {
                 required: true,
             }],
         },
-        "skills_install_from_url" => ControllerSchema {
+        "workflows_install_from_url" => ControllerSchema {
             namespace: "skills",
             function: "install_from_url",
             description: "Install a remote skill by fetching its SKILL.md over HTTPS and writing it into the user-scope skills directory. URL must be https, resolve to a public host, and point at a single `.md` file (`github.com/.../blob/...` auto-rewrites to raw). Default 60s timeout, max 600s.",
@@ -460,7 +460,7 @@ pub fn skills_schemas(function: &str) -> ControllerSchema {
                 },
             ],
         },
-        "skills_read_run_log" => ControllerSchema {
+        "workflows_read_run_log" => ControllerSchema {
             namespace: "skills",
             function: "read_run_log",
             description: "Read a slice of a skill run's streaming log file by run_id. The FE Skills Runner panel opens this on click of a Recent Runs row and re-calls it every 2s while the run's `status` is RUNNING to tail new bytes (use the returned `offset` as the next call's `offset`). The run id resolves to a path internally — callers don't supply a path, so no traversal surface. `max_bytes` is clamped to 262144 (256 KiB) per call; pages by re-issuing with the returned `offset`.",
@@ -517,7 +517,7 @@ pub fn skills_schemas(function: &str) -> ControllerSchema {
                 },
             ],
         },
-        "skills_recent_runs" => ControllerSchema {
+        "workflows_recent_runs" => ControllerSchema {
             namespace: "skills",
             function: "recent_runs",
             description: "List recent autonomous skill runs by scanning `<workspace>/skills/.runs/`. Returns one entry per log file (header: skill_id, run_id, started; footer: status, duration_ms, finished) sorted by `started` descending. `status` is `RUNNING` while the footer hasn't landed yet, then `DONE` / `DEGENERATE` / `FAILED`. Optionally filter by `skill_id` to scope to one skill; `limit` (default 20, max 100) caps the result. Cheap: reads the files top-to-bottom and short-circuits — no schema parsing of the streaming body.",
@@ -542,7 +542,7 @@ pub fn skills_schemas(function: &str) -> ControllerSchema {
                 required: true,
             }],
         },
-        "skills_describe" => ControllerSchema {
+        "workflows_describe" => ControllerSchema {
             namespace: "skills",
             function: "describe",
             description: "Describe a single skill by id — returns its display name, summary, and the declared `[[inputs]]` block. Used by the Settings → Skills Runner panel to render dynamic input controls and let the user fill in the right fields before clicking Run Now or scheduling a cron. `skills_list` does NOT carry `inputs` (it stays the lightweight enumeration); call this once per skill the user picks.",
@@ -571,7 +571,7 @@ pub fn skills_schemas(function: &str) -> ControllerSchema {
                     comment: "Short one-line summary from skill.toml `when_to_use` — what the skill does and when to pick it.",
                     required: true,
                 },
-                // Wire shape: array of objects. `handle_skills_describe`
+                // Wire shape: array of objects. `handle_workflows_describe`
                 // serialises this as a real array of `SkillInputDescription`
                 // objects — `{name, description, required, type}` per entry —
                 // so the controller-catalog type is `Json`, matching the
@@ -584,7 +584,7 @@ pub fn skills_schemas(function: &str) -> ControllerSchema {
                 },
             ],
         },
-        "skills_uninstall" => ControllerSchema {
+        "workflows_uninstall" => ControllerSchema {
             namespace: "skills",
             function: "uninstall",
             description: "Remove an installed user-scope SKILL.md skill from `~/.openhuman/skills/<name>/`. Only user-scope installs are supported; project-scope and legacy skills are read-only. Rejects path separators and traversal; canonicalises before delete.",
@@ -630,7 +630,7 @@ pub fn skills_schemas(function: &str) -> ControllerSchema {
     }
 }
 
-fn handle_skills_list(params: Map<String, Value>) -> ControllerFuture {
+fn handle_workflows_list(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let _ = deserialize_params::<SkillsListParams>(params)?;
         tracing::debug!("[skills][rpc] list skills");
@@ -685,12 +685,12 @@ struct SkillsDescribeResult {
 /// predates `[[inputs]]`); on the user picking one we fetch the full
 /// `SkillDefinition` (which carries inputs) and project the small,
 /// FE-shaped subset they need.
-fn handle_skills_describe(params: Map<String, Value>) -> ControllerFuture {
+fn handle_workflows_describe(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<SkillsDescribeParams>(params)?;
         let workspace = resolve_workspace_dir().await;
         let skill = registry::get_skill(&workspace, &payload.skill_id)
-            .ok_or_else(|| format!("skills_describe: unknown skill '{}'", payload.skill_id))?;
+            .ok_or_else(|| format!("workflows_describe: unknown skill '{}'", payload.skill_id))?;
         let inputs = skill
             .inputs
             .iter()
@@ -732,12 +732,12 @@ struct SkillsReadRunLogParams {
 /// FE Skills Runner panel uses this to render the streaming log inline
 /// when the user clicks a Recent Runs row, and tails it every 2s while
 /// `complete` is false.
-fn handle_skills_read_run_log(params: Map<String, Value>) -> ControllerFuture {
+fn handle_workflows_read_run_log(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<SkillsReadRunLogParams>(params)?;
         let workspace = resolve_workspace_dir().await;
         let path = run_log::find_run_log_path(&workspace, &payload.run_id)
-            .ok_or_else(|| format!("skills_read_run_log: unknown run_id '{}'", payload.run_id))?;
+            .ok_or_else(|| format!("workflows_read_run_log: unknown run_id '{}'", payload.run_id))?;
         let offset = payload.offset.unwrap_or(0);
         // 64 KiB default per-call slice, hard cap at 256 KiB to keep the
         // RPC response sane; the FE re-issues with the returned offset
@@ -745,7 +745,7 @@ fn handle_skills_read_run_log(params: Map<String, Value>) -> ControllerFuture {
         let max_bytes = payload.max_bytes.unwrap_or(64 * 1024).min(256 * 1024) as usize;
         match run_log::read_run_log_slice(&path, offset, max_bytes) {
             Ok(slice) => to_json(RpcOutcome::new(slice, Vec::new())),
-            Err(e) => Err(format!("skills_read_run_log: read failed: {e}")),
+            Err(e) => Err(format!("workflows_read_run_log: read failed: {e}")),
         }
     })
 }
@@ -767,7 +767,7 @@ struct SkillsRecentRunsResult {
 /// (most-recent first), optionally filtered to one skill, capped by `limit`.
 /// Powers the Skills Runner panel's "Recent runs" section + future live-log
 /// tail. Delegates the actual scan + parse to `run_log::scan_runs`.
-fn handle_skills_recent_runs(params: Map<String, Value>) -> ControllerFuture {
+fn handle_workflows_recent_runs(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<SkillsRecentRunsParams>(params)?;
         let limit = payload.limit.unwrap_or(20).min(100) as usize;
@@ -918,7 +918,7 @@ pub(crate) async fn spawn_skill_run_background(
 
     // Detached: build the orchestrator Agent inside the spawn so config /
     // toolchain are loaded fresh per run; the parent returns the handle
-    // immediately. Same flow handle_skills_run used to inline — extracted
+    // immediately. Same flow handle_workflows_run used to inline — extracted
     // so the `run_skill` agent tool can re-use it for skill chaining.
     let inherited_origin = crate::openhuman::agent::turn_origin::current()
         .unwrap_or(crate::openhuman::agent::turn_origin::AgentTurnOrigin::Cli);
@@ -1028,7 +1028,7 @@ pub(crate) async fn spawn_skill_run_background(
     })
 }
 
-fn handle_skills_run(params: Map<String, Value>) -> ControllerFuture {
+fn handle_workflows_run(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<SkillsRunParams>(params)?;
         let started = match spawn_skill_run_background(payload.skill_id, payload.inputs).await {
@@ -1047,7 +1047,7 @@ fn handle_skills_run(params: Map<String, Value>) -> ControllerFuture {
     })
 }
 
-fn handle_skills_read_resource(params: Map<String, Value>) -> ControllerFuture {
+fn handle_workflows_read_resource(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<SkillsReadResourceParams>(params)?;
         tracing::debug!(
@@ -1081,7 +1081,7 @@ fn handle_skills_read_resource(params: Map<String, Value>) -> ControllerFuture {
     })
 }
 
-fn handle_skills_create(params: Map<String, Value>) -> ControllerFuture {
+fn handle_workflows_create(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<SkillsCreateParams>(params)?;
         tracing::debug!(
@@ -1112,7 +1112,7 @@ fn handle_skills_create(params: Map<String, Value>) -> ControllerFuture {
     })
 }
 
-fn handle_skills_install_from_url(params: Map<String, Value>) -> ControllerFuture {
+fn handle_workflows_install_from_url(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let wire = deserialize_params::<SkillsInstallFromUrlParamsWire>(params)?;
         tracing::debug!(
@@ -1148,7 +1148,7 @@ fn handle_skills_install_from_url(params: Map<String, Value>) -> ControllerFutur
     })
 }
 
-fn handle_skills_uninstall(params: Map<String, Value>) -> ControllerFuture {
+fn handle_workflows_uninstall(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<UninstallSkillParams>(params)?;
         tracing::debug!(name = %payload.name, "[skills][rpc] uninstall");

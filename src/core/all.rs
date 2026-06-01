@@ -190,7 +190,7 @@ fn build_registered_controllers() -> Vec<RegisteredController> {
     // Managed Node.js runtime bridge (tool listing + dispatch)
     controllers.extend(crate::openhuman::javascript::all_javascript_registered_controllers());
     // Discovered SKILL.md skills and their bundled resources
-    controllers.extend(crate::openhuman::workflows::all_skills_registered_controllers());
+    controllers.extend(crate::openhuman::workflows::all_workflows_registered_controllers());
     // User workspace and file management
     controllers.extend(crate::openhuman::workspace::all_workspace_registered_controllers());
     // Skill tool registry
@@ -345,7 +345,7 @@ fn build_declared_controller_schemas() -> Vec<ControllerSchema> {
     schemas.extend(crate::openhuman::sandbox::all_sandbox_controller_schemas());
     schemas.extend(crate::openhuman::socket::all_socket_controller_schemas());
     schemas.extend(crate::openhuman::javascript::all_javascript_controller_schemas());
-    schemas.extend(crate::openhuman::workflows::all_skills_controller_schemas());
+    schemas.extend(crate::openhuman::workflows::all_workflows_controller_schemas());
     schemas.extend(crate::openhuman::workspace::all_workspace_controller_schemas());
     schemas.extend(crate::openhuman::tools::all_tools_controller_schemas());
     schemas.extend(crate::openhuman::tool_registry::all_tool_registry_controller_schemas());

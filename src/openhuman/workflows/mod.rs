@@ -17,5 +17,5 @@ pub mod types;
 
 pub use ops::*;
 pub use schemas::{
-    all_skills_controller_schemas, all_skills_registered_controllers, skills_schemas,
+    all_workflows_controller_schemas, all_workflows_registered_controllers, workflows_schemas,
 };

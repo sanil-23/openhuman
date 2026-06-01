@@ -26,28 +26,28 @@ use crate::openhuman::workflows::schemas::spawn_skill_run_background;
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
 
 /// Tool name surfaced to the LLM's function-calling schema.
-pub const RUN_SKILL_TOOL_NAME: &str = "run_skill";
+pub const RUN_WORKFLOW_TOOL_NAME: &str = "run_workflow";
 
 /// `run_skill` agent tool — orchestrator-callable spawn of another bundled
 /// skill_run.
-pub struct RunSkillTool;
+pub struct RunWorkflowTool;
 
-impl Default for RunSkillTool {
+impl Default for RunWorkflowTool {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RunSkillTool {
+impl RunWorkflowTool {
     pub fn new() -> Self {
         Self
     }
 }
 
 #[async_trait]
-impl Tool for RunSkillTool {
+impl Tool for RunWorkflowTool {
     fn name(&self) -> &str {
-        RUN_SKILL_TOOL_NAME
+        RUN_WORKFLOW_TOOL_NAME
     }
 
     fn description(&self) -> &str {
@@ -142,8 +142,8 @@ mod tests {
 
     #[test]
     fn name_and_schema_basics() {
-        let t = RunSkillTool::new();
-        assert_eq!(t.name(), "run_skill");
+        let t = RunWorkflowTool::new();
+        assert_eq!(t.name(), "run_workflow");
         let schema = t.parameters_schema();
         let required = schema
             .get("required")
@@ -155,7 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_skill_id_returns_tool_error_not_panic() {
-        let t = RunSkillTool::new();
+        let t = RunWorkflowTool::new();
         let res = t
             .execute(serde_json::json!({"inputs": {}}))
             .await

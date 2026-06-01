@@ -166,7 +166,7 @@ pub fn all_tools_with_runtime(
         // wrapper over `skills::schemas::spawn_skill_run_background` — the
         // same helper `openhuman.skills_run` JSON-RPC uses, so RPC callers
         // and tool callers share one spawn path.
-        Box::new(RunSkillTool::new()),
+        Box::new(RunWorkflowTool::new()),
         Box::new(CurrentTimeTool::new()),
         Box::new(LaunchAppTool::new()),
         Box::new(AxInteractTool::new(
