@@ -76,9 +76,11 @@ impl Drop for WorkspaceEnv {
 /// run, routing by what's in the conversation:
 ///   - inner run prompt ("running a single workflow") → finish → DONE footer;
 ///   - orchestrator after run_workflow returned → final wrap-up;
-///   - orchestrator first turn → call `run_workflow`.
+///   - orchestrator first turn → call `run_workflow` IF a workflow is
+///     selected (`workflow_id = Some`), otherwise just answer the task
+///     directly (the "no workflow fits, the agent does it itself" path).
 struct MockLlm {
-    workflow_id: String,
+    workflow_id: Option<String>,
 }
 
 fn final_text(t: &str) -> ChatResponse {
@@ -141,12 +143,17 @@ impl Provider for MockLlm {
         if convo.contains("WORKFLOW_DONE") || convo.contains("\"status\"") {
             return Ok(final_text("ORCHESTRATOR_DONE"));
         }
-        // Orchestrator, first turn: run the workflow.
-        Ok(tool_call_resp(
-            "c1",
-            "run_workflow",
-            serde_json::json!({ "workflow_id": self.workflow_id, "wait_seconds": 20 }),
-        ))
+        // Orchestrator, first turn.
+        match &self.workflow_id {
+            // A workflow is selected → run it.
+            Some(id) => Ok(tool_call_resp(
+                "c1",
+                "run_workflow",
+                serde_json::json!({ "workflow_id": id, "wait_seconds": 20 }),
+            )),
+            // No workflow fits → the agent just answers the task itself.
+            None => Ok(final_text("TASK_DONE_NO_WORKFLOW")),
+        }
     }
 }
 
@@ -182,7 +189,7 @@ async fn inner_workflow_run_executes_via_mock_llm_and_reaches_done() {
     let workspace = crate::openhuman::workflows::schemas::resolve_workspace_dir().await;
     seed_runnable_workflow(&workspace, "triage-inbox");
     let _guard = test_provider_override::install(Arc::new(MockLlm {
-        workflow_id: "triage-inbox".into(),
+        workflow_id: Some("triage-inbox".into()),
     }));
 
     let started = spawn_workflow_run_background("triage-inbox".to_string(), None)
@@ -223,11 +230,11 @@ async fn orchestrator_runs_workflow_tool_and_gets_inner_result() {
     // The inner run (spawned by the run_workflow tool) builds its provider from
     // config → needs the global override. The outer loop gets the mock directly.
     let _guard = test_provider_override::install(Arc::new(MockLlm {
-        workflow_id: "triage-inbox".into(),
+        workflow_id: Some("triage-inbox".into()),
     }));
 
     let provider = MockLlm {
-        workflow_id: "triage-inbox".into(),
+        workflow_id: Some("triage-inbox".into()),
     };
     let tools: Vec<Box<dyn Tool>> = vec![Box::new(RunWorkflowTool::new())];
     let mut history = vec![ChatMessage::user("Triage my inbox.")];
@@ -308,7 +315,7 @@ async fn task_card_picked_up_runs_workflow_and_resolves_done() {
     let workspace = resolve_workspace_dir().await;
     seed_runnable_workflow(&workspace, "triage-inbox");
     let _guard = test_provider_override::install(Arc::new(MockLlm {
-        workflow_id: "triage-inbox".into(),
+        workflow_id: Some("triage-inbox".into()),
     }));
 
     // Create a task card on the board.
@@ -357,5 +364,71 @@ async fn task_card_picked_up_runs_workflow_and_resolves_done() {
         done.evidence.iter().any(|e| e.contains("ORCHESTRATOR_DONE")),
         "the run's output should be captured as evidence; got: {:?}",
         done.evidence
+    );
+}
+
+// ── Test 4: a task with NO workflow selected runs directly → resolves Done ─
+
+#[ignore = "process-global provider override + OPENHUMAN_WORKSPACE; run: \
+            cargo test --lib workflows::e2e_run_tests -- --ignored --test-threads=1"]
+#[tokio::test]
+async fn task_with_no_workflow_runs_directly_and_resolves_done() {
+    let _ =
+        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins();
+
+    let _serial = serial().lock().await;
+    let ws_root = tempfile::tempdir().unwrap();
+    let _env = WorkspaceEnv::set(ws_root.path());
+    let workspace = resolve_workspace_dir().await;
+    // No workflow seeded, and the mock LLM is given no workflow to pick — the
+    // orchestrator must complete the task itself (no run_workflow call).
+    let _guard = test_provider_override::install(Arc::new(MockLlm { workflow_id: None }));
+
+    let loc = BoardLocation::Thread {
+        workspace_dir: workspace.clone(),
+        thread_id: "t1".into(),
+    };
+    let snap =
+        board_ops::add(&loc, "Answer a quick question.", CardPatch::default()).expect("add card");
+    let id = snap.cards[0].id.clone();
+    board_ops::update_status(&loc, &id, TaskCardStatus::Ready).expect("ready");
+
+    let card = board_ops::list(&loc)
+        .unwrap()
+        .cards
+        .into_iter()
+        .find(|c| c.id == id)
+        .unwrap();
+    let outcome = dispatch_card(loc.clone(), card).await.expect("dispatch");
+    assert!(matches!(outcome, DispatchOutcome::Running { .. }));
+
+    let done = wait_for_status(&loc, &id, TaskCardStatus::Done, 25)
+        .await
+        .unwrap_or_else(|| {
+            let c = board_ops::list(&loc)
+                .unwrap()
+                .cards
+                .into_iter()
+                .find(|c| c.id == id)
+                .unwrap();
+            panic!(
+                "card never reached Done; status={} blocker={:?}",
+                c.status.as_str(),
+                c.blocker
+            );
+        });
+    assert_eq!(done.status, TaskCardStatus::Done);
+    // The orchestrator answered directly; its output is captured as evidence.
+    assert!(
+        done.evidence.iter().any(|e| e.contains("TASK_DONE_NO_WORKFLOW")),
+        "evidence should be the direct answer; got: {:?}",
+        done.evidence
+    );
+    // And NO workflow run was spawned — run_workflow was never called, so the
+    // run-log dir stays empty.
+    let runs = crate::openhuman::workflows::run_log::scan_runs(&workspace, None, 10);
+    assert!(
+        runs.is_empty(),
+        "no workflow should have run for a no-workflow task; got: {runs:?}"
     );
 }
