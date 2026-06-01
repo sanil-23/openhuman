@@ -19,6 +19,10 @@ pub mod types;
 #[path = "e2e_plumbing_tests.rs"]
 mod e2e_plumbing_tests;
 
+#[cfg(test)]
+#[path = "e2e_run_tests.rs"]
+mod e2e_run_tests;
+
 pub use ops::*;
 pub use schemas::{
     all_workflows_controller_schemas, all_workflows_registered_controllers, workflows_schemas,
