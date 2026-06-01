@@ -83,7 +83,7 @@ pub async fn write_header(
     task_prompt: &str,
 ) -> std::io::Result<()> {
     let header = format!(
-        "==== skill_run: {skill} ====\n\
+        "==== workflow_run: {skill} ====\n\
          run_id : {run}\n\
          started: {start} UTC\n\
          inputs : {inputs}\n\n\
@@ -283,10 +283,10 @@ pub fn scan_runs(workspace: &Path, skill_id: Option<&str>, limit: usize) -> Vec<
         // `:` and trimming both halves is robust to that padding without
         // hand-tracking each label's exact whitespace.
         for line in text.lines() {
-            if line.starts_with("==== skill_run:") {
-                // Header banner: `==== skill_run: <id> ====`
+            if line.starts_with("==== workflow_run:") {
+                // Header banner: `==== workflow_run: <id> ====`
                 sid = line
-                    .trim_start_matches("==== skill_run:")
+                    .trim_start_matches("==== workflow_run:")
                     .trim()
                     .trim_end_matches('=')
                     .trim()
@@ -558,7 +558,7 @@ mod tests {
         std::fs::create_dir_all(&runs).unwrap();
 
         // (a) finished run — full footer
-        let done = "==== skill_run: github-issue-crusher ====\n\
+        let done = "==== workflow_run: github-issue-crusher ====\n\
                     run_id : aaaaaaaa-1111-2222-3333-444444444444\n\
                     started: 2026-05-28T07:51:13.604134255+00:00 UTC\n\
                     inputs : {}\n\n\
@@ -576,7 +576,7 @@ mod tests {
         .unwrap();
 
         // (b) still-running — no footer yet
-        let running = "==== skill_run: pr-review-shepherd ====\n\
+        let running = "==== workflow_run: pr-review-shepherd ====\n\
                        run_id : bbbbbbbb-1111-2222-3333-444444444444\n\
                        started: 2026-05-28T09:00:00.000000000+00:00 UTC\n\
                        inputs : {}\n\n\
@@ -621,7 +621,7 @@ mod tests {
 
         // (a) Still-running file — no footer. read should return content
         //     with complete=false so the FE keeps polling.
-        let running = "==== skill_run: pr-review-shepherd ====\n\
+        let running = "==== workflow_run: pr-review-shepherd ====\n\
                        run_id : 11111111-aaaa-bbbb-cccc-dddddddddddd\n\
                        started: 2026-05-28T09:00:00.000000000+00:00 UTC\n\n\
                        --- task prompt ---\nfoo\n\
@@ -672,7 +672,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let runs = runs_dir(tmp.path());
         std::fs::create_dir_all(&runs).unwrap();
-        // Empty header — no `==== skill_run: ` line ⇒ skip silently.
+        // Empty header — no `==== workflow_run: ` line ⇒ skip silently.
         std::fs::write(runs.join("garbage_x_y.log"), "hi i'm not a run log\n").unwrap();
         let scanned = scan_runs(tmp.path(), None, 10);
         assert!(scanned.is_empty(), "malformed files must be skipped");

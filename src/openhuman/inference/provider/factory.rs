@@ -233,7 +233,7 @@ pub(crate) fn resolve_byok_fallback_provider_string(config: &Config) -> Option<S
 }
 
 /// Test-only seam: inject a mock chat `Provider` so e2e tests can drive the
-/// autonomous run paths (`spawn_skill_run_background`, the task dispatcher)
+/// autonomous run paths (`spawn_workflow_run_background`, the task dispatcher)
 /// with a scripted LLM and no network. Process-global because those runs are
 /// detached `tokio::spawn`s — a thread/task-local would not reach them.
 ///

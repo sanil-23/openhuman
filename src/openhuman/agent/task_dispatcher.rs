@@ -12,7 +12,7 @@
 //! - the **proactive triage** arm (`agent::triage::apply_decision`), once it has
 //!   decided to act on a task-board card.
 //!
-//! The runner mirrors `skills::spawn_skill_run_background`: build the
+//! The runner mirrors `skills::spawn_workflow_run_background`: build the
 //! `orchestrator` agent fresh inside a detached task, cap tool iterations, and
 //! run `agent.run_single` under `with_autonomous_iter_cap`. PR-4 generalises the
 //! executor from the default agent to a resolved personality/skill; this module

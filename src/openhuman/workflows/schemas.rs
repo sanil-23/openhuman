@@ -39,7 +39,7 @@ use crate::openhuman::workflows::{preflight, registry, run_log};
 /// Iteration cap for an autonomous skill run (orchestrator + sub-agents). High
 /// enough to "run until done", while the repeated-failure circuit breaker still
 /// stops dead-end grinding — deliberately bounded (not infinite) to cap spend.
-const SKILL_RUN_MAX_ITERATIONS: usize = 200;
+const WORKFLOW_RUN_MAX_ITERATIONS: usize = 200;
 
 #[derive(Debug, Deserialize, Default)]
 struct WorkflowsListParams {
@@ -803,7 +803,7 @@ struct WorkflowsRunParams {
     inputs: Option<Value>,
 }
 
-/// Outcome of [`spawn_skill_run_background`]: the new run's `run_id`, the
+/// Outcome of [`spawn_workflow_run_background`]: the new run's `run_id`, the
 /// canonical `skill_id` the registry resolved it to, and the path of the
 /// streaming log file every step + the footer get written to.
 pub(crate) struct WorkflowRunStarted {
@@ -812,7 +812,7 @@ pub(crate) struct WorkflowRunStarted {
     pub log_path: std::path::PathBuf,
 }
 
-/// Spawn a single autonomous skill_run as a detached `tokio::spawn`. Used by
+/// Spawn a single autonomous workflow_run as a detached `tokio::spawn`. Used by
 /// both the `openhuman.skills_run` JSON-RPC controller and the `run_skill`
 /// agent tool (which lets the orchestrator chain one skill into another —
 /// e.g. `github-issue-crusher` → `pr-review-shepherd` once the draft PR is
@@ -822,18 +822,18 @@ pub(crate) struct WorkflowRunStarted {
 /// background until DONE / DEGENERATE / FAILED. Errors (unknown skill,
 /// missing required inputs) surface as `Err(String)` *before* the spawn so
 /// callers can reject malformed invocations synchronously.
-pub(crate) async fn spawn_skill_run_background(
+pub(crate) async fn spawn_workflow_run_background(
     skill_id_param: String,
     inputs_param: Option<Value>,
 ) -> Result<WorkflowRunStarted, String> {
     let workspace = resolve_workspace_dir().await;
     let skill = registry::get_workflow(&workspace, &skill_id_param)
-        .ok_or_else(|| format!("skill_run: unknown skill '{skill_id_param}'"))?;
+        .ok_or_else(|| format!("workflow_run: unknown skill '{skill_id_param}'"))?;
     let inputs = inputs_param.unwrap_or(Value::Null);
     let missing = registry::missing_required_inputs(&skill.inputs, &inputs);
     if !missing.is_empty() {
         return Err(format!(
-            "skill_run: missing required inputs: {}",
+            "workflow_run: missing required inputs: {}",
             missing.join(", ")
         ));
     }
@@ -849,7 +849,7 @@ pub(crate) async fn spawn_skill_run_background(
             Ok(c) => c,
             Err(e) => {
                 return Err(format!(
-                    "skill_run preflight: failed to load config to gate `{}`: {e:#}",
+                    "workflow_run preflight: failed to load config to gate `{}`: {e:#}",
                     skill.definition.id
                 ));
             }
@@ -896,13 +896,13 @@ pub(crate) async fn spawn_skill_run_background(
                 gate = "github",
                 tag = %tag,
                 gate_log = %gate_log_path.display(),
-                "[skills] spawn_skill_run_background: preflight gate failed"
+                "[skills] spawn_workflow_run_background: preflight gate failed"
             );
             return Err(format!("[preflight:github:{tag}] {body}"));
         }
         tracing::info!(
             skill_id = %skill.definition.id,
-            "[skills] spawn_skill_run_background: github preflight passed"
+            "[skills] spawn_workflow_run_background: github preflight passed"
         );
     }
 
@@ -926,7 +926,7 @@ pub(crate) async fn spawn_skill_run_background(
         skill_id = %skill_id,
         run_id = %run_id,
         log = %log_path.display(),
-        "[skills] spawn_skill_run_background: starting orchestrator run"
+        "[skills] spawn_workflow_run_background: starting orchestrator run"
     );
 
     // Detached: build the orchestrator Agent inside the spawn so config /
@@ -945,7 +945,7 @@ pub(crate) async fn spawn_skill_run_background(
             if let Err(e) =
                 run_log::write_header(&log_path, &skill_id, &run_id, &inputs, &task_prompt).await
             {
-                tracing::warn!(run_id = %run_id, error = %e, "[skills] skill_run: header write failed");
+                tracing::warn!(run_id = %run_id, error = %e, "[skills] workflow_run: header write failed");
             }
             let mut config = match Config::load_or_init().await {
                 Ok(c) => c,
@@ -960,7 +960,7 @@ pub(crate) async fn spawn_skill_run_background(
                     return;
                 }
             };
-            config.agent.max_tool_iterations = SKILL_RUN_MAX_ITERATIONS;
+            config.agent.max_tool_iterations = WORKFLOW_RUN_MAX_ITERATIONS;
             // Only apply the permissive wildcard default when the operator
             // hasn't configured an explicit allow-list — preserve any
             // configured egress policy instead of unconditionally widening it.
@@ -996,7 +996,7 @@ pub(crate) async fn spawn_skill_run_background(
             // user-initiated RPC / CLI flows.
             let result = crate::openhuman::agent::turn_origin::with_origin(
                 inherited_origin,
-                with_autonomous_iter_cap(SKILL_RUN_MAX_ITERATIONS, agent.run_single(&task_prompt)),
+                with_autonomous_iter_cap(WORKFLOW_RUN_MAX_ITERATIONS, agent.run_single(&task_prompt)),
             )
             .await;
             agent.set_on_progress(None);
@@ -1019,16 +1019,16 @@ pub(crate) async fn spawn_skill_run_background(
                         tracing::warn!(
                             run_id = %run_id,
                             repeats = count,
-                            "[skills] skill_run: degenerate final response rejected"
+                            "[skills] workflow_run: degenerate final response rejected"
                         );
                     } else {
                         let _ = run_log::write_footer(&log_path, "DONE", ms, &out).await;
-                        tracing::info!(run_id = %run_id, "[skills] skill_run: completed");
+                        tracing::info!(run_id = %run_id, "[skills] workflow_run: completed");
                     }
                 }
                 Err(e) => {
                     let _ = run_log::write_footer(&log_path, "FAILED", ms, &format!("{e:#}")).await;
-                    tracing::warn!(run_id = %run_id, error = ?e, "[skills] skill_run: failed");
+                    tracing::warn!(run_id = %run_id, error = ?e, "[skills] workflow_run: failed");
                 }
             }
         });
@@ -1073,7 +1073,7 @@ pub(crate) async fn await_run_outcome(
 fn handle_workflows_run(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<WorkflowsRunParams>(params)?;
-        let started = match spawn_skill_run_background(payload.skill_id, payload.inputs).await {
+        let started = match spawn_workflow_run_background(payload.skill_id, payload.inputs).await {
             Ok(s) => s,
             Err(e) => return Err(e),
         };

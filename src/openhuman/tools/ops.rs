@@ -162,7 +162,7 @@ pub fn all_tools_with_runtime(
         // Workflow composition: `run_workflow` runs another workflow as a
         // subagent and (by default) waits on its result like a function call;
         // `await_workflow` re-attaches to a run that outlived its inline wait.
-        // Both wrap `workflows::schemas::spawn_skill_run_background` +
+        // Both wrap `workflows::schemas::spawn_workflow_run_background` +
         // `await_run_outcome` — the same spawn path `openhuman.workflows_run`
         // JSON-RPC uses, so RPC and tool callers stay in sync.
         Box::new(RunWorkflowTool::new()),

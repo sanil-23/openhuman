@@ -1,6 +1,6 @@
 //! Workflow preflight gates — run BEFORE the orchestrator boots for a
 //! `skills_run`, so failures surface as a plain `Err` from
-//! [`super::schemas::spawn_skill_run_background`] (and from there into
+//! [`super::schemas::spawn_workflow_run_background`] (and from there into
 //! the dashboard card / runner page UI) instead of leaking through as
 //! cryptic orchestrator output.
 //!
@@ -73,7 +73,7 @@ pub enum GithubGateError {
 
 impl GithubGateError {
     /// Render the gate failure as a single user-readable string with
-    /// concrete remediation. This is what `spawn_skill_run_background`
+    /// concrete remediation. This is what `spawn_workflow_run_background`
     /// puts in the `Err(String)` it returns.
     pub fn to_user_message(&self, log_path: Option<&str>) -> String {
         let body = match self {

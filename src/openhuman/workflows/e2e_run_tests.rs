@@ -1,7 +1,7 @@
 //! Mocked-LLM e2e tests for the workflow RUN plumbing.
 //!
 //! These exercise the genuinely-new execution path with a scripted LLM and no
-//! network: a workflow is RUN (`spawn_skill_run_background` builds an
+//! network: a workflow is RUN (`spawn_workflow_run_background` builds an
 //! autonomous agent and `run_single`s it), reaches a terminal `DONE` footer,
 //! and `await_run_outcome` returns it; and the orchestrator composes a
 //! workflow via the `run_workflow` tool (spawn → inner run → await → result).
@@ -43,7 +43,7 @@ use crate::openhuman::tools::traits::Tool;
 use crate::openhuman::todos::ops as board_ops;
 use crate::openhuman::todos::ops::{BoardLocation, CardPatch};
 use crate::openhuman::workflows::schemas::{
-    await_run_outcome, resolve_workspace_dir, spawn_skill_run_background,
+    await_run_outcome, resolve_workspace_dir, spawn_workflow_run_background,
 };
 
 /// Serialize this module's tests (each touches process-global state).
@@ -185,7 +185,7 @@ async fn inner_workflow_run_executes_via_mock_llm_and_reaches_done() {
         workflow_id: "triage-inbox".into(),
     }));
 
-    let started = spawn_skill_run_background("triage-inbox".to_string(), None)
+    let started = spawn_workflow_run_background("triage-inbox".to_string(), None)
         .await
         .expect("spawn should succeed — the workflow is runnable");
     let outcome = await_run_outcome(&started.log_path, Duration::from_secs(20))

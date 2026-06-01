@@ -35,7 +35,7 @@ use serde_json::json;
 
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
 use crate::openhuman::workflows::schemas::{
-    await_run_outcome, resolve_workspace_dir, spawn_skill_run_background,
+    await_run_outcome, resolve_workspace_dir, spawn_workflow_run_background,
 };
 
 /// Tool name surfaced to the LLM's function-calling schema.
@@ -273,7 +273,7 @@ impl Tool for RunWorkflowTool {
             if let Err(e) = guard::account_spawn() {
                 return Ok(ToolResult::error(format!("run_workflow: {e}")));
             }
-            return match spawn_skill_run_background(workflow_id.clone(), inputs).await {
+            return match spawn_workflow_run_background(workflow_id.clone(), inputs).await {
                 Ok(started) => Ok(ToolResult::success(
                     json!({
                         "run_id": started.run_id,
@@ -299,7 +299,7 @@ impl Tool for RunWorkflowTool {
             return Ok(ToolResult::error(format!("run_workflow: {e}")));
         }
 
-        let started = match spawn_skill_run_background(workflow_id.clone(), inputs).await {
+        let started = match spawn_workflow_run_background(workflow_id.clone(), inputs).await {
             Ok(s) => s,
             Err(e) => return Ok(ToolResult::error(format!("run_workflow: {e}"))),
         };
