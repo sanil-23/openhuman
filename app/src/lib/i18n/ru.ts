@@ -3523,7 +3523,7 @@ const messages: TranslationMap = {
   'settings.skillsRunner.error.preflightGate': 'Предполетный шлюз вышел из строя',
   'settings.skillsRunner.schedule.heading': 'Расписание (повторяющееся)',
   'settings.skillsRunner.schedule.help':
-    'Сохраните этот навык + входные данные как повторяющееся задание cron. Агент будет вызывать run_skill при каждом тике.',
+    'Сохраните этот навык + входные данные как повторяющееся задание cron. Агент будет вызывать run_workflow при каждом тике.',
   'settings.skillsRunner.schedule.frequency': 'Частота',
   'settings.skillsRunner.schedule.every30min': 'Каждые 30 минут',
   'settings.skillsRunner.schedule.everyHour': 'Каждый час',

@@ -3329,7 +3329,7 @@ const messages: TranslationMap = {
   'settings.skillsRunner.error.preflightGate': '预检门禁失败',
   'settings.skillsRunner.schedule.heading': '计划（重复）',
   'settings.skillsRunner.schedule.help':
-    '将此技能和输入保存为重复 cron 任务。智能体会在每次触发时调用 run_skill。',
+    '将此技能和输入保存为重复 cron 任务。智能体会在每次触发时调用 run_workflow。',
   'settings.skillsRunner.schedule.frequency': '频率',
   'settings.skillsRunner.schedule.every30min': '每 30 分钟',
   'settings.skillsRunner.schedule.everyHour': '每小时',

@@ -3463,7 +3463,7 @@ const messages: TranslationMap = {
   'settings.skillsRunner.error.preflightGate': '사전 점검 게이트 실패',
   'settings.skillsRunner.schedule.heading': '일정(반복)',
   'settings.skillsRunner.schedule.help':
-    '이 스킬과 입력을 반복 cron 작업으로 저장합니다. 에이전트는 각 tick마다 run_skill을 호출합니다.',
+    '이 스킬과 입력을 반복 cron 작업으로 저장합니다. 에이전트는 각 tick마다 run_workflow을 호출합니다.',
   'settings.skillsRunner.schedule.frequency': '빈도',
   'settings.skillsRunner.schedule.every30min': '30분마다',
   'settings.skillsRunner.schedule.everyHour': '매시간',

@@ -3551,7 +3551,7 @@ const messages: TranslationMap = {
   'settings.skillsRunner.error.preflightGate': 'Il gate di prevolo non è riuscito',
   'settings.skillsRunner.schedule.heading': 'Programma (ricorrente)',
   'settings.skillsRunner.schedule.help':
-    "Salva questa abilità + input come un lavoro cron ricorrente. L'agente chiamerà run_skill ad ogni ciclo.",
+    "Salva questa abilità + input come un lavoro cron ricorrente. L'agente chiamerà run_workflow ad ogni ciclo.",
   'settings.skillsRunner.schedule.frequency': 'Frequenza',
   'settings.skillsRunner.schedule.every30min': 'Ogni 30 minuti',
   'settings.skillsRunner.schedule.everyHour': 'Ogni ora',

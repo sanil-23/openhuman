@@ -3585,7 +3585,7 @@ const messages: TranslationMap = {
   'settings.skillsRunner.error.preflightGate': 'Das Preflight-Gate ist ausgefallen',
   'settings.skillsRunner.schedule.heading': 'Zeitplan (wiederkehrend)',
   'settings.skillsRunner.schedule.help':
-    'Speichern Sie diesen Skill + Eingaben als wiederkehrenden Cronjob. Der Agent ruft bei jedem Tick run_skill auf.',
+    'Speichern Sie diesen Skill + Eingaben als wiederkehrenden Cronjob. Der Agent ruft bei jedem Tick run_workflow auf.',
   'settings.skillsRunner.schedule.frequency': 'Frequenz',
   'settings.skillsRunner.schedule.every30min': 'Alle 30 Minuten',
   'settings.skillsRunner.schedule.everyHour': 'Jede Stunde',

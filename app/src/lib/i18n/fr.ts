@@ -3573,7 +3573,7 @@ const messages: TranslationMap = {
   'settings.skillsRunner.error.preflightGate': 'La porte de prévol a échoué',
   'settings.skillsRunner.schedule.heading': 'Planifier (récurrent)',
   'settings.skillsRunner.schedule.help':
-    "Enregistrez cette compétence + les entrées comme un travail cron récurrent. L'agent appellera run_skill à chaque tick.",
+    "Enregistrez cette compétence + les entrées comme un travail cron récurrent. L'agent appellera run_workflow à chaque tick.",
   'settings.skillsRunner.schedule.frequency': 'Fréquence',
   'settings.skillsRunner.schedule.every30min': 'Toutes les 30 minutes',
   'settings.skillsRunner.schedule.everyHour': 'Toutes les heures',

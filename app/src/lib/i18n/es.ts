@@ -3560,7 +3560,7 @@ const messages: TranslationMap = {
   'settings.skillsRunner.error.preflightGate': 'La puerta de preembarque falló',
   'settings.skillsRunner.schedule.heading': 'Horario (recurrente)',
   'settings.skillsRunner.schedule.help':
-    'Guarda esta habilidad + entradas como un trabajo cron recurrente. El agente llamará a run_skill en cada tick.',
+    'Guarda esta habilidad + entradas como un trabajo cron recurrente. El agente llamará a run_workflow en cada tick.',
   'settings.skillsRunner.schedule.frequency': 'Frecuencia',
   'settings.skillsRunner.schedule.every30min': 'Cada 30 minutos',
   'settings.skillsRunner.schedule.everyHour': 'Cada hora',

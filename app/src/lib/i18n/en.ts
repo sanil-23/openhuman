@@ -3866,7 +3866,7 @@ const en: TranslationMap = {
   'settings.developerMenu.skillsRunner.desc':
     'Run any bundled skill ad-hoc — fill its inputs and fire a background autonomous run',
   'settings.developerMenu.skillsRunner.panelDesc':
-    'Pick a bundled skill, fill in its declared inputs, and fire a fire-and-forget background run. Use Dev Workflow instead if you want a cron-scheduled recurring job.',
+    'Pick a bundled workflow, fill in its declared inputs, and fire a fire-and-forget background run. Use the Schedule section below if you want a cron-scheduled recurring job.',
   'settings.skillsRunner.skill': 'Skill',
   'settings.skillsRunner.selectSkill': 'Select a skill…',
   'settings.skillsRunner.loadingSkills': 'Loading skills…',
@@ -3884,7 +3884,7 @@ const en: TranslationMap = {
   'settings.skillsRunner.error.preflightGate': 'Preflight gate failed',
   'settings.skillsRunner.schedule.heading': 'Schedule (recurring)',
   'settings.skillsRunner.schedule.help':
-    'Save this skill + inputs as a recurring cron job. The agent will call run_skill at each tick.',
+    'Save this workflow + inputs as a recurring cron job. The agent will call run_workflow at each tick.',
   'settings.skillsRunner.schedule.frequency': 'Frequency',
   'settings.skillsRunner.schedule.every30min': 'Every 30 minutes',
   'settings.skillsRunner.schedule.everyHour': 'Every hour',

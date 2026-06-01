@@ -3555,7 +3555,7 @@ const messages: TranslationMap = {
   'settings.skillsRunner.error.preflightGate': 'Portão de embarque pré-voo falhou',
   'settings.skillsRunner.schedule.heading': 'Agenda (recorrente)',
   'settings.skillsRunner.schedule.help':
-    'Salve esta habilidade + entradas como um trabalho cron recorrente. O agente chamará run_skill a cada tick.',
+    'Salve esta habilidade + entradas como um trabalho cron recorrente. O agente chamará run_workflow a cada tick.',
   'settings.skillsRunner.schedule.frequency': 'Frequência',
   'settings.skillsRunner.schedule.every30min': 'A cada 30 minutos',
   'settings.skillsRunner.schedule.everyHour': 'A cada hora',

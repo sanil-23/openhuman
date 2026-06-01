@@ -3557,7 +3557,7 @@ const messages: TranslationMap = {
   'settings.skillsRunner.error.preflightGate': 'Brama preflight nie powiodła się',
   'settings.skillsRunner.schedule.heading': 'Harmonogram (cykliczny)',
   'settings.skillsRunner.schedule.help':
-    'Zapisz tę umiejętność i dane wejściowe jako cykliczne zadanie cron. Agent wywoła run_skill przy każdym tyknięciu.',
+    'Zapisz tę umiejętność i dane wejściowe jako cykliczne zadanie cron. Agent wywoła run_workflow przy każdym tyknięciu.',
   'settings.skillsRunner.schedule.frequency': 'Częstotliwość',
   'settings.skillsRunner.schedule.every30min': 'Co 30 minut',
   'settings.skillsRunner.schedule.everyHour': 'Co godzinę',
