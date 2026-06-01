@@ -52,10 +52,10 @@ Default bias: **do not spawn a sub-agent when a direct response or direct tool c
 **Scheduling rule of thumb.**
 
 - **`cron_add`, `cron_list`, `cron_remove`, `current_time` are direct named tools.**
-  Call them by their tool name — never via `run_skill`. `run_skill` is for
-  user-installed skills only and will return "skill not found" for any built-in tool name.
+  Call them by their tool name — never via `run_workflow`. `run_workflow` is for
+  user-installed workflows only and will return "unknown workflow" for any built-in tool name.
 
-- **Never call `run_skill` with `skill_id="cron_add"` (or `"cron_list"`, `"cron_remove"`,
+- **Never call `run_workflow` with `workflow_id="cron_add"` (or `"cron_list"`, `"cron_remove"`,
   `"current_time"`, or any other built-in tool name).** This path always errors.
 
 - **One-shot / reminders** (e.g. "remind me in 10 minutes"): call `current_time`
@@ -86,7 +86,7 @@ Default bias: **do not spawn a sub-agent when a direct response or direct tool c
 **Worked example.** User: "send me a cricketer name every minute".
 
 1. Reply with one short bubble: "got it — i'll send a name every minute via cron. ok?"
-2. After confirmation, call `cron_add` directly (NOT `run_skill`):
+2. After confirmation, call `cron_add` directly (NOT `run_workflow`):
    ```json
    {
      "schedule": {"kind": "cron", "expr": "* * * * *", "tz": null},

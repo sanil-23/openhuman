@@ -12,6 +12,8 @@ pub use delegate::DelegateTool;
 pub use delegate_to_personality::DelegateToPersonalityTool;
 pub use plan_exit::{PlanExitTool, PLAN_EXIT_MARKER};
 pub use remember_preference::RememberPreferenceTool;
-pub use run_workflow::{RunWorkflowTool, RUN_WORKFLOW_TOOL_NAME};
+pub use run_workflow::{
+    AwaitWorkflowTool, RunWorkflowTool, AWAIT_WORKFLOW_TOOL_NAME, RUN_WORKFLOW_TOOL_NAME,
+};
 pub use save_preference::SavePreferenceTool;
 pub use todo::TodoTool;

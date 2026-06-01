@@ -376,6 +376,62 @@ pub fn find_run_log_path(workspace: &Path, run_id: &str) -> Option<PathBuf> {
     None
 }
 
+/// Terminal outcome of a finished run, parsed from the `--- result ---`
+/// footer: the status word (`DONE` / `DEGENERATE` / `FAILED`) and the
+/// final output body that follows it. Used by `run_workflow` /
+/// `await_workflow` to hand the spawned run's result straight back to the
+/// orchestrator instead of making it scrape the log itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunOutcome {
+    pub status: String,
+    pub output: String,
+}
+
+/// Read a run-log file and, if the footer has landed, return the terminal
+/// status + final output body. Returns `None` while the run is still
+/// `RUNNING` (no footer yet) or the file is unreadable — callers poll on
+/// `None`. Mirrors the on-disk layout written by [`write_footer`]:
+///
+/// ```text
+/// --- result ---
+/// status  : DONE
+/// duration: 1234 ms
+/// finished: <rfc3339> UTC
+///
+/// <output body…>
+/// ```
+pub fn read_terminal_outcome(path: &Path) -> Option<RunOutcome> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let marker = "--- result ---";
+    let idx = text.find(marker)?;
+    let after = &text[idx + marker.len()..];
+    let mut status = String::new();
+    let mut lines = after.lines();
+    // Consume the footer header lines (status/duration/finished); the first
+    // blank line after `finished:` separates them from the output body.
+    for line in lines.by_ref() {
+        let Some((label, value)) = line.split_once(':') else {
+            // A line without a colon before `finished:` means a malformed
+            // footer — bail rather than mis-slice the body.
+            if line.trim().is_empty() {
+                continue;
+            }
+            break;
+        };
+        match label.trim() {
+            "status" => status = value.trim().to_string(),
+            "finished" => break,
+            _ => {}
+        }
+    }
+    if status.is_empty() {
+        return None;
+    }
+    // Everything past the footer header is the final output body.
+    let output = lines.collect::<Vec<_>>().join("\n").trim().to_string();
+    Some(RunOutcome { status, output })
+}
+
 /// Read a slice of a run log file. Returns the bytes from `offset`
 /// forward, capped at `max_bytes`, plus `eof` (true if we hit end-of-
 /// file) and a flag indicating whether the `--- result ---` footer is
@@ -642,6 +698,24 @@ mod tests {
         assert!(s.contains("/ws/skills/.runs/"));
         assert!(s.contains("github-issue-crusher_"));
         assert!(s.ends_with("_abcdef12.log"), "got {s}");
+    }
+
+    #[tokio::test]
+    async fn read_terminal_outcome_parses_status_and_body() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let path = run_log_path(tmp.path(), "demo", "abcdef12-3456");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_header(&path, "demo", "abcdef12-3456", &serde_json::json!({}), "task")
+            .await
+            .unwrap();
+        // No footer yet ⇒ still running.
+        assert!(read_terminal_outcome(&path).is_none());
+        write_footer(&path, "DONE", 1234, "the final answer\nspanning two lines")
+            .await
+            .unwrap();
+        let outcome = read_terminal_outcome(&path).expect("footer landed");
+        assert_eq!(outcome.status, "DONE");
+        assert_eq!(outcome.output, "the final answer\nspanning two lines");
     }
 
     #[test]

@@ -39,7 +39,15 @@ pub enum ToolCategory {
     /// Built-in Rust tools with direct host access.
     #[default]
     System,
-    /// Integration-facing tools that reach external services.
+    /// Integration-facing tools that reach external services (Composio-backed
+    /// SaaS actions, "runners"). The Rust ident was swept to `Workflow` during
+    /// the skills→workflows unification, but this category is NOT a WORKFLOW.md
+    /// bundle — it's the integration-tool class the integrations subagent
+    /// filters on via `category_filter = "skill"`. The wire format is pinned to
+    /// `"skill"` so existing agent definitions keep parsing; the ident is
+    /// provisional and gets revisited when the integrations_agent is reworked
+    /// (Phase 4 / "runners → Intelligence").
+    #[serde(rename = "skill")]
     Workflow,
 }
 

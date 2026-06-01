@@ -156,8 +156,12 @@ const TOOL_FAMILIES: &[ToolFamily] = &[
         default_enabled: false,
     },
     ToolFamily {
-        id: "skill_manage",
-        rust_names: &["skill_create", "skill_install_from_url", "skill_uninstall"],
+        id: "workflow_manage",
+        rust_names: &[
+            "create_workflow",
+            "install_workflow_from_url",
+            "uninstall_workflow",
+        ],
         default_enabled: false,
     },
     ToolFamily {

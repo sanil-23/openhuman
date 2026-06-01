@@ -1,35 +1,184 @@
-//! Tool: `run_skill` — let the orchestrator kick off another bundled
-//! `skill_run` as a fresh autonomous background job.
+//! Tools: `run_workflow` + `await_workflow` — let the orchestrator compose
+//! workflows by running one as a subagent and (optionally) waiting on its
+//! result, the way a function call waits on its callee.
 //!
-//! Use case: skill chaining. `github-issue-crusher` opens a draft PR at
-//! step 9, then at step 10 it calls `run_skill` with `skill_id =
-//! "pr-review-shepherd"` and `pr = <number>` so the shepherd takes over
-//! the Phase-6 (CI + review) loop. The issue-crusher returns immediately
-//! with the shepherd's `run_id` + log path; the two runs are independent
-//! background tokio tasks with their own logs and their own autonomous
-//! iter caps, so the issue-crusher exits cleanly while the shepherd keeps
-//! driving the PR to mergeable.
+//! `run_workflow` spawns a target workflow as a fresh autonomous background
+//! run (its own log, its own iter cap), then **awaits the result inside the
+//! tool** for up to `wait_seconds`. The polling happens in the runtime — a
+//! tokio sleep loop over the run's log footer — NOT in the LLM: the model
+//! issues one tool call and gets back either the finished `status` + `output`
+//! or, if the run outlives the wait budget, a `status: "running"` handle it
+//! can re-attach to later. That auto-detach is what keeps a long shepherd-
+//! style run from freezing the caller forever.
 //!
-//! Implementation simply delegates to
-//! `crate::openhuman::workflows::schemas::spawn_skill_run_background` — the
-//! same helper `openhuman.skills_run` JSON-RPC uses. Errors before the
-//! spawn (unknown skill, missing required inputs) come back to the
-//! orchestrator as a normal `ToolResult::error` so the model can correct
-//! and retry. After the spawn succeeds the tool returns a small JSON
-//! object with `run_id`, `skill_id`, and `log` for the orchestrator to
-//! surface in its final response.
+//! `await_workflow` re-attaches to a detached run by `run_id` and waits the
+//! same way — so a workflow can kick several children off with
+//! `wait_seconds: 0` and then collect them.
+//!
+//! Composition example: `github-issue-crusher` opens a draft PR, then calls
+//! `run_workflow` with `workflow_id: "pr-review-shepherd"` and the PR number.
+//! If the shepherd finishes its first pass quickly the crusher gets the
+//! result inline; if not, it gets a `run_id` and can move on.
+//!
+//! Guardrails (see the `guard` module): a process-lifetime spawn backstop,
+//! a concurrency/nesting cap on synchronous awaits, and a re-entrancy lock
+//! keyed on workflow-id + inputs so an LLM that loses track can't tip a
+//! legitimate A→B→A chain into an unbounded loop. These are deliberately
+//! coarse process-global bounds, not per-task-lineage budgets — the detached
+//! `tokio::spawn` run path doesn't thread a parent run-id into its children,
+//! so true per-lineage depth would need that plumbing first. The coarse
+//! bounds still stop the realistic failure modes (fan-out bomb, tight
+//! self-loop) without it.
 
 use async_trait::async_trait;
 use serde_json::json;
 
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
-use crate::openhuman::workflows::schemas::spawn_skill_run_background;
+use crate::openhuman::workflows::schemas::{
+    await_run_outcome, resolve_workspace_dir, spawn_skill_run_background,
+};
 
 /// Tool name surfaced to the LLM's function-calling schema.
 pub const RUN_WORKFLOW_TOOL_NAME: &str = "run_workflow";
+/// Companion tool: re-attach to a detached run and keep waiting.
+pub const AWAIT_WORKFLOW_TOOL_NAME: &str = "await_workflow";
 
-/// `run_skill` agent tool — orchestrator-callable spawn of another bundled
-/// skill_run.
+/// Default seconds a `run_workflow` / `await_workflow` call waits inline
+/// before auto-detaching. Quick workflows return their result directly;
+/// slow ones hand back a `run_id`.
+const DEFAULT_WAIT_SECONDS: u64 = 90;
+/// Hard ceiling on a single inline wait so one tool call can't block a
+/// caller indefinitely.
+const MAX_WAIT_SECONDS: u64 = 600;
+
+/// Coarse, process-global spawn/await guardrails. See the module doc for why
+/// these are global rather than per-lineage.
+mod guard {
+    use std::collections::HashSet;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{LazyLock, Mutex};
+
+    /// Process-lifetime backstop against a runaway spawn loop.
+    const TOTAL_SPAWN_BACKSTOP: u64 = 500;
+    /// Max workflows being synchronously awaited at once. Because an awaiting
+    /// call holds its slot for the whole nested wait, this also bounds the
+    /// depth of synchronous workflow→workflow chains.
+    const MAX_ACTIVE_AWAITS: u64 = 8;
+
+    static TOTAL_SPAWNS: AtomicU64 = AtomicU64::new(0);
+    static ACTIVE_AWAITS: AtomicU64 = AtomicU64::new(0);
+    static ACTIVE_KEYS: LazyLock<Mutex<HashSet<String>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+
+    /// RAII guard held while a call awaits a run. Dropping it frees the
+    /// active-await slot and clears the re-entrancy key.
+    pub struct AwaitGuard {
+        key: String,
+    }
+
+    impl Drop for AwaitGuard {
+        fn drop(&mut self) {
+            ACTIVE_AWAITS.fetch_sub(1, Ordering::SeqCst);
+            if let Ok(mut keys) = ACTIVE_KEYS.lock() {
+                keys.remove(&self.key);
+            }
+        }
+    }
+
+    /// Account a spawn against the process-lifetime backstop. Returns `Err`
+    /// once the cap trips. Called by both the awaited and the fire-and-forget
+    /// paths so neither can loop forever.
+    pub fn account_spawn() -> Result<(), String> {
+        let n = TOTAL_SPAWNS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n > TOTAL_SPAWN_BACKSTOP {
+            return Err(format!(
+                "refused — process spawn backstop hit ({TOTAL_SPAWN_BACKSTOP} workflow runs \
+                 spawned this session). This guards against a runaway spawn loop."
+            ));
+        }
+        Ok(())
+    }
+
+    /// Acquire an await slot + re-entrancy lock for `key` (a workflow-id +
+    /// inputs fingerprint, or `await:<run_id>` for re-attach). `Err` if too
+    /// many awaits are in flight (nesting/fan-out cap) or the same key is
+    /// already being awaited up the stack (re-entrant tight loop).
+    pub fn acquire_await(key: String) -> Result<AwaitGuard, String> {
+        let mut keys = ACTIVE_KEYS
+            .lock()
+            .map_err(|_| "internal guard lock poisoned".to_string())?;
+        if keys.contains(&key) {
+            return Err(
+                "refused — this exact workflow + inputs is already being awaited higher up the \
+                 call chain (re-entrant loop). Wait for it to finish or vary the inputs."
+                    .to_string(),
+            );
+        }
+        if ACTIVE_AWAITS.load(Ordering::SeqCst) >= MAX_ACTIVE_AWAITS {
+            return Err(format!(
+                "refused — {MAX_ACTIVE_AWAITS} workflows are already being awaited concurrently \
+                 (nesting/fan-out cap). Let some finish, or spawn with `wait_seconds: 0` to \
+                 detach instead of awaiting."
+            ));
+        }
+        keys.insert(key.clone());
+        ACTIVE_AWAITS.fetch_add(1, Ordering::SeqCst);
+        Ok(AwaitGuard { key })
+    }
+}
+
+/// Pull the requested inline wait (seconds) from a tool-call arg map,
+/// defaulting + clamping to the supported range.
+fn parse_wait_seconds(args: &serde_json::Value) -> u64 {
+    args.get("wait_seconds")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(DEFAULT_WAIT_SECONDS)
+        .min(MAX_WAIT_SECONDS)
+}
+
+/// Fingerprint a (workflow_id, inputs) pair for the re-entrancy guard.
+fn reentrancy_key(workflow_id: &str, inputs: &Option<serde_json::Value>) -> String {
+    let inputs_repr = inputs
+        .as_ref()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "null".to_string());
+    format!("{workflow_id}\u{1}{inputs_repr}")
+}
+
+/// Shape the terminal/"still running" outcome of a wait into a `ToolResult`.
+fn outcome_to_result(
+    run_id: &str,
+    workflow_id: &str,
+    log_path: &std::path::Path,
+    outcome: Option<crate::openhuman::workflows::run_log::RunOutcome>,
+) -> ToolResult {
+    match outcome {
+        Some(o) => ToolResult::success(
+            json!({
+                "run_id": run_id,
+                "workflow_id": workflow_id,
+                "status": o.status,
+                "output": o.output,
+                "log": log_path.display().to_string(),
+            })
+            .to_string(),
+        ),
+        None => ToolResult::success(
+            json!({
+                "run_id": run_id,
+                "workflow_id": workflow_id,
+                "status": "running",
+                "log": log_path.display().to_string(),
+                "note": "still running past the wait budget — it continues in the background. \
+                         Call `await_workflow` with this `run_id` to keep waiting, or move on.",
+            })
+            .to_string(),
+        ),
+    }
+}
+
+/// `run_workflow` — orchestrator-callable spawn + inline await of another
+/// workflow.
 pub struct RunWorkflowTool;
 
 impl Default for RunWorkflowTool {
@@ -51,88 +200,215 @@ impl Tool for RunWorkflowTool {
     }
 
     fn description(&self) -> &str {
-        "Spawn another bundled skill as a fresh autonomous background run. \
-         Fire-and-forget: returns immediately with the new run's `run_id` and \
-         streaming `log` path; the spawned run continues independently to DONE \
-         / DEGENERATE / FAILED. \
-         Use this to chain skills together — for example, after \
-         `github-issue-crusher` opens a draft PR, call `run_skill` with \
-         `skill_id: \"pr-review-shepherd\"` and the new PR number so the \
-         shepherd takes over the CI + review loop while the crusher exits \
-         cleanly. Arguments mirror the `openhuman.skills_run` JSON-RPC: \
-         `skill_id` (string, required) names a skill from `skills_list`; \
-         `inputs` (object, required) is the same input map that skill would \
-         take via the RPC. Errors (unknown skill, missing required inputs) \
-         come back synchronously so you can fix and retry without spawning \
-         anything."
+        "Run another workflow as a subagent and wait for its result, the way a \
+         function call waits on its callee. Spawns the target workflow as a \
+         fresh autonomous run (its own log + iteration budget), then waits up \
+         to `wait_seconds` (default 90, max 600) for it to finish. If it \
+         finishes in time you get back its terminal `status` (DONE / \
+         DEGENERATE / FAILED) and `output`; if it outlives the wait it \
+         auto-detaches and returns `status: \"running\"` plus a `run_id` you \
+         can re-attach to with `await_workflow`. Pass `wait_seconds: 0` to \
+         fire-and-forget (returns immediately with the `run_id`) — use that to \
+         chain long-running workflows (e.g. after opening a PR, kick off \
+         `pr-review-shepherd` and move on). Arguments: `workflow_id` (string, \
+         required) names a workflow from `list_workflows`; `inputs` (object) is \
+         the input map that workflow declares; `wait_seconds` (int, optional). \
+         Errors (unknown workflow, missing required inputs, guardrail trip) come \
+         back synchronously so you can correct and retry."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "skill_id": {
+                "workflow_id": {
                     "type": "string",
-                    "description": "Id of the bundled skill to spawn (must \
-                                    appear in `skills_list`)."
+                    "description": "Id of the workflow to run (must appear in `list_workflows`)."
                 },
                 "inputs": {
                     "type": "object",
-                    "description": "Input object passed to the spawned skill, \
-                                    same shape as the `inputs` field of \
-                                    `openhuman.skills_run`. Required keys are \
-                                    declared by the target skill's [[inputs]] \
-                                    block."
+                    "description": "Input object passed to the workflow. Required keys are \
+                                    declared by the target workflow's [[inputs]] block."
+                },
+                "wait_seconds": {
+                    "type": "integer",
+                    "description": "How long to wait inline for the result before auto-detaching \
+                                    (default 90, max 600). 0 = fire-and-forget."
                 }
             },
-            "required": ["skill_id", "inputs"]
+            "required": ["workflow_id"]
         })
     }
 
     fn permission_level(&self) -> PermissionLevel {
-        // Spawning another autonomous skill_run carries the same blast radius
-        // as the parent skill_run that's calling it (background tokio task,
-        // no approval gate). The parent is already inside an autonomous
-        // context, so promoting `run_skill` past the gate would be
-        // double-counting — keep it at None (no extra prompt) and let the
-        // target skill's SKILL.md govern what its run is allowed to do.
+        // Spawning another autonomous run carries the same blast radius as the
+        // parent run that's calling it (background tokio task, no approval
+        // gate). The parent is already inside an autonomous context, so gating
+        // here would double-count — keep it ungated and let the target
+        // workflow's definition govern what its run may do.
         PermissionLevel::None
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let skill_id = match args.get("skill_id").and_then(|v| v.as_str()) {
+        // Accept `workflow_id`, falling back to the legacy `skill_id` alias so
+        // any in-flight caller from before the rename still works.
+        let workflow_id = match args
+            .get("workflow_id")
+            .or_else(|| args.get("skill_id"))
+            .and_then(|v| v.as_str())
+        {
             Some(s) if !s.trim().is_empty() => s.to_string(),
             _ => {
                 return Ok(ToolResult::error(
-                    "run_skill: missing required argument `skill_id` (non-empty string)",
+                    "run_workflow: missing required argument `workflow_id` (non-empty string)",
                 ));
             }
         };
         let inputs = args.get("inputs").cloned();
+        let wait_seconds = parse_wait_seconds(&args);
 
-        tracing::debug!(skill_id = %skill_id, "[run_skill] dispatching spawn_skill_run_background");
-        match spawn_skill_run_background(skill_id.clone(), inputs).await {
-            Ok(started) => {
-                tracing::debug!(
-                    skill_id = %started.skill_id,
-                    run_id = %started.run_id,
-                    "[run_skill] spawn succeeded"
-                );
-                Ok(ToolResult::success(
-                    serde_json::json!({
+        // Fire-and-forget: only the spawn backstop applies — no await, so no
+        // re-entrancy/nesting slot to take.
+        if wait_seconds == 0 {
+            if let Err(e) = guard::account_spawn() {
+                return Ok(ToolResult::error(format!("run_workflow: {e}")));
+            }
+            return match spawn_skill_run_background(workflow_id.clone(), inputs).await {
+                Ok(started) => Ok(ToolResult::success(
+                    json!({
                         "run_id": started.run_id,
+                        "workflow_id": started.skill_id,
                         "status": "started",
-                        "skill_id": started.skill_id,
                         "log": started.log_path.display().to_string(),
+                        "note": "fire-and-forget — runs independently to a terminal state. \
+                                 Use `await_workflow` with this `run_id` if you want its result.",
                     })
                     .to_string(),
-                ))
-            }
-            Err(e) => {
-                tracing::debug!(skill_id = %skill_id, error = %e, "[run_skill] spawn failed");
-                Ok(ToolResult::error(format!("run_skill: {e}")))
-            }
+                )),
+                Err(e) => Ok(ToolResult::error(format!("run_workflow: {e}"))),
+            };
         }
+
+        // Awaited path: take the re-entrancy/nesting slot first (so a tight
+        // loop is rejected before we even spawn), then the spawn backstop.
+        let _guard = match guard::acquire_await(reentrancy_key(&workflow_id, &inputs)) {
+            Ok(g) => g,
+            Err(e) => return Ok(ToolResult::error(format!("run_workflow: {e}"))),
+        };
+        if let Err(e) = guard::account_spawn() {
+            return Ok(ToolResult::error(format!("run_workflow: {e}")));
+        }
+
+        let started = match spawn_skill_run_background(workflow_id.clone(), inputs).await {
+            Ok(s) => s,
+            Err(e) => return Ok(ToolResult::error(format!("run_workflow: {e}"))),
+        };
+        tracing::debug!(
+            workflow_id = %started.skill_id,
+            run_id = %started.run_id,
+            wait_seconds,
+            "[run_workflow] spawned; awaiting result inline"
+        );
+        let outcome = await_run_outcome(
+            &started.log_path,
+            std::time::Duration::from_secs(wait_seconds),
+        )
+        .await;
+        Ok(outcome_to_result(
+            &started.run_id,
+            &started.skill_id,
+            &started.log_path,
+            outcome,
+        ))
+    }
+}
+
+/// `await_workflow` — re-attach to a detached run by `run_id` and wait.
+pub struct AwaitWorkflowTool;
+
+impl Default for AwaitWorkflowTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AwaitWorkflowTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for AwaitWorkflowTool {
+    fn name(&self) -> &str {
+        AWAIT_WORKFLOW_TOOL_NAME
+    }
+
+    fn description(&self) -> &str {
+        "Re-attach to a workflow run you previously spawned (a `run_workflow` \
+         call that returned `status: \"running\"` or `\"started\"`) and wait up \
+         to `wait_seconds` (default 90, max 600) for it to finish. Returns its \
+         terminal `status` + `output` if it lands in time, otherwise \
+         `status: \"running\"` again so you can poll once more or move on. \
+         Argument: `run_id` (string, required); `wait_seconds` (int, optional)."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "type": "string",
+                    "description": "The `run_id` returned by an earlier `run_workflow` call."
+                },
+                "wait_seconds": {
+                    "type": "integer",
+                    "description": "How long to wait inline (default 90, max 600)."
+                }
+            },
+            "required": ["run_id"]
+        })
+    }
+
+    fn permission_level(&self) -> PermissionLevel {
+        PermissionLevel::None
+    }
+
+    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        let run_id = match args.get("run_id").and_then(|v| v.as_str()) {
+            Some(s) if !s.trim().is_empty() => s.to_string(),
+            _ => {
+                return Ok(ToolResult::error(
+                    "await_workflow: missing required argument `run_id` (non-empty string)",
+                ));
+            }
+        };
+        let wait_seconds = parse_wait_seconds(&args);
+
+        let workspace = resolve_workspace_dir().await;
+        let log_path =
+            match crate::openhuman::workflows::run_log::find_run_log_path(&workspace, &run_id) {
+                Some(p) => p,
+                None => {
+                    return Ok(ToolResult::error(format!(
+                        "await_workflow: no run found for run_id `{run_id}` (it may not exist or \
+                         hasn't started writing its log yet)"
+                    )));
+                }
+            };
+
+        // Take an await slot so the LLM can't stack unbounded waits or
+        // double-await the same run; keyed by run_id.
+        let _guard = match guard::acquire_await(format!("await:{run_id}")) {
+            Ok(g) => g,
+            Err(e) => return Ok(ToolResult::error(format!("await_workflow: {e}"))),
+        };
+
+        let outcome =
+            await_run_outcome(&log_path, std::time::Duration::from_secs(wait_seconds)).await;
+        // workflow_id isn't carried on the handle here; the run_id is the
+        // stable key the caller holds, so echo that and leave workflow_id blank.
+        Ok(outcome_to_result(&run_id, "", &log_path, outcome))
     }
 }
 
@@ -141,7 +417,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn name_and_schema_basics() {
+    fn run_workflow_name_and_schema_basics() {
         let t = RunWorkflowTool::new();
         assert_eq!(t.name(), "run_workflow");
         let schema = t.parameters_schema();
@@ -149,18 +425,62 @@ mod tests {
             .get("required")
             .and_then(|v| v.as_array())
             .expect("required array");
-        assert!(required.iter().any(|v| v.as_str() == Some("skill_id")));
-        assert!(required.iter().any(|v| v.as_str() == Some("inputs")));
+        assert!(required.iter().any(|v| v.as_str() == Some("workflow_id")));
+        // inputs is optional now (a workflow may declare no inputs).
+        assert!(!required.iter().any(|v| v.as_str() == Some("inputs")));
+    }
+
+    #[test]
+    fn await_workflow_name_and_schema_basics() {
+        let t = AwaitWorkflowTool::new();
+        assert_eq!(t.name(), "await_workflow");
+        let required = t
+            .parameters_schema()
+            .get("required")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .expect("required array");
+        assert!(required.iter().any(|v| v.as_str() == Some("run_id")));
     }
 
     #[tokio::test]
-    async fn missing_skill_id_returns_tool_error_not_panic() {
+    async fn run_workflow_missing_id_returns_tool_error_not_panic() {
         let t = RunWorkflowTool::new();
         let res = t
-            .execute(serde_json::json!({"inputs": {}}))
+            .execute(json!({"inputs": {}}))
             .await
             .expect("Ok(ToolResult)");
         assert!(res.is_error, "expected ToolResult::error");
-        assert!(res.output().contains("skill_id"));
+        assert!(res.output().contains("workflow_id"));
+    }
+
+    #[tokio::test]
+    async fn await_workflow_missing_run_id_returns_tool_error() {
+        let t = AwaitWorkflowTool::new();
+        let res = t.execute(json!({})).await.expect("Ok(ToolResult)");
+        assert!(res.is_error);
+        assert!(res.output().contains("run_id"));
+    }
+
+    #[test]
+    fn wait_seconds_defaults_and_clamps() {
+        assert_eq!(parse_wait_seconds(&json!({})), DEFAULT_WAIT_SECONDS);
+        assert_eq!(parse_wait_seconds(&json!({"wait_seconds": 5})), 5);
+        assert_eq!(parse_wait_seconds(&json!({"wait_seconds": 0})), 0);
+        assert_eq!(
+            parse_wait_seconds(&json!({"wait_seconds": 99_999})),
+            MAX_WAIT_SECONDS
+        );
+    }
+
+    #[test]
+    fn reentrancy_key_distinguishes_inputs() {
+        let a = reentrancy_key("wf", &Some(json!({"pr": 1})));
+        let b = reentrancy_key("wf", &Some(json!({"pr": 2})));
+        let c = reentrancy_key("wf", &None);
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        // Same id + same inputs → same key (so a tight loop is caught).
+        assert_eq!(a, reentrancy_key("wf", &Some(json!({"pr": 1}))));
     }
 }

@@ -56,8 +56,8 @@ use std::sync::Arc;
 /// failure mode this guards against.
 use super::turn_checkpoint::{assistant_message_has_tool_calls, MAX_ITER_CHECKPOINT_INSTRUCTION};
 
-/// Built-in direct tools that the orchestrator should call by name, not via
-/// `run_skill`.
+/// Built-in direct tools that the orchestrator should call by name, not
+/// wrapped in `run_workflow`.
 const DIRECT_TOOL_NAMES: &[&str] = &[
     "cron_add",
     "cron_list",
@@ -69,18 +69,25 @@ const DIRECT_TOOL_NAMES: &[&str] = &[
 ];
 
 /// Recovery shim for legacy/wrong-model calls of the form:
-/// `run_skill({skill_id: "<built-in tool>", inputs: {...}})`.
+/// `run_workflow({workflow_id: "<built-in tool>", inputs: {...}})` (or the
+/// pre-rename `run_skill({skill_id: ...})`).
 ///
 /// When this pattern appears, rewrite it into a direct tool call so the turn
 /// can proceed without a manual retry.
 fn normalize_tool_call<'a>(call: &'a ParsedToolCall) -> Cow<'a, ParsedToolCall> {
-    if call.name != "run_skill" {
+    if call.name != "run_workflow" && call.name != "run_skill" {
         return Cow::Borrowed(call);
     }
-    let Some(skill_id) = call.arguments.get("skill_id").and_then(|v| v.as_str()) else {
+    // Accept either the current `workflow_id` arg or the legacy `skill_id`.
+    let Some(target) = call
+        .arguments
+        .get("workflow_id")
+        .or_else(|| call.arguments.get("skill_id"))
+        .and_then(|v| v.as_str())
+    else {
         return Cow::Borrowed(call);
     };
-    if !DIRECT_TOOL_NAMES.contains(&skill_id) {
+    if !DIRECT_TOOL_NAMES.contains(&target) {
         return Cow::Borrowed(call);
     }
     let Some(inputs) = call.arguments.get("inputs").and_then(|v| v.as_object()) else {
@@ -88,9 +95,11 @@ fn normalize_tool_call<'a>(call: &'a ParsedToolCall) -> Cow<'a, ParsedToolCall> 
     };
 
     log::warn!(
-        "[agent_loop] rewrote legacy run_skill->{} call into direct tool invocation",
-        skill_id
+        "[agent_loop] rewrote legacy {}->{} call into direct tool invocation",
+        call.name,
+        target
     );
+    let skill_id = target;
     Cow::Owned(ParsedToolCall {
         name: skill_id.to_string(),
         arguments: serde_json::Value::Object(inputs.clone()),

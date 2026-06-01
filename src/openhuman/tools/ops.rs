@@ -159,14 +159,14 @@ pub fn all_tools_with_runtime(
         // follow-up; the tool emits a stable marker today.
         Box::new(TodoTool::new()),
         Box::new(PlanExitTool::new()),
-        // Workflow chaining: let an in-flight autonomous skill (e.g.
-        // `github-issue-crusher`) kick off another bundled skill_run as a
-        // fresh background job (e.g. `pr-review-shepherd` against the PR it
-        // just opened) so each skill stays narrow + composable. Thin
-        // wrapper over `skills::schemas::spawn_skill_run_background` — the
-        // same helper `openhuman.skills_run` JSON-RPC uses, so RPC callers
-        // and tool callers share one spawn path.
+        // Workflow composition: `run_workflow` runs another workflow as a
+        // subagent and (by default) waits on its result like a function call;
+        // `await_workflow` re-attaches to a run that outlived its inline wait.
+        // Both wrap `workflows::schemas::spawn_skill_run_background` +
+        // `await_run_outcome` — the same spawn path `openhuman.workflows_run`
+        // JSON-RPC uses, so RPC and tool callers stay in sync.
         Box::new(RunWorkflowTool::new()),
+        Box::new(AwaitWorkflowTool::new()),
         Box::new(CurrentTimeTool::new()),
         Box::new(LaunchAppTool::new()),
         Box::new(AxInteractTool::new(

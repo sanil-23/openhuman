@@ -149,15 +149,23 @@ named = [
     # touch files itself.
     "todowrite",
     "plan_exit",
-    # Skill chaining: let an in-flight autonomous skill (e.g.
-    # `github-issue-crusher` after the draft PR is open) spawn another
-    # bundled skill_run (e.g. `pr-review-shepherd` against that PR) as a
-    # fresh background job, so each skill stays narrow + composable.
-    # Thin wrapper over `skills::schemas::spawn_skill_run_background` — the
-    # same helper the `openhuman.skills_run` JSON-RPC controller uses, so
-    # RPC callers and tool callers share one spawn path (iter cap,
-    # transcript isolation, degenerate-response detector all apply).
-    "run_skill",
+    # Workflow composition. `run_workflow` runs another workflow as a
+    # subagent and (by default) waits on its result like a function call;
+    # `await_workflow` re-attaches to a run that outlived its inline wait.
+    # `list_workflows` / `describe_workflow` let the orchestrator discover
+    # what's installed and learn a workflow's inputs before running it; the
+    # `*_run*` read tools let it inspect a run's status + log. All route
+    # through `workflows::schemas::spawn_skill_run_background` +
+    # `await_run_outcome` — the same spawn path the `openhuman.workflows_run`
+    # JSON-RPC controller uses (iter cap, transcript isolation,
+    # degenerate-response detector all apply).
+    "list_workflows",
+    "describe_workflow",
+    "read_workflow_resource",
+    "list_workflow_runs",
+    "read_workflow_run_log",
+    "run_workflow",
+    "await_workflow",
     # Self-update — lets the orchestrator answer "am I up to date" /
     # "update OpenHuman" without sending the user to Settings →
     # Developer Options. `update_check` is read-only; `update_apply`
@@ -167,12 +175,6 @@ named = [
     # `src/openhuman/update/` end-to-end — no parallel release logic.
     "update_check",
     "update_apply",
-    # Workflow tools — let the orchestrator inspect and activate installed
-    # WORKFLOW.md bundles.  `workflow_load` is read-only (inspect a workflow);
-    # `workflow_phase` activates a phase (runs gated scripts, surfaces guidance).
-    # Both are routed through the same security/approval gate as `shell`.
-    "workflow_load",
-    "workflow_phase",
     # structured slide spec via a native Rust engine (`ppt-rs`) running
     # in-process — no Python subprocess, no managed venv. Output lands
     # in the workspace artifacts directory and the tool returns the

@@ -1035,6 +1035,35 @@ pub(crate) async fn spawn_skill_run_background(
     })
 }
 
+/// Poll a spawned run's log file until its terminal footer lands or the
+/// `budget` elapses. Returns `Some(outcome)` the moment the footer is
+/// readable (DONE / DEGENERATE / FAILED), or `None` if the run is still
+/// `RUNNING` when the budget runs out — the caller then auto-detaches and
+/// hands back the `run_id` so the work continues in the background.
+///
+/// The poll happens in the runtime (a tokio sleep loop), NOT in the LLM —
+/// the model issues one `run_workflow` tool call and gets either the result
+/// or a "still running" handle back, never a busy-wait it has to drive.
+pub(crate) async fn await_run_outcome(
+    log_path: &std::path::Path,
+    budget: std::time::Duration,
+) -> Option<run_log::RunOutcome> {
+    // Tight enough that a fast workflow returns inline promptly; loose
+    // enough that polling a finished-but-slow log isn't a hot spin.
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(750);
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        if let Some(outcome) = run_log::read_terminal_outcome(log_path) {
+            return Some(outcome);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        tokio::time::sleep(POLL_INTERVAL.min(remaining)).await;
+    }
+}
+
 fn handle_workflows_run(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<WorkflowsRunParams>(params)?;
@@ -1213,7 +1242,7 @@ fn fallback_config() -> Config {
 /// Resolve the active workspace directory. Falls back to the runtime default
 /// if the persisted config fails to load so the CLI and headless diagnostics
 /// still work in partially-initialized environments.
-async fn resolve_workspace_dir() -> PathBuf {
+pub(crate) async fn resolve_workspace_dir() -> PathBuf {
     match tokio::time::timeout(std::time::Duration::from_secs(30), Config::load_or_init()).await {
         Ok(Ok(cfg)) => cfg.workspace_dir,
         Ok(Err(err)) => {

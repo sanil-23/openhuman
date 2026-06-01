@@ -1,17 +1,18 @@
-//! LLM-callable wrappers over the `skills` metadata domain.
+//! LLM-callable wrappers over the `workflows` metadata domain.
 //!
-//! These tools let the agent discover installed skills, inspect a skill's
-//! definition and bundled resources, review recent runs and their logs, and
-//! (opt-in) scaffold / install / uninstall user skills. Thin shims over the
-//! free functions in the `skills::ops_*` / `registry` / `run_log` modules.
+//! These tools let the agent discover installed workflows, inspect a
+//! workflow's definition and bundled resources, review recent runs and their
+//! logs, and (opt-in) scaffold / install / uninstall user workflows. Thin
+//! shims over the free functions in the `workflows::ops_*` / `registry` /
+//! `run_log` modules.
 //!
-//! NOTE: launching a skill run is already exposed by `RunSkillTool`
-//! (`skills.run`), so it is intentionally not duplicated here.
+//! NOTE: launching a workflow is exposed separately by `RunWorkflowTool`
+//! (`run_workflow`) + `AwaitWorkflowTool`, so it is not duplicated here.
 //!
 //! Read tools are default-enabled. The write/install/uninstall tools
-//! (`skill_create`, `skill_install_from_url`, `skill_uninstall`) mutate the
-//! on-disk skill set (and install fetches remote content), so they ship
-//! default-OFF via `tools/user_filter.rs`.
+//! (`create_workflow`, `install_workflow_from_url`, `uninstall_workflow`)
+//! mutate the on-disk workflow set (and install fetches remote content), so
+//! they ship default-OFF via `tools/user_filter.rs`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,6 +40,14 @@ fn read_required_str(args: &serde_json::Value, key: &str) -> anyhow::Result<Stri
         .ok_or_else(|| anyhow::anyhow!("missing required string argument `{key}`"))
 }
 
+/// Read the target workflow id, accepting the legacy `skill_id` key as an
+/// alias for `workflow_id` so callers from before the rename still work.
+fn read_workflow_id(args: &serde_json::Value) -> anyhow::Result<String> {
+    read_required_str(args, "workflow_id")
+        .or_else(|_| read_required_str(args, "skill_id"))
+        .map_err(|_| anyhow::anyhow!("missing required string argument `workflow_id`"))
+}
+
 /// List installed skills.
 pub struct WorkflowListTool {
     workspace_dir: PathBuf,
@@ -55,14 +64,14 @@ impl WorkflowListTool {
 #[async_trait]
 impl Tool for WorkflowListTool {
     fn name(&self) -> &str {
-        "skill_list"
+        "list_workflows"
     }
 
     fn description(&self) -> &str {
-        "List installed skills (reusable, packaged agent procedures defined as \
-         SKILL.md bundles). Returns each skill's name, dir, description, tags, \
-         tool hints, scope, and any warnings. Use to find a skill to inspect \
-         (`skill_describe`) or run."
+        "List installed workflows (reusable, packaged agent procedures — a goal \
+         plus the procedure to reach it). Returns each workflow's name, dir, \
+         description, tags, tool hints, scope, and any warnings. Use to find a \
+         workflow to inspect (`describe_workflow`) or run (`run_workflow`)."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -70,13 +79,13 @@ impl Tool for WorkflowListTool {
     }
 
     async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        log::debug!("[tool][skills] list invoked");
+        log::debug!("[tool][workflows] list invoked");
         let home = dirs::home_dir();
         let trusted = is_workspace_trusted(&self.workspace_dir);
-        let skills = discover_skills(home.as_deref(), Some(&self.workspace_dir), trusted);
+        let workflows = discover_skills(home.as_deref(), Some(&self.workspace_dir), trusted);
         Ok(ToolResult::success(serde_json::to_string(&json!({
-            "count": skills.len(),
-            "skills": skills,
+            "count": workflows.len(),
+            "workflows": workflows,
         }))?))
     }
 
@@ -101,29 +110,29 @@ impl WorkflowDescribeTool {
 #[async_trait]
 impl Tool for WorkflowDescribeTool {
     fn name(&self) -> &str {
-        "skill_describe"
+        "describe_workflow"
     }
 
     fn description(&self) -> &str {
-        "Describe one skill by `skill_id`: its agent definition (id, \
+        "Describe one workflow by `workflow_id`: its agent definition (id, \
          display name, when-to-use) and the inputs it declares (name, \
-         description, required, type). Use before running a skill to learn \
+         description, required, type). Use before running a workflow to learn \
          which inputs to supply."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
-            "properties": { "skill_id": { "type": "string", "description": "Workflow id (directory name)." } },
-            "required": ["skill_id"]
+            "properties": { "workflow_id": { "type": "string", "description": "Workflow id (directory name)." } },
+            "required": ["workflow_id"]
         })
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        log::debug!("[tool][skills] describe invoked");
-        let skill_id = read_required_str(&args, "skill_id")?;
+        log::debug!("[tool][workflows] describe invoked");
+        let skill_id = read_workflow_id(&args)?;
         let def = get_skill(&self.workspace_dir, &skill_id)
-            .ok_or_else(|| anyhow::anyhow!("skill_describe: skill `{skill_id}` not found"))?;
+            .ok_or_else(|| anyhow::anyhow!("describe_workflow: workflow `{skill_id}` not found"))?;
         Ok(ToolResult::success(serde_json::to_string(&json!({
             "definition": def.definition,
             "inputs": def.inputs,
@@ -152,34 +161,34 @@ impl WorkflowReadResourceTool {
 #[async_trait]
 impl Tool for WorkflowReadResourceTool {
     fn name(&self) -> &str {
-        "skill_read_resource"
+        "read_workflow_resource"
     }
 
     fn description(&self) -> &str {
-        "Read a bundled resource file from a skill (`skill_id` + `relative_path` \
-         under the skill directory, e.g. `scripts/run.sh` or \
+        "Read a bundled resource file from a workflow (`workflow_id` + \
+         `relative_path` under the workflow directory, e.g. `scripts/run.sh` or \
          `references/spec.md`). Path-hardened and size-capped. Use to inspect a \
-         skill's helper scripts or reference docs."
+         workflow's helper scripts or reference docs."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "skill_id": { "type": "string", "description": "Workflow id (directory name)." },
-                "relative_path": { "type": "string", "description": "Path relative to the skill directory." }
+                "workflow_id": { "type": "string", "description": "Workflow id (directory name)." },
+                "relative_path": { "type": "string", "description": "Path relative to the workflow directory." }
             },
-            "required": ["skill_id", "relative_path"]
+            "required": ["workflow_id", "relative_path"]
         })
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        log::debug!("[tool][skills] read_resource invoked");
-        let skill_id = read_required_str(&args, "skill_id")?;
+        log::debug!("[tool][workflows] read_resource invoked");
+        let skill_id = read_workflow_id(&args)?;
         let relative_path = read_required_str(&args, "relative_path")?;
         let content =
             read_skill_resource(&self.workspace_dir, &skill_id, Path::new(&relative_path))
-                .map_err(|e| anyhow::anyhow!("skill_read_resource: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("read_workflow_resource: {e}"))?;
         Ok(ToolResult::success(serde_json::to_string(&json!({
             "skill_id": skill_id,
             "relative_path": relative_path,
@@ -208,29 +217,31 @@ impl WorkflowRecentRunsTool {
 #[async_trait]
 impl Tool for WorkflowRecentRunsTool {
     fn name(&self) -> &str {
-        "skill_recent_runs"
+        "list_workflow_runs"
     }
 
     fn description(&self) -> &str {
-        "List recent skill runs (optionally filtered by `skill_id`), newest \
-         first. Each carries `run_id`, `skill_id`, start time, status, and \
-         duration. Use to find a `run_id` for `skill_read_run_log`."
+        "List recent workflow runs (optionally filtered by `workflow_id`), \
+         newest first. Each carries `run_id`, `workflow_id`, start time, status, \
+         and duration. Use to find a `run_id` for `read_workflow_run_log` or \
+         `await_workflow`."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "skill_id": { "type": "string", "description": "Filter to one skill (optional)." },
+                "workflow_id": { "type": "string", "description": "Filter to one workflow (optional)." },
                 "limit": { "type": "integer", "minimum": 1, "description": "Max runs (default 20)." }
             }
         })
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        log::debug!("[tool][skills] recent_runs invoked");
+        log::debug!("[tool][workflows] recent_runs invoked");
         let skill_id = args
-            .get("skill_id")
+            .get("workflow_id")
+            .or_else(|| args.get("skill_id"))
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|s| !s.is_empty());
@@ -267,14 +278,14 @@ impl WorkflowReadRunLogTool {
 #[async_trait]
 impl Tool for WorkflowReadRunLogTool {
     fn name(&self) -> &str {
-        "skill_read_run_log"
+        "read_workflow_run_log"
     }
 
     fn description(&self) -> &str {
-        "Read a slice of a skill run's log by `run_id`, from `offset` bytes up \
-         to `max_bytes`. Returns the content plus the next offset and an `eof` \
-         flag so you can stream a long log. Use `skill_recent_runs` to find a \
-         run id."
+        "Read a slice of a workflow run's log by `run_id`, from `offset` bytes \
+         up to `max_bytes`. Returns the content plus the next offset and an \
+         `eof` flag so you can stream a long log. Use `list_workflow_runs` to \
+         find a run id."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -302,9 +313,9 @@ impl Tool for WorkflowReadRunLogTool {
             .map(|v| v as usize)
             .unwrap_or(65536);
         let path = find_run_log_path(&self.workspace_dir, &run_id)
-            .ok_or_else(|| anyhow::anyhow!("skill_read_run_log: run `{run_id}` not found"))?;
+            .ok_or_else(|| anyhow::anyhow!("read_workflow_run_log: run `{run_id}` not found"))?;
         let slice = read_run_log_slice(&path, offset, max_bytes)
-            .map_err(|e| anyhow::anyhow!("skill_read_run_log: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("read_workflow_run_log: {e}"))?;
         Ok(ToolResult::success(serde_json::to_string(&slice)?))
     }
 
@@ -329,14 +340,14 @@ impl WorkflowCreateTool {
 #[async_trait]
 impl Tool for WorkflowCreateTool {
     fn name(&self) -> &str {
-        "skill_create"
+        "create_workflow"
     }
 
     fn description(&self) -> &str {
-        "Scaffold a new skill (SKILL.md, plus skill.toml when inputs are \
+        "Scaffold a new workflow (SKILL.md, plus skill.toml when inputs are \
          declared). Requires `name` and `description`; optional `scope` \
          (user|project), `tags`, `allowed_tools`, and `inputs`. Use when the \
-         user wants to capture a repeatable procedure as a packaged skill."
+         user wants to capture a repeatable procedure as a packaged workflow."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -363,9 +374,9 @@ impl Tool for WorkflowCreateTool {
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         log::debug!("[tool][skills] create invoked");
         let params: CreateSkillParams = serde_json::from_value(args)
-            .map_err(|e| anyhow::anyhow!("skill_create: invalid params: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("create_workflow: invalid params: {e}"))?;
         let skill = create_skill(&self.workspace_dir, params)
-            .map_err(|e| anyhow::anyhow!("skill_create: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("create_workflow: {e}"))?;
         Ok(ToolResult::success(serde_json::to_string(&skill)?))
     }
 }
@@ -386,14 +397,14 @@ impl WorkflowInstallFromUrlTool {
 #[async_trait]
 impl Tool for WorkflowInstallFromUrlTool {
     fn name(&self) -> &str {
-        "skill_install_from_url"
+        "install_workflow_from_url"
     }
 
     fn description(&self) -> &str {
-        "Install a user skill from a remote `url` (https, must point at a \
+        "Install a user workflow from a remote `url` (https, must point at a \
          SKILL.md). Fetches and writes it under `~/.openhuman/skills/`. \
          Optional `timeout_secs`. Collisions are rejected. Only use when the \
-         user explicitly asks to install a skill from a URL."
+         user explicitly asks to install a workflow from a URL."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -419,10 +430,10 @@ impl Tool for WorkflowInstallFromUrlTool {
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         log::debug!("[tool][skills] install_from_url invoked");
         let params: InstallSkillFromUrlParams = serde_json::from_value(args)
-            .map_err(|e| anyhow::anyhow!("skill_install_from_url: invalid params: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("install_workflow_from_url: invalid params: {e}"))?;
         let outcome = install_skill_from_url(&self.workspace_dir, params)
             .await
-            .map_err(|e| anyhow::anyhow!("skill_install_from_url: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("install_workflow_from_url: {e}"))?;
         Ok(ToolResult::success(serde_json::to_string(&outcome)?))
     }
 }
@@ -433,14 +444,14 @@ pub struct WorkflowUninstallTool;
 #[async_trait]
 impl Tool for WorkflowUninstallTool {
     fn name(&self) -> &str {
-        "skill_uninstall"
+        "uninstall_workflow"
     }
 
     fn description(&self) -> &str {
-        "Uninstall a user-scope skill by `name`, deleting its directory under \
-         `~/.openhuman/skills/`. Irreversible; project/legacy skills are \
+        "Uninstall a user-scope workflow by `name`, deleting its directory under \
+         `~/.openhuman/skills/`. Irreversible; project/legacy workflows are \
          read-only and cannot be removed. Only use when the user asks to remove \
-         a specific skill."
+         a specific workflow."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -459,7 +470,7 @@ impl Tool for WorkflowUninstallTool {
         log::debug!("[tool][skills] uninstall invoked");
         let name = read_required_str(&args, "name")?;
         let outcome = uninstall_skill(UninstallSkillParams { name }, None)
-            .map_err(|e| anyhow::anyhow!("skill_uninstall: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("uninstall_workflow: {e}"))?;
         Ok(ToolResult::success(serde_json::to_string(&outcome)?))
     }
 }
@@ -476,7 +487,7 @@ mod tests {
     #[test]
     fn names_and_levels() {
         let c = cfg();
-        assert_eq!(WorkflowListTool::new(c.clone()).name(), "skill_list");
+        assert_eq!(WorkflowListTool::new(c.clone()).name(), "list_workflows");
         assert_eq!(
             WorkflowListTool::new(c.clone()).permission_level(),
             PermissionLevel::ReadOnly
@@ -499,18 +510,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn describe_requires_skill_id() {
+    async fn describe_requires_workflow_id() {
         let err = WorkflowDescribeTool::new(cfg())
             .execute(json!({}))
             .await
-            .expect_err("missing skill_id");
-        assert!(err.to_string().contains("skill_id"));
+            .expect_err("missing workflow_id");
+        assert!(err.to_string().contains("workflow_id"));
+    }
+
+    #[tokio::test]
+    async fn describe_accepts_legacy_skill_id_alias() {
+        // `skill_id` still resolves (back-compat) — a non-existent id should
+        // fail with "not found", not "missing argument".
+        let err = WorkflowDescribeTool::new(cfg())
+            .execute(json!({ "skill_id": "does-not-exist" }))
+            .await
+            .expect_err("unknown workflow");
+        assert!(err.to_string().contains("not found"));
     }
 
     #[tokio::test]
     async fn read_resource_requires_both_args() {
         let err = WorkflowReadResourceTool::new(cfg())
-            .execute(json!({ "skill_id": "x" }))
+            .execute(json!({ "workflow_id": "x" }))
             .await
             .expect_err("missing relative_path");
         assert!(err.to_string().contains("relative_path"));
@@ -527,13 +549,13 @@ mod tests {
 
     #[tokio::test]
     async fn list_returns_envelope() {
-        // A fresh workspace has no project skills, but the user-home scan may
-        // surface bundled skills; either way the call succeeds and returns the
-        // envelope shape.
+        // A fresh workspace has no project workflows, but the user-home scan
+        // may surface bundled ones; either way the call succeeds and returns
+        // the envelope shape.
         let out = WorkflowListTool::new(cfg())
             .execute(json!({}))
             .await
             .expect("list");
-        assert!(out.output_for_llm(false).contains("skills"));
+        assert!(out.output_for_llm(false).contains("workflows"));
     }
 }
