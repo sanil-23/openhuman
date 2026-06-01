@@ -183,7 +183,7 @@ describe('CreateSkillForm', () => {
     expect(payload).not.toHaveProperty('inputs');
   });
 
-  it('one filled input row ships in the payload with name + required: true', async () => {
+  it('one filled input row ships in the payload — additional inputs default to required: false', async () => {
     hoisted.createSkill.mockResolvedValue({ id: 'x', name: 'x', scope: 'user', legacy: false });
     render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
     fillRequiredFields();
@@ -200,8 +200,57 @@ describe('CreateSkillForm', () => {
         name: 'My Skill',
         description: 'Does the thing.',
         scope: 'user',
-        inputs: [{ name: 'repo', required: true, description: 'owner/name' }],
+        // New default: rows are optional unless the author ticks Required.
+        inputs: [{ name: 'repo', required: false, description: 'owner/name' }],
       });
+    });
+  });
+
+  it('blocks submission when an added input row has no description', async () => {
+    hoisted.createSkill.mockResolvedValue({ id: 'x', name: 'x', scope: 'user', legacy: false });
+    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    fillRequiredFields();
+
+    fireEvent.click(screen.getByTestId('create-skill-add-input'));
+    const row = lastRow();
+    const [nameInput] = row.querySelectorAll<HTMLInputElement>('input[type="text"]');
+    // Valid name, but description left empty → submission must be blocked.
+    fireEvent.change(nameInput, { target: { value: 'repo' } });
+    fireEvent.submit(document.getElementById(FORM_ID)!);
+    await Promise.resolve();
+    expect(hoisted.createSkill).not.toHaveBeenCalled();
+    expect(screen.getByText(/descriptionError/i)).toBeInTheDocument();
+
+    // Fill the description → now it submits.
+    const [, descInput] = row.querySelectorAll<HTMLInputElement>('input[type="text"]');
+    fireEvent.change(descInput, { target: { value: 'owner/name' } });
+    fireEvent.submit(document.getElementById(FORM_ID)!);
+    await waitFor(() => {
+      expect(hoisted.createSkill).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('ticking Required flips the row to required: true', async () => {
+    hoisted.createSkill.mockResolvedValue({ id: 'x', name: 'x', scope: 'user', legacy: false });
+    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    fillRequiredFields();
+
+    fireEvent.click(screen.getByTestId('create-skill-add-input'));
+    const row = lastRow();
+    const [nameInput, descInput] = row.querySelectorAll<HTMLInputElement>('input[type="text"]');
+    fireEvent.change(nameInput, { target: { value: 'repo' } });
+    fireEvent.change(descInput, { target: { value: 'owner/name' } });
+    // Default is unchecked (false); tick it → true.
+    const requiredCheckbox = row.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    fireEvent.click(requiredCheckbox);
+
+    fireEvent.submit(document.getElementById(FORM_ID)!);
+    await waitFor(() => {
+      expect(hoisted.createSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputs: [{ name: 'repo', required: true, description: 'owner/name' }],
+        })
+      );
     });
   });
 
@@ -250,26 +299,28 @@ describe('CreateSkillForm', () => {
     expect(payload).not.toHaveProperty('inputs');
   });
 
-  it('integer + required=false carry through the type + required flags', async () => {
+  it('integer + required=false (the default) carry through the type + required flags', async () => {
     hoisted.createSkill.mockResolvedValue({ id: 'x', name: 'x', scope: 'user', legacy: false });
     render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
     fillRequiredFields();
 
     fireEvent.click(screen.getByTestId('create-skill-add-input'));
     const row = lastRow();
-    const [nameInput] = row.querySelectorAll<HTMLInputElement>('input[type="text"]');
+    const [nameInput, descInput] = row.querySelectorAll<HTMLInputElement>('input[type="text"]');
     fireEvent.change(nameInput, { target: { value: 'issue' } });
-    // Flip type → integer, uncheck required.
+    // Description is now mandatory per row.
+    fireEvent.change(descInput, { target: { value: 'Issue number to work on' } });
+    // Flip type → integer; leave Required unticked (false is the default now).
     const typeSelect = row.querySelector<HTMLSelectElement>('select')!;
     fireEvent.change(typeSelect, { target: { value: 'integer' } });
-    const requiredCheckbox = row.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-    fireEvent.click(requiredCheckbox);
 
     fireEvent.submit(document.getElementById(FORM_ID)!);
     await waitFor(() => {
       expect(hoisted.createSkill).toHaveBeenCalledWith(
         expect.objectContaining({
-          inputs: [{ name: 'issue', required: false, type: 'integer' }],
+          inputs: [
+            { name: 'issue', required: false, type: 'integer', description: 'Issue number to work on' },
+          ],
         })
       );
     });

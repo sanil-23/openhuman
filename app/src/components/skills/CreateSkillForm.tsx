@@ -67,7 +67,10 @@ function newRow(): InputRow {
     localId: `row-${nextLocalId}`,
     name: '',
     description: '',
-    required: true,
+    // Additional inputs are optional by default — the author opts a row INTO
+    // required via the checkbox. (A workflow run only blocks on inputs the
+    // author explicitly marks required.)
+    required: false,
     type: 'string',
   };
 }
@@ -149,10 +152,14 @@ const CreateSkillForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProps>(
 
     const nameValid = slug.length > 0;
     const descriptionValid = description.trim().length > 0;
-    // Each row must have a non-empty, regex-valid name. Empty rows block
-    // submission so the user explicitly removes them rather than getting
-    // a malformed [[inputs]] entry silently dropped on the Rust side.
-    const inputsValid = inputs.every((r) => NAME_RE.test(r.name.trim()));
+    // Each row must have a non-empty, regex-valid name AND a non-empty
+    // description. Empty/under-specified rows block submission so the user
+    // explicitly removes them rather than shipping a malformed or
+    // undocumented [[inputs]] entry. The description is what the agent (and
+    // the run form) shows to explain the input, so it's mandatory per row.
+    const inputsValid = inputs.every(
+      (r) => NAME_RE.test(r.name.trim()) && r.description.trim().length > 0
+    );
     const formValid = nameValid && descriptionValid && inputsValid && !submitting;
 
     const addRow = useCallback(() => {
@@ -315,6 +322,10 @@ const CreateSkillForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProps>(
               {inputs.map((row) => {
                 const trimmed = row.name.trim();
                 const showNameErr = row.name.length > 0 && !NAME_RE.test(trimmed);
+                // A row is "in use" once it has a name; at that point its
+                // description is required (see `inputsValid`).
+                const showDescErr =
+                  row.name.trim().length > 0 && row.description.trim().length === 0;
                 return (
                   <div
                     key={row.localId}
@@ -338,17 +349,24 @@ const CreateSkillForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProps>(
                           </p>
                         )}
                       </div>
-                      <input
-                        type="text"
-                        value={row.description}
-                        onChange={(e) =>
-                          updateRow(row.localId, { description: e.target.value })
-                        }
-                        maxLength={256}
-                        placeholder={t('skills.create.inputs.row.descriptionPlaceholder')}
-                        aria-label={t('skills.create.inputs.row.description')}
-                        className="w-full rounded-md border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2 py-1.5 text-xs text-stone-900 dark:text-neutral-100 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
-                      />
+                      <div>
+                        <input
+                          type="text"
+                          value={row.description}
+                          onChange={(e) =>
+                            updateRow(row.localId, { description: e.target.value })
+                          }
+                          maxLength={256}
+                          placeholder={t('skills.create.inputs.row.descriptionPlaceholder')}
+                          aria-label={t('skills.create.inputs.row.description')}
+                          className={`w-full rounded-md border bg-white dark:bg-neutral-900 px-2 py-1.5 text-xs text-stone-900 dark:text-neutral-100 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30 ${showDescErr ? 'border-coral-400' : 'border-stone-200 dark:border-neutral-800 focus:border-primary-500'}`}
+                        />
+                        {showDescErr && (
+                          <p className="mt-0.5 text-[10px] text-coral-600">
+                            {t('skills.create.inputs.row.descriptionError')}
+                          </p>
+                        )}
+                      </div>
                       <button
                         type="button"
                         data-testid={`create-skill-remove-input-${row.localId}`}

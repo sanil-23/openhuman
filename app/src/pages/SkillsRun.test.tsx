@@ -20,7 +20,7 @@ describe('SkillsRun', () => {
   it('renders the back button and page heading', () => {
     render_();
     expect(screen.getByRole('button', { name: 'common.back' })).toBeInTheDocument();
-    expect(screen.getByText('skills.tabs.runners')).toBeInTheDocument();
+    expect(screen.getByText('skills.run.title')).toBeInTheDocument();
   });
 
   it('renders SkillsRunnerBody', () => {

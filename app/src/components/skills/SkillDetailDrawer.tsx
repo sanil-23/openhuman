@@ -16,6 +16,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import debug from 'debug';
 
 import { useT } from '../../lib/i18n/I18nContext';
@@ -46,7 +47,16 @@ function scopePillCls(scope: SkillSummary['scope'], legacy: boolean): string {
 
 export default function SkillDetailDrawer({ skill, onClose }: Props) {
   const { t } = useT();
+  const navigate = useNavigate();
   const [selectedResource, setSelectedResource] = useState<string | null>(null);
+
+  // "Run workflow" → the focused runner page, pre-selected to this workflow
+  // via `?skill=<id>`. Closing the drawer first keeps the back stack clean.
+  const handleRun = useCallback(() => {
+    log('run-workflow skillId=%s', skill.id);
+    onClose();
+    navigate(`/skills/run?skill=${encodeURIComponent(skill.id)}`);
+  }, [navigate, onClose, skill.id]);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
@@ -136,24 +146,34 @@ export default function SkillDetailDrawer({ skill, onClose }: Props) {
               <p className="mt-1 text-xs text-stone-500 dark:text-neutral-400 font-mono">v{skill.version}</p>
             ) : null}
           </div>
-          <button
-            ref={closeBtnRef}
-            type="button"
-            onClick={() => {
-              log('close-button skillId=%s', skill.id);
-              onClose();
-            }}
-            aria-label={t('skills.detail.closeAriaLabel')}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-stone-400 dark:text-neutral-500 transition-colors hover:bg-stone-100 dark:hover:bg-neutral-800 dark:bg-neutral-800 hover:text-stone-600 dark:hover:text-neutral-300 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1">
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
-          </button>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <button
+              type="button"
+              data-testid="skill-detail-run"
+              onClick={handleRun}
+              aria-label={t('skills.detail.runAriaLabel')}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary-500 px-3 py-1.5 text-xs font-semibold text-white shadow-soft transition-colors hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1">
+              <span aria-hidden="true">▷</span> {t('skills.detail.run')}
+            </button>
+            <button
+              ref={closeBtnRef}
+              type="button"
+              onClick={() => {
+                log('close-button skillId=%s', skill.id);
+                onClose();
+              }}
+              aria-label={t('skills.detail.closeAriaLabel')}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-stone-400 dark:text-neutral-500 transition-colors hover:bg-stone-100 dark:hover:bg-neutral-800 dark:bg-neutral-800 hover:text-stone-600 dark:hover:text-neutral-300 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Body */}
