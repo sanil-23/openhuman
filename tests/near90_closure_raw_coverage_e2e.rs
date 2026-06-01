@@ -391,7 +391,6 @@ fn round20_credentials_profiles_cover_legacy_plaintext_errors_and_active_edges()
 #[tokio::test]
 async fn round20_memory_sources_readers_and_sync_cover_error_edges_without_network() {
     let _lock = env_lock();
-    let _lock = env_lock();
     let harness = setup("http://127.0.0.1:9");
     let config = harness.config().await;
 

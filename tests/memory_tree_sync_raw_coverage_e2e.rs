@@ -436,7 +436,6 @@ async fn memory_walk_provider_errors_and_unknown_actions_are_reported() {
 
 #[tokio::test]
 async fn composio_providers_sync_state_and_bus_surfaces_cover_read_write_edges() {
-    let _lock = env_lock();
     let tmp = TempDir::new().expect("tempdir");
     let _workspace = EnvVarGuard::set("OPENHUMAN_WORKSPACE", tmp.path());
     let _triage = EnvVarGuard::set_str("OPENHUMAN_TRIGGER_TRIAGE_DISABLED", "yes");
@@ -646,14 +645,4 @@ async fn default_composio_provider_hooks_return_expected_noop_shapes() {
         .iter()
         .any(|entity| entity.canonical_id == "email:round14@example.com"));
     assert!(approx_token_count("one two three four") > 0);
-}
-
-// Serializes this binary's process-global OPENHUMAN_WORKSPACE mutation so the
-// raw-coverage tests do not trample each other under parallel llvm-cov runs.
-static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    ENV_LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
 }

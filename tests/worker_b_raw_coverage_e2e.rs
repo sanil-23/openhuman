@@ -576,7 +576,6 @@ async fn agent_profile_lifecycle_persists_custom_profile_and_validates_delete() 
 #[tokio::test]
 async fn approval_gate_rpc_decision_resumes_parked_tool_and_records_execution() {
     let _lock = env_lock();
-    let _lock = env_lock();
     let harness = setup().await;
     let config = Config::load_or_init()
         .await

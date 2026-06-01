@@ -340,7 +340,6 @@ fn owned_domain_config(workspace_root: &std::path::Path) -> Config {
 
 #[tokio::test]
 async fn openai_compatible_provider_covers_auth_temperature_tool_fallback_and_responses() {
-    let _lock = env_lock();
     let (base_url, state) = serve_provider_mock().await;
     let provider = OpenAiCompatibleProvider::new_with_user_agent(
         "owned-mock",
@@ -873,14 +872,4 @@ async fn tool_registry_controller_handlers_cover_list_get_and_validation_paths()
         .or_else(|| diagnostics_value.pointer("/diagnostics/total_tools"))
         .and_then(Value::as_u64)
         .is_some_and(|count| count > 0));
-}
-
-// Serializes this binary's process-global OPENHUMAN_WORKSPACE mutation so the
-// raw-coverage tests do not trample each other under parallel llvm-cov runs.
-static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    ENV_LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
 }
