@@ -27,7 +27,7 @@ describe('skillsApi', () => {
   });
 
   describe('describeSkill', () => {
-    it('calls openhuman.skills_describe with skill_id', async () => {
+    it('calls openhuman.workflows_describe with skill_id', async () => {
       mockCallCoreRpc.mockResolvedValue({
         id: 'dev-workflow',
         name: 'Dev Workflow',
@@ -37,7 +37,7 @@ describe('skillsApi', () => {
       const result = await skillsApi.describeSkill('dev-workflow');
       expect(mockCallCoreRpc).toHaveBeenCalledWith(
         expect.objectContaining({
-          method: 'openhuman.skills_describe',
+          method: 'openhuman.workflows_describe',
           params: { skill_id: 'dev-workflow' },
         })
       );
@@ -54,12 +54,12 @@ describe('skillsApi', () => {
   });
 
   describe('runSkill', () => {
-    it('calls openhuman.skills_run with skill_id and inputs', async () => {
+    it('calls openhuman.workflows_run with skill_id and inputs', async () => {
       mockCallCoreRpc.mockResolvedValue({ run_id: 'run-1', skill_id: 's', log: '/tmp/log' });
       const result = await skillsApi.runSkill('s', { repo: 'owner/repo' });
       expect(mockCallCoreRpc).toHaveBeenCalledWith(
         expect.objectContaining({
-          method: 'openhuman.skills_run',
+          method: 'openhuman.workflows_run',
           params: { skill_id: 's', inputs: { repo: 'owner/repo' } },
         })
       );
@@ -79,7 +79,7 @@ describe('skillsApi', () => {
       const result = await skillsApi.readRunLog('run-1');
       expect(mockCallCoreRpc).toHaveBeenCalledWith(
         expect.objectContaining({
-          method: 'openhuman.skills_read_run_log',
+          method: 'openhuman.workflows_read_run_log',
           params: expect.objectContaining({ run_id: 'run-1' }),
         })
       );

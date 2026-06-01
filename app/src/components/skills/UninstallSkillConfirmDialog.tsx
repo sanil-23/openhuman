@@ -4,7 +4,7 @@
  *
  * Small centered confirm modal for destructive uninstall of a user-scope
  * SKILL.md skill. Wraps `skillsApi.uninstallSkill` which calls
- * `openhuman.skills_uninstall` on the Rust side — that RPC only accepts
+ * `openhuman.workflows_uninstall` on the Rust side — that RPC only accepts
  * user-scope installs (`~/.openhuman/skills/<name>/`) and refuses project
  * and legacy scopes. The card that opens this dialog is responsible for
  * not surfacing the Uninstall action for non-user-scope entries.

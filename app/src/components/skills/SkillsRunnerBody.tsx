@@ -3,7 +3,7 @@
 // Generalises across every bundled skill (`github-issue-crusher`,
 // `pr-review-shepherd`, `dev-workflow`, plus anything the user installs
 // later) — pick one from the dropdown, fill the dynamically-rendered
-// inputs (loaded from `openhuman.skills_describe`), Run Now to
+// inputs (loaded from `openhuman.workflows_describe`), Run Now to
 // fire-and-forget a background autonomous run, or Save as a recurring
 // cron schedule. Recent runs are listed below with an inline log
 // viewer (click-to-expand, auto-tail for in-flight runs).
