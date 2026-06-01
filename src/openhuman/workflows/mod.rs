@@ -1,4 +1,4 @@
-//! Skill metadata helpers and prompt-injection support.
+//! Workflow metadata helpers and prompt-injection support.
 
 pub mod bus;
 pub mod inject;

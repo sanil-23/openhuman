@@ -1,4 +1,4 @@
-//! Skill preflight gates — run BEFORE the orchestrator boots for a
+//! Workflow preflight gates — run BEFORE the orchestrator boots for a
 //! `skills_run`, so failures surface as a plain `Err` from
 //! [`super::schemas::spawn_skill_run_background`] (and from there into
 //! the dashboard card / runner page UI) instead of leaking through as
@@ -39,7 +39,7 @@ use async_trait::async_trait;
 use crate::openhuman::composio::{self};
 use crate::openhuman::config::Config;
 
-use super::registry::{IdentityMatch, SkillGithubConfig};
+use super::registry::{IdentityMatch, WorkflowGithubConfig};
 
 /// Hard cap on each local `git` subprocess probe so a wedged git
 /// (e.g. credential prompt, hung filesystem) can't stall the preflight
@@ -239,7 +239,7 @@ async fn git_config_value(key: &str) -> String {
 /// The gate is a no-op (immediate `Ok(())`) when the `[github]` block
 /// is absent (`cfg: None`) or `required = false`.
 pub async fn run_github_preflight<P: PreflightProbes>(
-    cfg: Option<&SkillGithubConfig>,
+    cfg: Option<&WorkflowGithubConfig>,
     probes: &P,
 ) -> Result<(), GithubGateError> {
     let Some(cfg) = cfg else {
@@ -392,8 +392,8 @@ mod tests {
         }
     }
 
-    fn strict_cfg() -> SkillGithubConfig {
-        SkillGithubConfig {
+    fn strict_cfg() -> WorkflowGithubConfig {
+        WorkflowGithubConfig {
             required: true,
             identity_match: IdentityMatch::Strict,
         }
@@ -413,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn gate_skipped_when_required_is_false() {
-        let cfg = SkillGithubConfig {
+        let cfg = WorkflowGithubConfig {
             required: false,
             identity_match: IdentityMatch::Strict,
         };
@@ -521,7 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn gate_passes_any_with_identity_present_no_match_needed() {
-        let cfg = SkillGithubConfig {
+        let cfg = WorkflowGithubConfig {
             required: true,
             identity_match: IdentityMatch::Any,
         };
@@ -537,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn gate_fails_any_when_composio_identity_missing() {
-        let cfg = SkillGithubConfig {
+        let cfg = WorkflowGithubConfig {
             required: true,
             identity_match: IdentityMatch::Any,
         };
@@ -549,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn gate_passes_none_without_consulting_identity() {
-        let cfg = SkillGithubConfig {
+        let cfg = WorkflowGithubConfig {
             required: true,
             identity_match: IdentityMatch::None,
         };

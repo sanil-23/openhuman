@@ -1,4 +1,4 @@
-//! Skill discovery: scanning root directories, scope resolution, collision handling,
+//! Workflow discovery: scanning root directories, scope resolution, collision handling,
 //! and skill resource reading.
 
 use std::collections::HashMap;
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::ops_parse::{load_from_legacy_manifest, load_from_skill_md};
 use super::ops_types::{
-    Skill, SkillScope, MAX_SKILL_RESOURCE_BYTES, SKILL_JSON, SKILL_MD, TRUST_MARKER,
+    Workflow, WorkflowScope, MAX_SKILL_RESOURCE_BYTES, SKILL_JSON, SKILL_MD, TRUST_MARKER,
 };
 
 /// Initialize the legacy skills directory in the specified workspace.
@@ -45,7 +45,7 @@ pub fn init_skills_dir(workspace_dir: &Path) -> Result<(), String> {
 ///
 /// Project-scope (workspace) skills still take precedence over user-scope
 /// on name collisions.
-pub fn load_skills(workspace_dir: &Path) -> Vec<Skill> {
+pub fn load_skills(workspace_dir: &Path) -> Vec<Workflow> {
     let trusted = is_workspace_trusted(workspace_dir);
     let home = dirs::home_dir();
     discover_skills_inner(home.as_deref(), Some(workspace_dir), trusted)
@@ -65,7 +65,7 @@ pub fn discover_skills(
     home_dir: Option<&Path>,
     workspace_dir: Option<&Path>,
     trusted: bool,
-) -> Vec<Skill> {
+) -> Vec<Workflow> {
     discover_skills_inner(home_dir, workspace_dir, trusted)
 }
 
@@ -81,21 +81,21 @@ pub(crate) fn discover_skills_inner(
     home_dir: Option<&Path>,
     workspace_dir: Option<&Path>,
     trusted: bool,
-) -> Vec<Skill> {
+) -> Vec<Workflow> {
     // Scan order matters for collision resolution: the last scope to register
     // a name wins, so we scan user first, then project, then legacy.
-    let mut by_name: HashMap<String, Skill> = HashMap::new();
+    let mut by_name: HashMap<String, Workflow> = HashMap::new();
 
     if let Some(home) = home_dir {
         for root in user_roots(home) {
-            absorb(&mut by_name, scan_root(&root, SkillScope::User));
+            absorb(&mut by_name, scan_root(&root, WorkflowScope::User));
         }
     }
 
     if let Some(ws) = workspace_dir {
         if trusted {
             for root in project_roots(ws) {
-                absorb(&mut by_name, scan_root(&root, SkillScope::Project));
+                absorb(&mut by_name, scan_root(&root, WorkflowScope::Project));
             }
         }
         // Legacy `<workspace>/skills/` is always scanned so existing setups
@@ -103,11 +103,11 @@ pub(crate) fn discover_skills_inner(
         // marker. Flagged with `legacy = true` so the UI can nudge migration.
         absorb(
             &mut by_name,
-            scan_root(&ws.join("skills"), SkillScope::Legacy),
+            scan_root(&ws.join("skills"), WorkflowScope::Legacy),
         );
     }
 
-    let mut out: Vec<Skill> = by_name.into_values().collect();
+    let mut out: Vec<Workflow> = by_name.into_values().collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
@@ -126,7 +126,7 @@ fn project_roots(workspace: &Path) -> Vec<PathBuf> {
     ]
 }
 
-fn absorb(by_name: &mut HashMap<String, Skill>, incoming: Vec<Skill>) {
+fn absorb(by_name: &mut HashMap<String, Workflow>, incoming: Vec<Workflow>) {
     for mut skill in incoming {
         let key = skill.name.clone();
         if let Some(existing) = by_name.remove(&key) {
@@ -163,15 +163,15 @@ fn absorb(by_name: &mut HashMap<String, Skill>, incoming: Vec<Skill>) {
     }
 }
 
-fn precedence(scope: SkillScope) -> u8 {
+fn precedence(scope: WorkflowScope) -> u8 {
     match scope {
-        SkillScope::Legacy => 0,
-        SkillScope::User => 1,
-        SkillScope::Project => 2,
+        WorkflowScope::Legacy => 0,
+        WorkflowScope::User => 1,
+        WorkflowScope::Project => 2,
     }
 }
 
-fn scan_root(root: &Path, scope: SkillScope) -> Vec<Skill> {
+fn scan_root(root: &Path, scope: WorkflowScope) -> Vec<Workflow> {
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         Err(_) => return Vec::new(),
@@ -212,7 +212,7 @@ fn scan_root(root: &Path, scope: SkillScope) -> Vec<Skill> {
     out
 }
 
-fn load_skill_dir(dir: &Path, dir_name: &str, scope: SkillScope) -> Option<Skill> {
+fn load_skill_dir(dir: &Path, dir_name: &str, scope: WorkflowScope) -> Option<Workflow> {
     let skill_md = dir.join(SKILL_MD);
     let legacy_manifest = dir.join(SKILL_JSON);
 
@@ -234,7 +234,7 @@ fn load_skill_dir(dir: &Path, dir_name: &str, scope: SkillScope) -> Option<Skill
 /// traversal, symlink escape, and oversized payloads.
 ///
 /// `skill_id` identifies the skill by its discovered `name` — the same field
-/// surfaced on [`Skill::name`]. The skill is resolved by running the standard
+/// surfaced on [`Workflow::name`]. The skill is resolved by running the standard
 /// discovery pipeline (`dirs::home_dir()` + `workspace_dir`, honoring the
 /// `.openhuman/trust` marker) and locating the matching entry; this keeps the
 /// read scoped to legitimately installed skills and reuses all the symlink /

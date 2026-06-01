@@ -22,8 +22,8 @@
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::openhuman::workflows::schemas::spawn_skill_run_background;
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
+use crate::openhuman::workflows::schemas::spawn_skill_run_background;
 
 /// Tool name surfaced to the LLM's function-calling schema.
 pub const RUN_WORKFLOW_TOOL_NAME: &str = "run_workflow";

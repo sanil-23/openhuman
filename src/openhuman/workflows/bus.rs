@@ -12,7 +12,7 @@
 //! in without touching the bus machinery.
 
 use crate::core::event_bus::{subscribe_global, DomainEvent, EventHandler, SubscriptionHandle};
-use crate::openhuman::workflows::Skill;
+use crate::openhuman::workflows::Workflow;
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -97,7 +97,7 @@ impl TriggeredSkillIndex {
     /// Build an index from a slice of discovered skills.
     ///
     /// Skills with an empty `triggers:` list are skipped.
-    pub fn build(skills: &[Skill]) -> Self {
+    pub fn build(skills: &[Workflow]) -> Self {
         let mut entries: Vec<(String, Vec<TriggerPattern>)> = skills
             .iter()
             .filter_map(|skill| {
@@ -207,7 +207,7 @@ impl EventHandler for TriggeredSkillSubscriber {
 ///     skills::bus::register_triggered_skill_subscriber(&discovered_skills)
 /// });
 /// ```
-pub fn register_triggered_skill_subscriber(skills: &[Skill]) -> Option<SubscriptionHandle> {
+pub fn register_triggered_skill_subscriber(skills: &[Workflow]) -> Option<SubscriptionHandle> {
     let index = TriggeredSkillIndex::build(skills);
     if index.is_empty() {
         return None;
@@ -229,12 +229,12 @@ pub fn register_skill_cleanup_subscriber() {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::openhuman::workflows::ops_types::{Skill, SkillFrontmatter};
+    use crate::openhuman::workflows::ops_types::{Workflow, WorkflowFrontmatter};
 
-    fn skill_with_triggers(name: &str, triggers: Vec<&str>) -> Skill {
-        Skill {
+    fn skill_with_triggers(name: &str, triggers: Vec<&str>) -> Workflow {
+        Workflow {
             name: name.to_string(),
-            frontmatter: SkillFrontmatter {
+            frontmatter: WorkflowFrontmatter {
                 triggers: triggers.iter().map(|s| s.to_string()).collect(),
                 ..Default::default()
             },

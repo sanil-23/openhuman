@@ -110,7 +110,7 @@ impl Agent {
     }
 
     /// The agent's loaded skills, if any.
-    pub fn skills(&self) -> &[crate::openhuman::workflows::Skill] {
+    pub fn skills(&self) -> &[crate::openhuman::workflows::Workflow] {
         &self.skills
     }
 

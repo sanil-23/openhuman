@@ -29,7 +29,7 @@
 
 // Re-export everything that was previously public from this file so external
 // callers are unaffected.
-pub use super::ops_create::{create_skill, CreateSkillParams, SkillCreateInputDef};
+pub use super::ops_create::{create_skill, CreateSkillParams, WorkflowCreateInputDef};
 pub use super::ops_discover::{
     discover_skills, init_skills_dir, is_workspace_trusted, load_skills, read_skill_resource,
 };
@@ -40,7 +40,9 @@ pub use super::ops_install::{
     MAX_INSTALL_URL_LEN, MAX_SKILL_MD_BYTES,
 };
 pub use super::ops_parse::{inventory_resources, parse_skill_md, parse_skill_md_str};
-pub use super::ops_types::{Skill, SkillFrontmatter, SkillScope, MAX_SKILL_RESOURCE_BYTES};
+pub use super::ops_types::{
+    Workflow, WorkflowFrontmatter, WorkflowScope, MAX_SKILL_RESOURCE_BYTES,
+};
 
 #[cfg(test)]
 pub(crate) use super::ops_create::{create_skill_inner, slugify_skill_name};

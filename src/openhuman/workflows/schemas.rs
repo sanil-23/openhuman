@@ -27,8 +27,8 @@ use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
 use crate::openhuman::config::Config;
 use crate::openhuman::workflows::ops::{
     create_skill, discover_skills, install_skill_from_url, is_workspace_trusted,
-    read_skill_resource, uninstall_skill, CreateSkillParams, InstallSkillFromUrlParams, Skill,
-    SkillCreateInputDef, SkillScope, UninstallSkillParams,
+    read_skill_resource, uninstall_skill, CreateSkillParams, InstallSkillFromUrlParams,
+    UninstallSkillParams, Workflow, WorkflowCreateInputDef, WorkflowScope,
 };
 use crate::rpc::RpcOutcome;
 
@@ -42,23 +42,23 @@ use crate::openhuman::workflows::{preflight, registry, run_log};
 const SKILL_RUN_MAX_ITERATIONS: usize = 200;
 
 #[derive(Debug, Deserialize, Default)]
-struct SkillsListParams {
+struct WorkflowsListParams {
     // No params today. Kept as an empty struct so future filters (scope,
     // search, etc.) can slot in without breaking older clients.
 }
 
 #[derive(Debug, Deserialize)]
-struct SkillsReadResourceParams {
+struct WorkflowsReadResourceParams {
     skill_id: String,
     relative_path: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct SkillsCreateParams {
+struct WorkflowsCreateParams {
     name: String,
     description: String,
     #[serde(default)]
-    scope: SkillScope,
+    scope: WorkflowScope,
     #[serde(default)]
     license: Option<String>,
     #[serde(default)]
@@ -67,18 +67,18 @@ struct SkillsCreateParams {
     tags: Vec<String>,
     #[serde(default, rename = "allowed-tools", alias = "allowed_tools")]
     allowed_tools: Vec<String>,
-    /// Declared `[[inputs]]` entries supplied by the Create-a-Skill form.
+    /// Declared `[[inputs]]` entries supplied by the Create-a-Workflow form.
     /// Empty when the user added no rows; otherwise written into a sibling
     /// `skill.toml` alongside `SKILL.md` so the Skills Runner can render
     /// dynamic form controls at run time. Wire-shape per row:
     /// `{ name, description?, required, type? }` — see
-    /// [`SkillCreateInputDef`] in `ops_create.rs`.
+    /// [`WorkflowCreateInputDef`] in `ops_create.rs`.
     #[serde(default)]
-    inputs: Vec<SkillCreateInputDef>,
+    inputs: Vec<WorkflowCreateInputDef>,
 }
 
-impl From<SkillsCreateParams> for CreateSkillParams {
-    fn from(p: SkillsCreateParams) -> Self {
+impl From<WorkflowsCreateParams> for CreateSkillParams {
+    fn from(p: WorkflowsCreateParams) -> Self {
         CreateSkillParams {
             name: p.name,
             description: p.description,
@@ -93,11 +93,11 @@ impl From<SkillsCreateParams> for CreateSkillParams {
 }
 
 /// Wire-format representation of a discovered skill. Mirrors the fields in
-/// [`Skill`] that are useful to the UI while hiding the
+/// [`Workflow`] that are useful to the UI while hiding the
 /// `frontmatter` blob (which includes a flatten'd forward-compat hatch and
 /// can balloon with arbitrary YAML).
 #[derive(Debug, Serialize)]
-struct SkillSummary {
+struct WorkflowSummary {
     id: String,
     name: String,
     description: String,
@@ -108,23 +108,23 @@ struct SkillSummary {
     prompts: Vec<String>,
     location: Option<String>,
     resources: Vec<String>,
-    scope: SkillScope,
+    scope: WorkflowScope,
     legacy: bool,
     warnings: Vec<String>,
 }
 
-impl From<Skill> for SkillSummary {
-    fn from(s: Skill) -> Self {
+impl From<Workflow> for WorkflowSummary {
+    fn from(s: Workflow) -> Self {
         // `id` is the on-disk slug the uninstall RPC resolves against.
         // Prefer `dir_name`, but fall back to `name` for back-compat on
-        // deserialised `Skill` values written before `dir_name` existed
+        // deserialised `Workflow` values written before `dir_name` existed
         // (default empty string).
         let id = if s.dir_name.is_empty() {
             s.name.clone()
         } else {
             s.dir_name.clone()
         };
-        SkillSummary {
+        WorkflowSummary {
             id,
             name: s.name,
             description: s.description,
@@ -147,12 +147,12 @@ impl From<Skill> for SkillSummary {
 }
 
 #[derive(Debug, Serialize)]
-struct SkillsListResult {
-    skills: Vec<SkillSummary>,
+struct WorkflowsListResult {
+    skills: Vec<WorkflowSummary>,
 }
 
 #[derive(Debug, Serialize)]
-struct SkillsReadResourceResult {
+struct WorkflowsReadResourceResult {
     skill_id: String,
     relative_path: String,
     content: String,
@@ -160,19 +160,19 @@ struct SkillsReadResourceResult {
 }
 
 #[derive(Debug, Serialize)]
-struct SkillsCreateResult {
-    skill: SkillSummary,
+struct WorkflowsCreateResult {
+    skill: WorkflowSummary,
 }
 
 #[derive(Debug, Deserialize)]
-struct SkillsInstallFromUrlParamsWire {
+struct WorkflowsInstallFromUrlParamsWire {
     url: String,
     #[serde(default)]
     timeout_secs: Option<u64>,
 }
 
-impl From<SkillsInstallFromUrlParamsWire> for InstallSkillFromUrlParams {
-    fn from(p: SkillsInstallFromUrlParamsWire) -> Self {
+impl From<WorkflowsInstallFromUrlParamsWire> for InstallSkillFromUrlParams {
+    fn from(p: WorkflowsInstallFromUrlParamsWire) -> Self {
         InstallSkillFromUrlParams {
             url: p.url,
             timeout_secs: p.timeout_secs,
@@ -181,7 +181,7 @@ impl From<SkillsInstallFromUrlParamsWire> for InstallSkillFromUrlParams {
 }
 
 #[derive(Debug, Serialize)]
-struct SkillsInstallFromUrlResult {
+struct WorkflowsInstallFromUrlResult {
     url: String,
     stdout: String,
     stderr: String,
@@ -189,10 +189,10 @@ struct SkillsInstallFromUrlResult {
 }
 
 #[derive(Debug, Serialize)]
-struct SkillsUninstallResult {
+struct WorkflowsUninstallResult {
     name: String,
     removed_path: String,
-    scope: SkillScope,
+    scope: WorkflowScope,
 }
 
 pub fn all_workflows_controller_schemas() -> Vec<ControllerSchema> {
@@ -259,7 +259,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             inputs: vec![],
             outputs: vec![FieldSchema {
                 name: "skills",
-                ty: TypeSchema::Array(Box::new(TypeSchema::Ref("SkillSummary"))),
+                ty: TypeSchema::Array(Box::new(TypeSchema::Ref("WorkflowSummary"))),
                 comment: "Discovered skills (sorted by name, project-scope shadows user-scope).",
                 required: true,
             }],
@@ -272,7 +272,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
                 FieldSchema {
                     name: "skill_id",
                     ty: TypeSchema::String,
-                    comment: "Id of the skill to run (matches SkillDefinition.id).",
+                    comment: "Id of the skill to run (matches WorkflowDefinition.id).",
                     required: true,
                 },
                 FieldSchema {
@@ -317,7 +317,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
                 FieldSchema {
                     name: "skill_id",
                     ty: TypeSchema::String,
-                    comment: "Name of the skill (matches SkillSummary.id / Skill.name).",
+                    comment: "Name of the skill (matches WorkflowSummary.id / Workflow.name).",
                     required: true,
                 },
                 FieldSchema {
@@ -410,7 +410,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             ],
             outputs: vec![FieldSchema {
                 name: "skill",
-                ty: TypeSchema::Ref("SkillSummary"),
+                ty: TypeSchema::Ref("WorkflowSummary"),
                 comment: "The newly created skill, re-discovered through the standard pipeline.",
                 required: true,
             }],
@@ -549,7 +549,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             inputs: vec![FieldSchema {
                 name: "skill_id",
                 ty: TypeSchema::String,
-                comment: "Skill id from `skills_list` (e.g. \"github-issue-crusher\", \"pr-review-shepherd\", \"dev-workflow\").",
+                comment: "Workflow id from `skills_list` (e.g. \"github-issue-crusher\", \"pr-review-shepherd\", \"dev-workflow\").",
                 required: true,
             }],
             outputs: vec![
@@ -572,7 +572,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
                     required: true,
                 },
                 // Wire shape: array of objects. `handle_workflows_describe`
-                // serialises this as a real array of `SkillInputDescription`
+                // serialises this as a real array of `WorkflowInputDescription`
                 // objects — `{name, description, required, type}` per entry —
                 // so the controller-catalog type is `Json`, matching the
                 // payload rather than coercing it to a scalar string.
@@ -591,7 +591,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             inputs: vec![FieldSchema {
                 name: "name",
                 ty: TypeSchema::String,
-                comment: "Exact on-disk slug of the installed skill — matches SkillSummary.id (the directory under ~/.openhuman/skills/), which may differ from the frontmatter display name in Skill.name.",
+                comment: "Exact on-disk slug of the installed skill — matches WorkflowSummary.id (the directory under ~/.openhuman/skills/), which may differ from the frontmatter display name in Workflow.name.",
                 required: true,
             }],
             outputs: vec![
@@ -632,7 +632,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
 
 fn handle_workflows_list(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
-        let _ = deserialize_params::<SkillsListParams>(params)?;
+        let _ = deserialize_params::<WorkflowsListParams>(params)?;
         tracing::debug!("[skills][rpc] list skills");
         let workspace = resolve_workspace_dir().await;
         let trusted = is_workspace_trusted(&workspace);
@@ -644,25 +644,25 @@ fn handle_workflows_list(params: Map<String, Value>) -> ControllerFuture {
             trusted,
             "[skills][rpc] list result"
         );
-        let summaries = skills.into_iter().map(SkillSummary::from).collect();
+        let summaries = skills.into_iter().map(WorkflowSummary::from).collect();
         to_json(RpcOutcome::new(
-            SkillsListResult { skills: summaries },
+            WorkflowsListResult { skills: summaries },
             Vec::new(),
         ))
     })
 }
 
 #[derive(serde::Deserialize)]
-struct SkillsDescribeParams {
+struct WorkflowsDescribeParams {
     skill_id: String,
 }
 
 /// One input declaration as serialised over the wire to the FE form
-/// renderer. Mirrors `registry::SkillInput` but with a fully-explicit
+/// renderer. Mirrors `registry::WorkflowInput` but with a fully-explicit
 /// `type` field (the FE renders different controls per kind) and stable
 /// JSON keys regardless of frontmatter casing.
 #[derive(serde::Serialize)]
-struct SkillInputDescription {
+struct WorkflowInputDescription {
     name: String,
     description: String,
     required: bool,
@@ -671,30 +671,30 @@ struct SkillInputDescription {
 }
 
 #[derive(serde::Serialize)]
-struct SkillsDescribeResult {
+struct WorkflowsDescribeResult {
     id: String,
     display_name: String,
     when_to_use: String,
-    inputs: Vec<SkillInputDescription>,
+    inputs: Vec<WorkflowInputDescription>,
 }
 
 /// `openhuman.skills_describe` — return a single skill's display metadata
 /// and its declared `[[inputs]]` so the Skills Runner panel can render
 /// the right form controls. `skills_list` deliberately stays the cheap
-/// enumeration without input declarations (its `Skill` source struct
+/// enumeration without input declarations (its `Workflow` source struct
 /// predates `[[inputs]]`); on the user picking one we fetch the full
-/// `SkillDefinition` (which carries inputs) and project the small,
+/// `WorkflowDefinition` (which carries inputs) and project the small,
 /// FE-shaped subset they need.
 fn handle_workflows_describe(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
-        let payload = deserialize_params::<SkillsDescribeParams>(params)?;
+        let payload = deserialize_params::<WorkflowsDescribeParams>(params)?;
         let workspace = resolve_workspace_dir().await;
         let skill = registry::get_skill(&workspace, &payload.skill_id)
             .ok_or_else(|| format!("workflows_describe: unknown skill '{}'", payload.skill_id))?;
         let inputs = skill
             .inputs
             .iter()
-            .map(|i| SkillInputDescription {
+            .map(|i| WorkflowInputDescription {
                 name: i.name.clone(),
                 description: i.description.clone(),
                 required: i.required,
@@ -707,7 +707,7 @@ fn handle_workflows_describe(params: Map<String, Value>) -> ControllerFuture {
             .clone()
             .unwrap_or_else(|| skill.definition.id.clone());
         to_json(RpcOutcome::new(
-            SkillsDescribeResult {
+            WorkflowsDescribeResult {
                 id: skill.definition.id.clone(),
                 display_name,
                 when_to_use: skill.definition.when_to_use.clone(),
@@ -719,7 +719,7 @@ fn handle_workflows_describe(params: Map<String, Value>) -> ControllerFuture {
 }
 
 #[derive(serde::Deserialize)]
-struct SkillsReadRunLogParams {
+struct WorkflowsReadRunLogParams {
     run_id: String,
     #[serde(default)]
     offset: Option<u64>,
@@ -734,10 +734,14 @@ struct SkillsReadRunLogParams {
 /// `complete` is false.
 fn handle_workflows_read_run_log(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
-        let payload = deserialize_params::<SkillsReadRunLogParams>(params)?;
+        let payload = deserialize_params::<WorkflowsReadRunLogParams>(params)?;
         let workspace = resolve_workspace_dir().await;
-        let path = run_log::find_run_log_path(&workspace, &payload.run_id)
-            .ok_or_else(|| format!("workflows_read_run_log: unknown run_id '{}'", payload.run_id))?;
+        let path = run_log::find_run_log_path(&workspace, &payload.run_id).ok_or_else(|| {
+            format!(
+                "workflows_read_run_log: unknown run_id '{}'",
+                payload.run_id
+            )
+        })?;
         let offset = payload.offset.unwrap_or(0);
         // 64 KiB default per-call slice, hard cap at 256 KiB to keep the
         // RPC response sane; the FE re-issues with the returned offset
@@ -751,7 +755,7 @@ fn handle_workflows_read_run_log(params: Map<String, Value>) -> ControllerFuture
 }
 
 #[derive(serde::Deserialize)]
-struct SkillsRecentRunsParams {
+struct WorkflowsRecentRunsParams {
     #[serde(default)]
     skill_id: Option<String>,
     #[serde(default)]
@@ -759,7 +763,7 @@ struct SkillsRecentRunsParams {
 }
 
 #[derive(serde::Serialize)]
-struct SkillsRecentRunsResult {
+struct WorkflowsRecentRunsResult {
     runs: Vec<run_log::ScannedRun>,
 }
 
@@ -769,7 +773,7 @@ struct SkillsRecentRunsResult {
 /// tail. Delegates the actual scan + parse to `run_log::scan_runs`.
 fn handle_workflows_recent_runs(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
-        let payload = deserialize_params::<SkillsRecentRunsParams>(params)?;
+        let payload = deserialize_params::<WorkflowsRecentRunsParams>(params)?;
         let limit = payload.limit.unwrap_or(20).min(100) as usize;
         let workspace = resolve_workspace_dir().await;
         let runs = run_log::scan_runs(&workspace, payload.skill_id.as_deref(), limit);
@@ -779,12 +783,15 @@ fn handle_workflows_recent_runs(params: Map<String, Value>) -> ControllerFuture 
             limit,
             "[skills][rpc] recent_runs"
         );
-        to_json(RpcOutcome::new(SkillsRecentRunsResult { runs }, Vec::new()))
+        to_json(RpcOutcome::new(
+            WorkflowsRecentRunsResult { runs },
+            Vec::new(),
+        ))
     })
 }
 
 #[derive(serde::Deserialize)]
-struct SkillsRunParams {
+struct WorkflowsRunParams {
     skill_id: String,
     #[serde(default)]
     inputs: Option<Value>,
@@ -793,7 +800,7 @@ struct SkillsRunParams {
 /// Outcome of [`spawn_skill_run_background`]: the new run's `run_id`, the
 /// canonical `skill_id` the registry resolved it to, and the path of the
 /// streaming log file every step + the footer get written to.
-pub(crate) struct SkillRunStarted {
+pub(crate) struct WorkflowRunStarted {
     pub run_id: String,
     pub skill_id: String,
     pub log_path: std::path::PathBuf,
@@ -812,7 +819,7 @@ pub(crate) struct SkillRunStarted {
 pub(crate) async fn spawn_skill_run_background(
     skill_id_param: String,
     inputs_param: Option<Value>,
-) -> Result<SkillRunStarted, String> {
+) -> Result<WorkflowRunStarted, String> {
     let workspace = resolve_workspace_dir().await;
     let skill = registry::get_skill(&workspace, &skill_id_param)
         .ok_or_else(|| format!("skill_run: unknown skill '{skill_id_param}'"))?;
@@ -905,7 +912,7 @@ pub(crate) async fn spawn_skill_run_background(
     let task_prompt = format!(
         "You are running a single skill: **{skill_id}**. Follow these guidelines exactly and \
          focus solely on completing this one task — do not pick up unrelated work.\n\n\
-         # Skill guidelines\n{guidelines}\n\n{inputs_block}",
+         # Workflow guidelines\n{guidelines}\n\n{inputs_block}",
     );
     let run_id = uuid::Uuid::new_v4().to_string();
     let log_path = run_log::run_log_path(&workspace, &skill_id, &run_id);
@@ -1021,7 +1028,7 @@ pub(crate) async fn spawn_skill_run_background(
         });
     }
 
-    Ok(SkillRunStarted {
+    Ok(WorkflowRunStarted {
         run_id,
         skill_id,
         log_path,
@@ -1030,7 +1037,7 @@ pub(crate) async fn spawn_skill_run_background(
 
 fn handle_workflows_run(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
-        let payload = deserialize_params::<SkillsRunParams>(params)?;
+        let payload = deserialize_params::<WorkflowsRunParams>(params)?;
         let started = match spawn_skill_run_background(payload.skill_id, payload.inputs).await {
             Ok(s) => s,
             Err(e) => return Err(e),
@@ -1049,7 +1056,7 @@ fn handle_workflows_run(params: Map<String, Value>) -> ControllerFuture {
 
 fn handle_workflows_read_resource(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
-        let payload = deserialize_params::<SkillsReadResourceParams>(params)?;
+        let payload = deserialize_params::<WorkflowsReadResourceParams>(params)?;
         tracing::debug!(
             skill_id = %payload.skill_id,
             relative_path = %payload.relative_path,
@@ -1061,7 +1068,7 @@ fn handle_workflows_read_resource(params: Map<String, Value>) -> ControllerFutur
             Ok(content) => {
                 let bytes = content.len();
                 to_json(RpcOutcome::new(
-                    SkillsReadResourceResult {
+                    WorkflowsReadResourceResult {
                         skill_id: payload.skill_id,
                         relative_path: payload.relative_path,
                         content,
@@ -1083,7 +1090,7 @@ fn handle_workflows_read_resource(params: Map<String, Value>) -> ControllerFutur
 
 fn handle_workflows_create(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
-        let payload = deserialize_params::<SkillsCreateParams>(params)?;
+        let payload = deserialize_params::<WorkflowsCreateParams>(params)?;
         tracing::debug!(
             name = %payload.name,
             scope = ?payload.scope,
@@ -1098,8 +1105,8 @@ fn handle_workflows_create(params: Map<String, Value>) -> ControllerFuture {
                     "[skills][rpc] create: ok"
                 );
                 to_json(RpcOutcome::new(
-                    SkillsCreateResult {
-                        skill: SkillSummary::from(skill),
+                    WorkflowsCreateResult {
+                        skill: WorkflowSummary::from(skill),
                     },
                     Vec::new(),
                 ))
@@ -1114,7 +1121,7 @@ fn handle_workflows_create(params: Map<String, Value>) -> ControllerFuture {
 
 fn handle_workflows_install_from_url(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
-        let wire = deserialize_params::<SkillsInstallFromUrlParamsWire>(params)?;
+        let wire = deserialize_params::<WorkflowsInstallFromUrlParamsWire>(params)?;
         tracing::debug!(
             url = %wire.url,
             timeout_secs = ?wire.timeout_secs,
@@ -1131,7 +1138,7 @@ fn handle_workflows_install_from_url(params: Map<String, Value>) -> ControllerFu
                     "[skills][rpc] install_from_url: ok"
                 );
                 to_json(RpcOutcome::new(
-                    SkillsInstallFromUrlResult {
+                    WorkflowsInstallFromUrlResult {
                         url: outcome.url,
                         stdout: outcome.stdout,
                         stderr: outcome.stderr,
@@ -1160,7 +1167,7 @@ fn handle_workflows_uninstall(params: Map<String, Value>) -> ControllerFuture {
                     "[skills][rpc] uninstall: ok"
                 );
                 to_json(RpcOutcome::new(
-                    SkillsUninstallResult {
+                    WorkflowsUninstallResult {
                         name: outcome.name,
                         removed_path: outcome.removed_path,
                         scope: outcome.scope,

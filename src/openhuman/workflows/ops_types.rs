@@ -23,17 +23,17 @@ pub const MAX_SKILL_RESOURCE_BYTES: u64 = 128 * 1024;
 /// Where the skill was discovered. Determines precedence on name collision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum SkillScope {
-    /// Skill shipped with the user's global config (`~/.openhuman/skills/...`).
+pub enum WorkflowScope {
+    /// Workflow shipped with the user's global config (`~/.openhuman/skills/...`).
     User,
-    /// Skill shipped with the current workspace (`<ws>/.openhuman/skills/...`).
+    /// Workflow shipped with the current workspace (`<ws>/.openhuman/skills/...`).
     /// Requires the trust marker to be loaded.
     Project,
-    /// Skill discovered under the legacy `<workspace>/skills/` layout.
+    /// Workflow discovered under the legacy `<workspace>/skills/` layout.
     Legacy,
 }
 
-impl Default for SkillScope {
+impl Default for WorkflowScope {
     fn default() -> Self {
         Self::User
     }
@@ -49,7 +49,7 @@ impl Default for SkillScope {
 /// [`Self::metadata`]. Writers that still put them at the top level are
 /// accepted with a migration warning.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SkillFrontmatter {
+pub struct WorkflowFrontmatter {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -84,7 +84,7 @@ pub struct SkillFrontmatter {
     pub extra: HashMap<String, serde_yaml::Value>,
 }
 
-pub(crate) fn metadata_string(fm: &SkillFrontmatter, key: &str) -> Option<String> {
+pub(crate) fn metadata_string(fm: &WorkflowFrontmatter, key: &str) -> Option<String> {
     fm.metadata
         .get(key)
         .and_then(|v| v.as_str())
@@ -102,7 +102,7 @@ pub(crate) fn metadata_string_seq(value: &serde_yaml::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub(crate) fn extract_version(fm: &SkillFrontmatter, warnings: &mut Vec<String>) -> String {
+pub(crate) fn extract_version(fm: &WorkflowFrontmatter, warnings: &mut Vec<String>) -> String {
     if let Some(v) = metadata_string(fm, "version") {
         return v;
     }
@@ -115,7 +115,10 @@ pub(crate) fn extract_version(fm: &SkillFrontmatter, warnings: &mut Vec<String>)
     String::new()
 }
 
-pub(crate) fn extract_author(fm: &SkillFrontmatter, warnings: &mut Vec<String>) -> Option<String> {
+pub(crate) fn extract_author(
+    fm: &WorkflowFrontmatter,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
     if let Some(v) = metadata_string(fm, "author") {
         return Some(v);
     }
@@ -127,7 +130,7 @@ pub(crate) fn extract_author(fm: &SkillFrontmatter, warnings: &mut Vec<String>) 
     None
 }
 
-pub(crate) fn extract_tags(fm: &SkillFrontmatter, warnings: &mut Vec<String>) -> Vec<String> {
+pub(crate) fn extract_tags(fm: &WorkflowFrontmatter, warnings: &mut Vec<String>) -> Vec<String> {
     if let Some(v) = fm.metadata.get("tags") {
         return metadata_string_seq(v);
     }
@@ -141,13 +144,13 @@ pub(crate) fn extract_tags(fm: &SkillFrontmatter, warnings: &mut Vec<String>) ->
 
 /// A discovered skill.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Skill {
+pub struct Workflow {
     /// Display name (from frontmatter, falls back to directory name).
     pub name: String,
     /// On-disk slug — the directory name under `~/.openhuman/skills/` (user
     /// scope) or the workspace skills directory (project scope). This is the
     /// identifier the uninstall RPC resolves against; it may differ from
-    /// [`Skill::name`] when frontmatter declares a mismatched display name.
+    /// [`Workflow::name`] when frontmatter declares a mismatched display name.
     #[serde(default)]
     pub dir_name: String,
     /// Short description used in the catalog summary.
@@ -168,13 +171,13 @@ pub struct Skill {
     pub location: Option<PathBuf>,
     /// Full parsed frontmatter when sourced from `SKILL.md`.
     #[serde(default)]
-    pub frontmatter: SkillFrontmatter,
+    pub frontmatter: WorkflowFrontmatter,
     /// Bundled resource files (relative to the skill directory).
     #[serde(default)]
     pub resources: Vec<PathBuf>,
     /// Where the skill came from.
     #[serde(default)]
-    pub scope: SkillScope,
+    pub scope: WorkflowScope,
     /// True when loaded from the legacy `skill.json` / `<ws>/skills/` layout.
     #[serde(default)]
     pub legacy: bool,

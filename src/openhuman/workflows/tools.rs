@@ -40,11 +40,11 @@ fn read_required_str(args: &serde_json::Value, key: &str) -> anyhow::Result<Stri
 }
 
 /// List installed skills.
-pub struct SkillListTool {
+pub struct WorkflowListTool {
     workspace_dir: PathBuf,
 }
 
-impl SkillListTool {
+impl WorkflowListTool {
     pub fn new(config: Arc<Config>) -> Self {
         Self {
             workspace_dir: config.workspace_dir.clone(),
@@ -53,7 +53,7 @@ impl SkillListTool {
 }
 
 #[async_trait]
-impl Tool for SkillListTool {
+impl Tool for WorkflowListTool {
     fn name(&self) -> &str {
         "skill_list"
     }
@@ -86,11 +86,11 @@ impl Tool for SkillListTool {
 }
 
 /// Describe one skill (definition + declared inputs).
-pub struct SkillDescribeTool {
+pub struct WorkflowDescribeTool {
     workspace_dir: PathBuf,
 }
 
-impl SkillDescribeTool {
+impl WorkflowDescribeTool {
     pub fn new(config: Arc<Config>) -> Self {
         Self {
             workspace_dir: config.workspace_dir.clone(),
@@ -99,7 +99,7 @@ impl SkillDescribeTool {
 }
 
 #[async_trait]
-impl Tool for SkillDescribeTool {
+impl Tool for WorkflowDescribeTool {
     fn name(&self) -> &str {
         "skill_describe"
     }
@@ -114,7 +114,7 @@ impl Tool for SkillDescribeTool {
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
-            "properties": { "skill_id": { "type": "string", "description": "Skill id (directory name)." } },
+            "properties": { "skill_id": { "type": "string", "description": "Workflow id (directory name)." } },
             "required": ["skill_id"]
         })
     }
@@ -137,11 +137,11 @@ impl Tool for SkillDescribeTool {
 }
 
 /// Read a bundled resource file from a skill.
-pub struct SkillReadResourceTool {
+pub struct WorkflowReadResourceTool {
     workspace_dir: PathBuf,
 }
 
-impl SkillReadResourceTool {
+impl WorkflowReadResourceTool {
     pub fn new(config: Arc<Config>) -> Self {
         Self {
             workspace_dir: config.workspace_dir.clone(),
@@ -150,7 +150,7 @@ impl SkillReadResourceTool {
 }
 
 #[async_trait]
-impl Tool for SkillReadResourceTool {
+impl Tool for WorkflowReadResourceTool {
     fn name(&self) -> &str {
         "skill_read_resource"
     }
@@ -166,7 +166,7 @@ impl Tool for SkillReadResourceTool {
         json!({
             "type": "object",
             "properties": {
-                "skill_id": { "type": "string", "description": "Skill id (directory name)." },
+                "skill_id": { "type": "string", "description": "Workflow id (directory name)." },
                 "relative_path": { "type": "string", "description": "Path relative to the skill directory." }
             },
             "required": ["skill_id", "relative_path"]
@@ -193,11 +193,11 @@ impl Tool for SkillReadResourceTool {
 }
 
 /// List recent skill runs.
-pub struct SkillRecentRunsTool {
+pub struct WorkflowRecentRunsTool {
     workspace_dir: PathBuf,
 }
 
-impl SkillRecentRunsTool {
+impl WorkflowRecentRunsTool {
     pub fn new(config: Arc<Config>) -> Self {
         Self {
             workspace_dir: config.workspace_dir.clone(),
@@ -206,7 +206,7 @@ impl SkillRecentRunsTool {
 }
 
 #[async_trait]
-impl Tool for SkillRecentRunsTool {
+impl Tool for WorkflowRecentRunsTool {
     fn name(&self) -> &str {
         "skill_recent_runs"
     }
@@ -252,11 +252,11 @@ impl Tool for SkillRecentRunsTool {
 }
 
 /// Read a slice of a run log.
-pub struct SkillReadRunLogTool {
+pub struct WorkflowReadRunLogTool {
     workspace_dir: PathBuf,
 }
 
-impl SkillReadRunLogTool {
+impl WorkflowReadRunLogTool {
     pub fn new(config: Arc<Config>) -> Self {
         Self {
             workspace_dir: config.workspace_dir.clone(),
@@ -265,7 +265,7 @@ impl SkillReadRunLogTool {
 }
 
 #[async_trait]
-impl Tool for SkillReadRunLogTool {
+impl Tool for WorkflowReadRunLogTool {
     fn name(&self) -> &str {
         "skill_read_run_log"
     }
@@ -281,7 +281,7 @@ impl Tool for SkillReadRunLogTool {
         json!({
             "type": "object",
             "properties": {
-                "run_id": { "type": "string", "description": "Skill run id." },
+                "run_id": { "type": "string", "description": "Workflow run id." },
                 "offset": { "type": "integer", "minimum": 0, "description": "Byte offset to start at (default 0)." },
                 "max_bytes": { "type": "integer", "minimum": 1, "description": "Max bytes to read (default 65536)." }
             },
@@ -314,11 +314,11 @@ impl Tool for SkillReadRunLogTool {
 }
 
 /// Scaffold a new user skill. **Writes to disk** — default-OFF.
-pub struct SkillCreateTool {
+pub struct WorkflowCreateTool {
     workspace_dir: PathBuf,
 }
 
-impl SkillCreateTool {
+impl WorkflowCreateTool {
     pub fn new(config: Arc<Config>) -> Self {
         Self {
             workspace_dir: config.workspace_dir.clone(),
@@ -327,7 +327,7 @@ impl SkillCreateTool {
 }
 
 #[async_trait]
-impl Tool for SkillCreateTool {
+impl Tool for WorkflowCreateTool {
     fn name(&self) -> &str {
         "skill_create"
     }
@@ -343,7 +343,7 @@ impl Tool for SkillCreateTool {
         json!({
             "type": "object",
             "properties": {
-                "name": { "type": "string", "description": "Skill name (required)." },
+                "name": { "type": "string", "description": "Workflow name (required)." },
                 "description": { "type": "string", "description": "One-line summary (required)." },
                 "scope": { "type": "string", "enum": ["user", "project"], "description": "Install scope (default user)." },
                 "license": { "type": "string" },
@@ -371,11 +371,11 @@ impl Tool for SkillCreateTool {
 }
 
 /// Install a skill from a remote URL. **Fetches + writes** — default-OFF.
-pub struct SkillInstallFromUrlTool {
+pub struct WorkflowInstallFromUrlTool {
     workspace_dir: PathBuf,
 }
 
-impl SkillInstallFromUrlTool {
+impl WorkflowInstallFromUrlTool {
     pub fn new(config: Arc<Config>) -> Self {
         Self {
             workspace_dir: config.workspace_dir.clone(),
@@ -384,7 +384,7 @@ impl SkillInstallFromUrlTool {
 }
 
 #[async_trait]
-impl Tool for SkillInstallFromUrlTool {
+impl Tool for WorkflowInstallFromUrlTool {
     fn name(&self) -> &str {
         "skill_install_from_url"
     }
@@ -428,10 +428,10 @@ impl Tool for SkillInstallFromUrlTool {
 }
 
 /// Uninstall a user skill. **Deletes from disk** — default-OFF.
-pub struct SkillUninstallTool;
+pub struct WorkflowUninstallTool;
 
 #[async_trait]
-impl Tool for SkillUninstallTool {
+impl Tool for WorkflowUninstallTool {
     fn name(&self) -> &str {
         "skill_uninstall"
     }
@@ -446,7 +446,7 @@ impl Tool for SkillUninstallTool {
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
-            "properties": { "name": { "type": "string", "description": "Skill name (directory) to remove." } },
+            "properties": { "name": { "type": "string", "description": "Workflow name (directory) to remove." } },
             "required": ["name"]
         })
     }
@@ -476,31 +476,31 @@ mod tests {
     #[test]
     fn names_and_levels() {
         let c = cfg();
-        assert_eq!(SkillListTool::new(c.clone()).name(), "skill_list");
+        assert_eq!(WorkflowListTool::new(c.clone()).name(), "skill_list");
         assert_eq!(
-            SkillListTool::new(c.clone()).permission_level(),
+            WorkflowListTool::new(c.clone()).permission_level(),
             PermissionLevel::ReadOnly
         );
         assert_eq!(
-            SkillCreateTool::new(c.clone()).permission_level(),
+            WorkflowCreateTool::new(c.clone()).permission_level(),
             PermissionLevel::Write
         );
         assert_eq!(
-            SkillInstallFromUrlTool::new(c.clone()).permission_level(),
+            WorkflowInstallFromUrlTool::new(c.clone()).permission_level(),
             PermissionLevel::Write
         );
-        assert!(SkillInstallFromUrlTool::new(c.clone())
+        assert!(WorkflowInstallFromUrlTool::new(c.clone())
             .external_effect_with_args(&serde_json::Value::Null));
         assert_eq!(
-            SkillUninstallTool.permission_level(),
+            WorkflowUninstallTool.permission_level(),
             PermissionLevel::Dangerous
         );
-        assert_eq!(SkillListTool::new(c).scope(), ToolScope::All);
+        assert_eq!(WorkflowListTool::new(c).scope(), ToolScope::All);
     }
 
     #[tokio::test]
     async fn describe_requires_skill_id() {
-        let err = SkillDescribeTool::new(cfg())
+        let err = WorkflowDescribeTool::new(cfg())
             .execute(json!({}))
             .await
             .expect_err("missing skill_id");
@@ -509,7 +509,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_resource_requires_both_args() {
-        let err = SkillReadResourceTool::new(cfg())
+        let err = WorkflowReadResourceTool::new(cfg())
             .execute(json!({ "skill_id": "x" }))
             .await
             .expect_err("missing relative_path");
@@ -518,7 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn uninstall_requires_name() {
-        let err = SkillUninstallTool
+        let err = WorkflowUninstallTool
             .execute(json!({}))
             .await
             .expect_err("missing name");
@@ -530,7 +530,7 @@ mod tests {
         // A fresh workspace has no project skills, but the user-home scan may
         // surface bundled skills; either way the call succeeds and returns the
         // envelope shape.
-        let out = SkillListTool::new(cfg())
+        let out = WorkflowListTool::new(cfg())
             .execute(json!({}))
             .await
             .expect("list");

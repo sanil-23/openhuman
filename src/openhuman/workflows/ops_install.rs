@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ops_discover::{discover_skills_inner, is_workspace_trusted};
 use super::ops_parse::parse_skill_md_str;
-use super::ops_types::{SkillFrontmatter, SkillScope, MAX_NAME_LEN, SKILL_MD};
+use super::ops_types::{WorkflowFrontmatter, WorkflowScope, MAX_NAME_LEN, SKILL_MD};
 
 /// Strip userinfo, query, and fragment from a URL for safe inclusion in
 /// observability tags. Returns `<scheme>://<host>[:<port>]<path>` on success,
@@ -363,7 +363,7 @@ pub struct UninstallSkillOutcome {
     /// Absolute on-disk path that was deleted (post-canonicalisation).
     pub removed_path: String,
     /// Scope the uninstall applied to. Always `User` today.
-    pub scope: SkillScope,
+    pub scope: WorkflowScope,
 }
 
 /// Remove an installed user-scope SKILL.md skill from `~/.openhuman/skills/`.
@@ -495,7 +495,7 @@ pub fn uninstall_skill(
     Ok(UninstallSkillOutcome {
         name: trimmed,
         removed_path: canonical_candidate.display().to_string(),
-        scope: SkillScope::User,
+        scope: WorkflowScope::User,
     })
 }
 
@@ -560,7 +560,7 @@ pub(crate) fn normalize_install_url(raw: &str) -> Result<String, String> {
 ///
 /// Rejects the empty string and paths that would escape the skills root
 /// (`..`, `/`, `\`). Max length is [`MAX_NAME_LEN`].
-pub(crate) fn derive_install_slug(fm: &SkillFrontmatter) -> Result<String, String> {
+pub(crate) fn derive_install_slug(fm: &WorkflowFrontmatter) -> Result<String, String> {
     let candidate = fm
         .metadata
         .get("id")

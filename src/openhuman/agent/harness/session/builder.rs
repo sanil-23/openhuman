@@ -200,7 +200,7 @@ impl AgentBuilder {
     }
 
     /// Sets the skills available to the agent.
-    pub fn skills(mut self, skills: Vec<crate::openhuman::workflows::Skill>) -> Self {
+    pub fn skills(mut self, skills: Vec<crate::openhuman::workflows::Workflow>) -> Self {
         self.skills = Some(skills);
         self
     }
@@ -1464,7 +1464,7 @@ impl Agent {
         //   2. The `agent:` line inside each transcript's metadata
         //      header stamps `agent: main` instead of `agent: welcome`.
         //
-        // Skills_agent and every other typed sub-agent are unaffected
+        // Workflows_agent and every other typed sub-agent are unaffected
         // because they never build via `from_config_for_agent` — they
         // are spawned through `subagent_runner` which constructs its
         // prompt and history directly.
@@ -1553,7 +1553,9 @@ impl Agent {
             .model_name(model_name)
             .temperature(effective_temperature)
             .workspace_dir(config.workspace_dir.clone())
-            .skills(crate::openhuman::workflows::load_skills(&config.workspace_dir))
+            .skills(crate::openhuman::workflows::load_skills(
+                &config.workspace_dir,
+            ))
             .auto_save(config.memory.auto_save)
             .post_turn_hooks(post_turn_hooks)
             .learning_enabled(config.learning.enabled)

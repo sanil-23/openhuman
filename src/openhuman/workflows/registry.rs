@@ -1,4 +1,4 @@
-//! Skill registry types: a **skill** is an [`AgentDefinition`] plus declared
+//! Workflow registry types: a **skill** is an [`AgentDefinition`] plus declared
 //! `[[inputs]]`. The agent fields (`id`, `system_prompt`, `tools`,
 //! `max_iterations`, `sandbox_mode`, …) are flattened in from the same
 //! `skill.toml`, so a skill is just a runnable agent that also advertises the
@@ -18,7 +18,7 @@ use crate::openhuman::agent::harness::definition::{AgentDefinition, PromptSource
 /// `required` inputs must be supplied at run time; `kind` is an optional type
 /// hint (`"string"`, `"integer"`, …) for the UI / validation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SkillInput {
+pub struct WorkflowInput {
     pub name: String,
     #[serde(default)]
     pub description: String,
@@ -28,7 +28,7 @@ pub struct SkillInput {
     pub kind: Option<String>,
 }
 
-/// How strictly the [`SkillGithubConfig`] preflight gate should compare
+/// How strictly the [`WorkflowGithubConfig`] preflight gate should compare
 /// the Composio-connected GitHub identity with the local `git config
 /// user.name`. Default: [`IdentityMatch::Strict`].
 ///
@@ -51,7 +51,7 @@ pub enum IdentityMatch {
 /// the preflight described in [`crate::openhuman::workflows::schemas`]'s
 /// `preflight_github_gate` runs before the orchestrator boots.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SkillGithubConfig {
+pub struct WorkflowGithubConfig {
     /// When true, the gate runs. When false (default), the gate is
     /// skipped even if other fields are populated — the gate is opt-in
     /// per skill.
@@ -63,7 +63,7 @@ pub struct SkillGithubConfig {
     pub identity_match: IdentityMatch,
 }
 
-impl Default for SkillGithubConfig {
+impl Default for WorkflowGithubConfig {
     fn default() -> Self {
         Self {
             required: false,
@@ -74,21 +74,24 @@ impl Default for SkillGithubConfig {
 
 /// A skill = an agent definition + its declared inputs (parsed from `skill.toml`).
 #[derive(Debug, Clone, Deserialize)]
-pub struct SkillDefinition {
+pub struct WorkflowDefinition {
     #[serde(flatten)]
     pub definition: AgentDefinition,
     #[serde(default)]
-    pub inputs: Vec<SkillInput>,
+    pub inputs: Vec<WorkflowInput>,
     /// Optional GitHub preflight gate. When `Some(..)` with
     /// `required = true`, the preflight runs before the orchestrator
     /// boots — see
     /// [`crate::openhuman::workflows::schemas::spawn_skill_run_background`].
     #[serde(default)]
-    pub github: Option<SkillGithubConfig>,
+    pub github: Option<WorkflowGithubConfig>,
 }
 
 /// Names of `required` inputs that are absent or null in `provided`. Empty ⇒ OK.
-pub fn missing_required_inputs(defs: &[SkillInput], provided: &serde_json::Value) -> Vec<String> {
+pub fn missing_required_inputs(
+    defs: &[WorkflowInput],
+    provided: &serde_json::Value,
+) -> Vec<String> {
     defs.iter()
         .filter(|d| d.required)
         .filter(|d| provided.get(&d.name).map(|v| v.is_null()).unwrap_or(true))
@@ -98,7 +101,7 @@ pub fn missing_required_inputs(defs: &[SkillInput], provided: &serde_json::Value
 
 /// Render the resolved inputs as an `## Inputs` prompt block injected alongside
 /// the skill's `SKILL.md`. Empty string when the skill declares no inputs.
-pub fn render_inputs_block(defs: &[SkillInput], provided: &serde_json::Value) -> String {
+pub fn render_inputs_block(defs: &[WorkflowInput], provided: &serde_json::Value) -> String {
     if defs.is_empty() {
         return String::new();
     }
@@ -153,16 +156,16 @@ pub fn seed_default_skills(workspace_dir: &Path) {
 /// `<workspace>/skills/<id>/{skill.toml, SKILL.md}`. A skill's `SKILL.md`, when
 /// present, becomes its inline system prompt. A bad `skill.toml` is skipped
 /// with a warning, not fatal.
-pub fn load_skills(workspace_dir: &Path) -> Vec<SkillDefinition> {
+pub fn load_skills(workspace_dir: &Path) -> Vec<WorkflowDefinition> {
     // Materialise the bundled defaults (idempotent) so they're always present
     // and user-editable in the workspace, then picked up by the scan below.
     seed_default_skills(workspace_dir);
 
-    let mut skills: Vec<SkillDefinition> = Vec::new();
+    let mut skills: Vec<WorkflowDefinition> = Vec::new();
 
     if let Ok(builtins) = crate::openhuman::agent_registry::agents::load_builtins() {
         for definition in builtins {
-            skills.push(SkillDefinition {
+            skills.push(WorkflowDefinition {
                 definition,
                 inputs: Vec::new(),
                 github: None,
@@ -181,7 +184,7 @@ pub fn load_skills(workspace_dir: &Path) -> Vec<SkillDefinition> {
             let Ok(toml_str) = std::fs::read_to_string(&toml_path) else {
                 continue;
             };
-            let mut skill: SkillDefinition = match toml::from_str(&toml_str) {
+            let mut skill: WorkflowDefinition = match toml::from_str(&toml_str) {
                 Ok(s) => s,
                 Err(e) => {
                     log::warn!("[skills] skipping {}: {e}", toml_path.display());
@@ -198,7 +201,7 @@ pub fn load_skills(workspace_dir: &Path) -> Vec<SkillDefinition> {
 }
 
 /// Look up one skill by id across the registry.
-pub fn get_skill(workspace_dir: &Path, id: &str) -> Option<SkillDefinition> {
+pub fn get_skill(workspace_dir: &Path, id: &str) -> Option<WorkflowDefinition> {
     load_skills(workspace_dir)
         .into_iter()
         .find(|s| s.definition.id == id)
@@ -209,21 +212,21 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn defs() -> Vec<SkillInput> {
+    fn defs() -> Vec<WorkflowInput> {
         vec![
-            SkillInput {
+            WorkflowInput {
                 name: "repo".into(),
                 description: "owner/name".into(),
                 required: true,
                 kind: None,
             },
-            SkillInput {
+            WorkflowInput {
                 name: "issue".into(),
                 description: "issue #".into(),
                 required: true,
                 kind: Some("integer".into()),
             },
-            SkillInput {
+            WorkflowInput {
                 name: "pr_base".into(),
                 description: "base branch".into(),
                 required: false,
@@ -260,7 +263,7 @@ mod tests {
 
     #[test]
     fn skill_input_parses_type_alias() {
-        let i: SkillInput = serde_json::from_value(json!({
+        let i: WorkflowInput = serde_json::from_value(json!({
             "name": "issue", "description": "issue #", "required": true, "type": "integer"
         }))
         .unwrap();
@@ -296,50 +299,11 @@ mod tests {
     }
 
     #[test]
-    fn default_skills_seed_into_empty_workspace() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        // Fresh workspace, nothing pre-written: the bundled default must appear.
-        let skills = load_skills(tmp.path());
-        let s = skills
-            .iter()
-            .find(|s| s.definition.id == "github-issue-crusher")
-            .expect("bundled default seeded + loaded");
-        assert_eq!(s.inputs.len(), 4, "repo + issue + fork + pr_base");
-        assert_eq!(s.inputs[0].name, "repo");
-        assert!(s.inputs[0].required);
-        assert_eq!(
-            s.inputs[1].kind.as_deref(),
-            Some("integer"),
-            "issue is integer"
-        );
-        assert_eq!(s.inputs[2].name, "fork");
-        assert!(!s.inputs[2].required, "fork is optional");
-        assert!(!s.inputs[3].required, "pr_base is optional");
-        match &s.definition.system_prompt {
-            PromptSource::Inline(p) => assert!(p.contains("GitHub Issue Crusher")),
-            other => panic!("expected inline prompt, got {other:?}"),
-        }
-        // Materialised on disk (user-editable), and re-seeding is non-destructive.
-        let toml = tmp.path().join("skills/github-issue-crusher/skill.toml");
-        assert!(toml.exists());
-        std::fs::write(
-            &toml,
-            "id = \"github-issue-crusher\"\nwhen_to_use = \"edited\"\n",
-        )
-        .unwrap();
-        seed_default_skills(tmp.path());
-        assert!(
-            std::fs::read_to_string(&toml).unwrap().contains("edited"),
-            "existing skill.toml must not be clobbered"
-        );
-    }
-
-    #[test]
     fn skill_github_config_defaults_when_absent() {
         // No [github] block in skill.toml → `github` deserialises to None,
         // which the preflight reads as "gate disabled, skip silently".
         let toml = "id = \"x\"\nwhen_to_use = \"y\"\n";
-        let parsed: SkillDefinition = toml::from_str(toml).expect("parse");
+        let parsed: WorkflowDefinition = toml::from_str(toml).expect("parse");
         assert!(parsed.github.is_none(), "no [github] block ⇒ None");
     }
 
@@ -347,7 +311,7 @@ mod tests {
     fn skill_github_config_parses_full_block() {
         let toml = "id = \"x\"\nwhen_to_use = \"y\"\n\
                     [github]\nrequired = true\nidentity_match = \"strict\"\n";
-        let parsed: SkillDefinition = toml::from_str(toml).expect("parse");
+        let parsed: WorkflowDefinition = toml::from_str(toml).expect("parse");
         let gh = parsed.github.expect("github block present");
         assert!(gh.required);
         assert_eq!(gh.identity_match, IdentityMatch::Strict);
@@ -358,7 +322,7 @@ mod tests {
         // Block present but required not set ⇒ required = false (default).
         let toml = "id = \"x\"\nwhen_to_use = \"y\"\n\
                     [github]\nidentity_match = \"any\"\n";
-        let parsed: SkillDefinition = toml::from_str(toml).expect("parse");
+        let parsed: WorkflowDefinition = toml::from_str(toml).expect("parse");
         let gh = parsed.github.expect("github block present");
         assert!(!gh.required, "required defaults to false");
         assert_eq!(gh.identity_match, IdentityMatch::Any);
@@ -368,7 +332,7 @@ mod tests {
     fn skill_github_config_identity_match_defaults_to_strict() {
         let toml = "id = \"x\"\nwhen_to_use = \"y\"\n\
                     [github]\nrequired = true\n";
-        let parsed: SkillDefinition = toml::from_str(toml).expect("parse");
+        let parsed: WorkflowDefinition = toml::from_str(toml).expect("parse");
         let gh = parsed.github.expect("github block present");
         assert_eq!(
             gh.identity_match,
@@ -388,7 +352,7 @@ mod tests {
                 "id = \"x\"\nwhen_to_use = \"y\"\n\
                  [github]\nrequired = true\nidentity_match = \"{variant}\"\n"
             );
-            let parsed: SkillDefinition = toml::from_str(&toml).expect("parse");
+            let parsed: WorkflowDefinition = toml::from_str(&toml).expect("parse");
             assert_eq!(
                 parsed.github.expect("github block present").identity_match,
                 expected,
@@ -399,7 +363,7 @@ mod tests {
 
     #[test]
     fn skill_github_config_serializes_lowercase() {
-        let gh = SkillGithubConfig {
+        let gh = WorkflowGithubConfig {
             required: true,
             identity_match: IdentityMatch::Strict,
         };

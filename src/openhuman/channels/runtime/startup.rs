@@ -424,12 +424,12 @@ pub async fn start_channels(mut config: Config) -> Result<()> {
         bootstrap_max_chars,
         None,
     );
-    // Filter out Skill-category tools (e.g. Composio, Apify) from the
+    // Filter out Workflow-category tools (e.g. Composio, Apify) from the
     // main agent prompt — those are only available to the integrations_agent
     // subagent via category_filter = "skill".
     let non_skill_tools: Vec<&Box<dyn crate::openhuman::tools::Tool>> = tools_registry
         .iter()
-        .filter(|t| t.category() != crate::openhuman::tools::traits::ToolCategory::Skill)
+        .filter(|t| t.category() != crate::openhuman::tools::traits::ToolCategory::Workflow)
         .collect();
     let non_skill_refs: Vec<&dyn crate::openhuman::tools::Tool> =
         non_skill_tools.iter().map(|t| t.as_ref()).collect();

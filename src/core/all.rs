@@ -193,7 +193,7 @@ fn build_registered_controllers() -> Vec<RegisteredController> {
     controllers.extend(crate::openhuman::workflows::all_workflows_registered_controllers());
     // User workspace and file management
     controllers.extend(crate::openhuman::workspace::all_workspace_registered_controllers());
-    // Skill tool registry
+    // Workflow tool registry
     controllers.extend(crate::openhuman::tools::all_tools_registered_controllers());
     // Unified read-only registry across MCP stdio tools and controller-backed tools
     controllers.extend(crate::openhuman::tool_registry::all_tool_registry_registered_controllers());

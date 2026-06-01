@@ -13,7 +13,7 @@ fn write(path: &Path, content: &str) {
 /// pick up whatever skills the developer has installed under their real
 /// home. Tests exercising user-scope delegation drive a tempdir through
 /// [`discover_skills`] explicitly (see `load_skills_surfaces_user_scope`).
-fn load_skills_ws(workspace_dir: &Path) -> Vec<Skill> {
+fn load_skills_ws(workspace_dir: &Path) -> Vec<Workflow> {
     let trusted = is_workspace_trusted(workspace_dir);
     discover_skills_inner(None, Some(workspace_dir), trusted)
 }
@@ -36,14 +36,14 @@ fn load_skills_legacy_json_still_works() {
     std::fs::create_dir_all(&skill_dir).unwrap();
     write(
         &skill_dir.join("skill.json"),
-        r#"{"name":"My Skill","description":"A test","version":"1.0"}"#,
+        r#"{"name":"My Workflow","description":"A test","version":"1.0"}"#,
     );
     let skills = load_skills_ws(dir.path());
     assert_eq!(skills.len(), 1);
-    assert_eq!(skills[0].name, "My Skill");
+    assert_eq!(skills[0].name, "My Workflow");
     assert_eq!(skills[0].description, "A test");
     assert!(skills[0].legacy);
-    assert_eq!(skills[0].scope, SkillScope::Legacy);
+    assert_eq!(skills[0].scope, WorkflowScope::Legacy);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn load_skills_parses_skill_md_frontmatter() {
     assert_eq!(s.description, "Say hi");
     assert_eq!(s.version, "0.1.0");
     assert_eq!(s.tags, vec!["demo", "greeting"]);
-    assert_eq!(s.scope, SkillScope::Project);
+    assert_eq!(s.scope, WorkflowScope::Project);
     assert!(!s.legacy);
     assert!(s.warnings.is_empty(), "warnings: {:?}", s.warnings);
 }
@@ -334,7 +334,7 @@ fn load_skills_surfaces_user_scope() {
     );
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].name, "user-only");
-    assert_eq!(skills[0].scope, SkillScope::User);
+    assert_eq!(skills[0].scope, WorkflowScope::User);
 }
 
 #[test]
@@ -543,9 +543,9 @@ fn create_skill_user_scope_scaffolds_skill_md_and_resource_dirs() {
     let ws = tempfile::tempdir().unwrap();
 
     let params = CreateSkillParams {
-        name: "My Demo Skill".to_string(),
+        name: "My Demo Workflow".to_string(),
         description: "Send a friendly greeting to the user.".to_string(),
-        scope: SkillScope::User,
+        scope: WorkflowScope::User,
         license: Some("MIT".to_string()),
         author: Some("Jane Dev".to_string()),
         tags: vec!["demo".to_string(), "greeting".to_string()],
@@ -556,8 +556,8 @@ fn create_skill_user_scope_scaffolds_skill_md_and_resource_dirs() {
     let created = create_skill_inner(Some(home.path()), ws.path(), params)
         .expect("create_skill should succeed");
 
-    assert_eq!(created.name, "my-demo-skill");
-    assert_eq!(created.scope, SkillScope::User);
+    assert_eq!(created.name, "my-demo-workflow");
+    assert_eq!(created.scope, WorkflowScope::User);
     assert_eq!(created.description, "Send a friendly greeting to the user.");
     assert_eq!(created.author.as_deref(), Some("Jane Dev"));
     assert_eq!(
@@ -570,7 +570,7 @@ fn create_skill_user_scope_scaffolds_skill_md_and_resource_dirs() {
         .path()
         .join(".openhuman")
         .join("skills")
-        .join("my-demo-skill");
+        .join("my-demo-workflow");
     assert!(skill_root.join(SKILL_MD).is_file());
     for sub in RESOURCE_DIRS {
         assert!(skill_root.join(sub).is_dir(), "missing scaffold dir: {sub}");
@@ -578,7 +578,7 @@ fn create_skill_user_scope_scaffolds_skill_md_and_resource_dirs() {
 
     // Frontmatter round-trips through the parser.
     let on_disk = std::fs::read_to_string(skill_root.join(SKILL_MD)).unwrap();
-    assert!(on_disk.contains("name: my-demo-skill"));
+    assert!(on_disk.contains("name: my-demo-workflow"));
     assert!(on_disk.contains("license: MIT"));
     assert!(on_disk.contains("author: Jane Dev"));
 }
@@ -591,7 +591,7 @@ fn create_skill_rejects_slug_collision() {
     let params = CreateSkillParams {
         name: "collider".to_string(),
         description: "first".to_string(),
-        scope: SkillScope::User,
+        scope: WorkflowScope::User,
         ..Default::default()
     };
     create_skill_inner(Some(home.path()), ws.path(), params.clone()).unwrap();
@@ -612,7 +612,7 @@ fn create_skill_rejects_non_alphanumeric_name() {
     let params = CreateSkillParams {
         name: "   ///   ".to_string(),
         description: "nothing useful".to_string(),
-        scope: SkillScope::User,
+        scope: WorkflowScope::User,
         ..Default::default()
     };
     let err = create_skill_inner(Some(home.path()), ws.path(), params)
@@ -633,7 +633,7 @@ fn create_skill_rejects_project_scope_without_trust_marker() {
     let params = CreateSkillParams {
         name: "project-skill".to_string(),
         description: "scoped to ws".to_string(),
-        scope: SkillScope::Project,
+        scope: WorkflowScope::Project,
         ..Default::default()
     };
     let err = create_skill_inner(Some(home.path()), ws.path(), params)
@@ -661,14 +661,14 @@ fn create_skill_project_scope_writes_under_workspace_when_trusted() {
     let params = CreateSkillParams {
         name: "ws-skill".to_string(),
         description: "project-scoped".to_string(),
-        scope: SkillScope::Project,
+        scope: WorkflowScope::Project,
         ..Default::default()
     };
     let created = create_skill_inner(Some(home.path()), ws.path(), params)
         .expect("trusted project-scope create should succeed");
 
     assert_eq!(created.name, "ws-skill");
-    assert_eq!(created.scope, SkillScope::Project);
+    assert_eq!(created.scope, WorkflowScope::Project);
     assert!(ws
         .path()
         .join(".openhuman")
@@ -686,7 +686,7 @@ fn create_skill_rejects_legacy_scope() {
     let params = CreateSkillParams {
         name: "legacy-skill".to_string(),
         description: "no".to_string(),
-        scope: SkillScope::Legacy,
+        scope: WorkflowScope::Legacy,
         ..Default::default()
     };
     let err = create_skill_inner(Some(home.path()), ws.path(), params)
@@ -705,7 +705,7 @@ fn create_skill_rejects_empty_description() {
     let params = CreateSkillParams {
         name: "ok-name".to_string(),
         description: "   ".to_string(),
-        scope: SkillScope::User,
+        scope: WorkflowScope::User,
         ..Default::default()
     };
     let err = create_skill_inner(Some(home.path()), ws.path(), params)
@@ -862,8 +862,8 @@ fn normalize_install_url_accepts_uppercase_md_suffix() {
 
 #[test]
 fn derive_install_slug_prefers_metadata_id() {
-    let mut fm = SkillFrontmatter {
-        name: "My Skill".to_string(),
+    let mut fm = WorkflowFrontmatter {
+        name: "My Workflow".to_string(),
         description: "x".to_string(),
         ..Default::default()
     };
@@ -876,17 +876,17 @@ fn derive_install_slug_prefers_metadata_id() {
 
 #[test]
 fn derive_install_slug_sanitizes_name_fallback() {
-    let fm = SkillFrontmatter {
-        name: "My Cool Skill!!".to_string(),
+    let fm = WorkflowFrontmatter {
+        name: "My Cool Workflow!!".to_string(),
         description: "x".to_string(),
         ..Default::default()
     };
-    assert_eq!(derive_install_slug(&fm).unwrap(), "my-cool-skill");
+    assert_eq!(derive_install_slug(&fm).unwrap(), "my-cool-workflow");
 }
 
 #[test]
 fn derive_install_slug_collapses_runs_and_trims_edges() {
-    let fm = SkillFrontmatter {
+    let fm = WorkflowFrontmatter {
         name: "---foo__bar  baz---".to_string(),
         description: "x".to_string(),
         ..Default::default()
@@ -896,7 +896,7 @@ fn derive_install_slug_collapses_runs_and_trims_edges() {
 
 #[test]
 fn derive_install_slug_rejects_empty_after_sanitize() {
-    let fm = SkillFrontmatter {
+    let fm = WorkflowFrontmatter {
         name: "!!!".to_string(),
         description: "x".to_string(),
         ..Default::default()
@@ -907,7 +907,7 @@ fn derive_install_slug_rejects_empty_after_sanitize() {
 
 #[test]
 fn derive_install_slug_rejects_oversized() {
-    let fm = SkillFrontmatter {
+    let fm = WorkflowFrontmatter {
         name: "a".repeat(MAX_NAME_LEN + 1),
         description: "x".to_string(),
         ..Default::default()
@@ -921,7 +921,7 @@ fn derive_install_slug_rejects_oversized() {
 fn derive_install_slug_sanitizes_path_escape_attempts() {
     // `..` and `/` are non-alphanumeric so they collapse to `-` during
     // sanitization — verify no path-escape characters survive.
-    let fm = SkillFrontmatter {
+    let fm = WorkflowFrontmatter {
         name: "../etc/passwd".to_string(),
         description: "x".to_string(),
         ..Default::default()
@@ -996,7 +996,7 @@ fn uninstall_skill_removes_user_scope_dir() {
     )
     .unwrap();
     assert_eq!(outcome.name, "weather-helper");
-    assert_eq!(outcome.scope, SkillScope::User);
+    assert_eq!(outcome.scope, WorkflowScope::User);
     assert!(!skill_dir.exists(), "uninstall should remove the dir");
 
     let after = discover_skills(Some(home.path()), None, false);
@@ -1175,16 +1175,16 @@ fn uninstall_skill_rejects_symlinked_skills_root() {
 // ─────────────────────────────────────────────────────────────────────────────
 // `[[inputs]]` editor — Phase 1: schema round-trip.
 //
-// The Create-a-Skill form lets the user declare zero-or-more skill inputs at
+// The Create-a-Workflow form lets the user declare zero-or-more skill inputs at
 // create time. These tests pin the wire shape and the params round-trip so the
 // payload from `skillsApi.createSkill` lands intact in `CreateSkillParams.inputs`
 // and is identical after TOML emission + re-parse via the registry's
-// `SkillInput` (see Phase 2 for the actual on-disk emit; Phase 1 is JSON only).
+// `WorkflowInput` (see Phase 2 for the actual on-disk emit; Phase 1 is JSON only).
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn skill_create_input_def_deserializes_full_row_from_json() {
-    let row: crate::openhuman::workflows::ops_create::SkillCreateInputDef =
+    let row: crate::openhuman::workflows::ops_create::WorkflowCreateInputDef =
         serde_json::from_value(serde_json::json!({
             "name": "repo",
             "description": "owner/name slug",
@@ -1203,7 +1203,7 @@ fn skill_create_input_def_required_defaults_to_true() {
     // The form sends `required` per row, but other callers (CLI, future
     // RPC clients) may omit it. The serde default keeps the safer
     // semantic — a row the user bothered to declare is required.
-    let row: crate::openhuman::workflows::ops_create::SkillCreateInputDef =
+    let row: crate::openhuman::workflows::ops_create::WorkflowCreateInputDef =
         serde_json::from_value(serde_json::json!({
             "name": "topic",
         }))
@@ -1256,22 +1256,22 @@ fn skill_create_input_def_round_trips_through_registry_skill_input() {
     // accepts are the same shape over TOML — the "parser will accept
     // what you emit" contract called out in the Phase-1 brief. We
     // serialise the form-supplied row(s) into a synthetic skill.toml
-    // body, parse it back through the registry's `SkillDefinition`,
+    // body, parse it back through the registry's `WorkflowDefinition`,
     // and check every field survived.
     let rows = vec![
-        crate::openhuman::workflows::ops_create::SkillCreateInputDef {
+        crate::openhuman::workflows::ops_create::WorkflowCreateInputDef {
             name: "repo".into(),
             description: Some("owner/name slug".into()),
             required: true,
             type_: Some("string".into()),
         },
-        crate::openhuman::workflows::ops_create::SkillCreateInputDef {
+        crate::openhuman::workflows::ops_create::WorkflowCreateInputDef {
             name: "issue".into(),
             description: Some("issue #".into()),
             required: true,
             type_: Some("integer".into()),
         },
-        crate::openhuman::workflows::ops_create::SkillCreateInputDef {
+        crate::openhuman::workflows::ops_create::WorkflowCreateInputDef {
             name: "pr_base".into(),
             description: None,
             required: false,
@@ -1294,7 +1294,7 @@ fn skill_create_input_def_round_trips_through_registry_skill_input() {
         }
     }
 
-    let parsed: crate::openhuman::workflows::registry::SkillDefinition =
+    let parsed: crate::openhuman::workflows::registry::WorkflowDefinition =
         toml::from_str(&toml).expect("registry must accept what the form emits");
     assert_eq!(parsed.inputs.len(), 3);
     assert_eq!(parsed.inputs[0].name, "repo");
@@ -1302,7 +1302,7 @@ fn skill_create_input_def_round_trips_through_registry_skill_input() {
     assert!(parsed.inputs[0].required);
     assert_eq!(parsed.inputs[0].kind.as_deref(), Some("string"));
     assert_eq!(parsed.inputs[1].kind.as_deref(), Some("integer"));
-    // `description` defaults to "" in `SkillInput`, not Option::None —
+    // `description` defaults to "" in `WorkflowInput`, not Option::None —
     // the registry parser flattens missing into empty for back-compat.
     assert_eq!(parsed.inputs[2].description, "");
     assert!(!parsed.inputs[2].required);

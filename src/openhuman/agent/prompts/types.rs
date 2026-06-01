@@ -6,8 +6,8 @@
 //! the sibling `mod.rs` so type edits don't pull in the whole 2 000-line
 //! renderer.
 
-use crate::openhuman::workflows::Skill;
 use crate::openhuman::tools::Tool;
+use crate::openhuman::workflows::Workflow;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::path::Path;
@@ -315,7 +315,7 @@ pub struct PromptContext<'a> {
     /// Id of the agent this prompt is being built for.
     pub agent_id: &'a str,
     pub tools: &'a [PromptTool<'a>],
-    pub skills: &'a [Skill],
+    pub skills: &'a [Workflow],
     pub dispatcher_instructions: &'a str,
     /// Pre-fetched learned context (empty when learning is disabled).
     pub learned: LearnedContextData,

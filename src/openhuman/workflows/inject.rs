@@ -57,7 +57,7 @@
 //! [`render_injection`]). A summary line lives in the caller
 //! (`Agent::turn`).
 
-use super::Skill;
+use super::Workflow;
 use std::collections::HashSet;
 
 /// Upper bound on total bytes injected per turn. Matches the umbrella
@@ -72,14 +72,14 @@ pub enum SkipReason {
     NotUserInvocable,
     /// No match in description / tags / name, and no `@` mention.
     NoMatch,
-    /// Skill body could not be read from disk (legacy manifest or I/O
+    /// Workflow body could not be read from disk (legacy manifest or I/O
     /// failure).
     BodyUnavailable,
-    /// Skill body would push the running total past the size cap.
+    /// Workflow body would push the running total past the size cap.
     BudgetExhausted,
 }
 
-/// How a matched skill was selected. Preserved on `SkillMatch` so the
+/// How a matched skill was selected. Preserved on `WorkflowMatch` so the
 /// logger can explain *why* each injection happened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchReason {
@@ -107,8 +107,8 @@ impl MatchReason {
 /// A skill that passed the matcher. The caller resolves its body at
 /// render time.
 #[derive(Debug, Clone)]
-pub struct SkillMatch<'a> {
-    pub skill: &'a Skill,
+pub struct WorkflowMatch<'a> {
+    pub skill: &'a Workflow,
     pub reason: MatchReason,
     /// Position in the user message for `@`-mention matches. Used to
     /// preserve message order. Auto-matches get `usize::MAX` so they
@@ -120,7 +120,7 @@ pub struct SkillMatch<'a> {
 /// matched and skipped candidates so there is a single source of truth
 /// for what happened this turn.
 #[derive(Debug, Clone)]
-pub struct SkillDecision {
+pub struct WorkflowDecision {
     pub name: String,
     pub matched: bool,
     pub reason: String,
@@ -140,7 +140,7 @@ pub struct Injection {
     /// Whether at least one body was truncated to fit the cap.
     pub truncated: bool,
     /// Per-candidate decisions (both matched and skipped) for logging.
-    pub decisions: Vec<SkillDecision>,
+    pub decisions: Vec<WorkflowDecision>,
 }
 
 /// Read the `user-invocable` flag from a skill's frontmatter. Defaults
@@ -148,7 +148,7 @@ pub struct Injection {
 /// spec-compliant `metadata.user-invocable` location and the deprecated
 /// top-level `user-invocable` key (emitted with a migration warning by
 /// the catalog loader).
-pub fn is_user_invocable(skill: &Skill) -> bool {
+pub fn is_user_invocable(skill: &Workflow) -> bool {
     let lookup_bool = |key: &str| -> Option<bool> {
         if let Some(v) = skill.frontmatter.metadata.get(key) {
             if let Some(b) = v.as_bool() {
@@ -265,7 +265,7 @@ fn contains_whole_word(haystack_lower: &str, needle_lower: &str) -> bool {
 
 /// Match installed skills against a user message per the heuristic
 /// documented at the top of this module.
-pub fn match_skills<'a>(skills: &'a [Skill], user_message: &str) -> Vec<SkillMatch<'a>> {
+pub fn match_skills<'a>(skills: &'a [Workflow], user_message: &str) -> Vec<WorkflowMatch<'a>> {
     let mentions = extract_mentions(user_message);
     let mention_set: HashSet<String> = mentions.iter().map(|(n, _)| n.clone()).collect();
     let mention_index = |skill_norm: &str| -> Option<usize> {
@@ -277,7 +277,7 @@ pub fn match_skills<'a>(skills: &'a [Skill], user_message: &str) -> Vec<SkillMat
 
     let lower_msg = user_message.to_lowercase();
 
-    let mut matches: Vec<SkillMatch<'a>> = Vec::new();
+    let mut matches: Vec<WorkflowMatch<'a>> = Vec::new();
     for skill in skills {
         let normalised_name = normalise(&skill.name);
         let user_invocable = is_user_invocable(skill);
@@ -285,7 +285,7 @@ pub fn match_skills<'a>(skills: &'a [Skill], user_message: &str) -> Vec<SkillMat
         // 1. `@` mention always wins.
         if mention_set.contains(&normalised_name) {
             let idx = mention_index(&normalised_name).unwrap_or(usize::MAX);
-            matches.push(SkillMatch {
+            matches.push(WorkflowMatch {
                 skill,
                 reason: MatchReason::AtMention,
                 mention_index: idx,
@@ -300,7 +300,7 @@ pub fn match_skills<'a>(skills: &'a [Skill], user_message: &str) -> Vec<SkillMat
 
         let desc_lower = skill.description.to_lowercase();
         if !desc_lower.is_empty() && lower_msg.contains(&desc_lower) {
-            matches.push(SkillMatch {
+            matches.push(WorkflowMatch {
                 skill,
                 reason: MatchReason::DescriptionSubstring,
                 mention_index: usize::MAX,
@@ -317,7 +317,7 @@ pub fn match_skills<'a>(skills: &'a [Skill], user_message: &str) -> Vec<SkillMat
             }
         }
         if tag_hit {
-            matches.push(SkillMatch {
+            matches.push(WorkflowMatch {
                 skill,
                 reason: MatchReason::TagMatch,
                 mention_index: usize::MAX,
@@ -330,7 +330,7 @@ pub fn match_skills<'a>(skills: &'a [Skill], user_message: &str) -> Vec<SkillMat
         // token that would over-match (<= 2 chars).
         let name_lower = skill.name.to_lowercase();
         if name_lower.chars().count() > 2 && contains_whole_word(&lower_msg, &name_lower) {
-            matches.push(SkillMatch {
+            matches.push(WorkflowMatch {
                 skill,
                 reason: MatchReason::NameMatch,
                 mention_index: usize::MAX,
@@ -364,19 +364,19 @@ pub fn match_skills<'a>(skills: &'a [Skill], user_message: &str) -> Vec<SkillMat
 /// the remaining budget it is truncated on a UTF-8 boundary and
 /// emitted with a `[SKILL:<name>:truncated]` close marker.
 pub fn render_injection<'a, F>(
-    matches: &[SkillMatch<'a>],
+    matches: &[WorkflowMatch<'a>],
     max_bytes: usize,
     mut body_resolver: F,
 ) -> Injection
 where
-    F: FnMut(&Skill) -> Option<String>,
+    F: FnMut(&Workflow) -> Option<String>,
 {
     const SKILL_OPEN_FMT: &str = "[SKILL:{}]\n";
     const SKILL_CLOSE_FMT: &str = "\n[/SKILL]\n";
     const SKILL_CLOSE_TRUNC_FMT: &str = "\n[/SKILL:truncated]\n";
 
     let mut rendered = String::new();
-    let mut decisions: Vec<SkillDecision> = Vec::new();
+    let mut decisions: Vec<WorkflowDecision> = Vec::new();
     let mut truncated_any = false;
 
     for m in matches {
@@ -390,7 +390,7 @@ where
                     "body_unavailable",
                     name
                 );
-                decisions.push(SkillDecision {
+                decisions.push(WorkflowDecision {
                     name: name.clone(),
                     matched: false,
                     reason: format!("skipped:{:?}", SkipReason::BodyUnavailable),
@@ -421,7 +421,7 @@ where
                 name,
                 remaining
             );
-            decisions.push(SkillDecision {
+            decisions.push(WorkflowDecision {
                 name: name.clone(),
                 matched: false,
                 reason: format!("skipped:{:?}", SkipReason::BudgetExhausted),
@@ -446,7 +446,7 @@ where
                 injected,
                 false
             );
-            decisions.push(SkillDecision {
+            decisions.push(WorkflowDecision {
                 name: name.clone(),
                 matched: true,
                 reason: m.reason.as_str().to_string(),
@@ -478,7 +478,7 @@ where
             body.len(),
             truncated_body.len()
         );
-        decisions.push(SkillDecision {
+        decisions.push(WorkflowDecision {
             name: name.clone(),
             matched: true,
             reason: m.reason.as_str().to_string(),
@@ -499,11 +499,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::openhuman::workflows::{Skill, SkillFrontmatter};
+    use crate::openhuman::workflows::{Workflow, WorkflowFrontmatter};
     use std::collections::HashMap;
 
-    fn skill(name: &str, description: &str) -> Skill {
-        Skill {
+    fn skill(name: &str, description: &str) -> Workflow {
+        Workflow {
             name: name.to_string(),
             dir_name: name.to_string(),
             description: description.to_string(),
@@ -513,7 +513,7 @@ mod tests {
             tools: Vec::new(),
             prompts: Vec::new(),
             location: None,
-            frontmatter: SkillFrontmatter::default(),
+            frontmatter: WorkflowFrontmatter::default(),
             resources: Vec::new(),
             scope: Default::default(),
             legacy: false,
@@ -521,13 +521,13 @@ mod tests {
         }
     }
 
-    fn skill_with_tags(name: &str, description: &str, tags: &[&str]) -> Skill {
+    fn skill_with_tags(name: &str, description: &str, tags: &[&str]) -> Workflow {
         let mut s = skill(name, description);
         s.tags = tags.iter().map(|t| t.to_string()).collect();
         s
     }
 
-    fn skill_with_flag(name: &str, description: &str, flag_key: &str, flag: bool) -> Skill {
+    fn skill_with_flag(name: &str, description: &str, flag_key: &str, flag: bool) -> Workflow {
         let mut s = skill(name, description);
         let mut map: HashMap<String, serde_yaml::Value> = HashMap::new();
         map.insert(flag_key.to_string(), serde_yaml::Value::Bool(flag));

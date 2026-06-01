@@ -1,18 +1,18 @@
-//! Skill creation: scaffolding new SKILL.md-based skills on disk.
+//! Workflow creation: scaffolding new SKILL.md-based skills on disk.
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use super::ops_discover::{discover_skills_inner, is_workspace_trusted};
 use super::ops_types::{
-    Skill, SkillScope, MAX_DESCRIPTION_LEN, MAX_NAME_LEN, RESOURCE_DIRS, SKILL_MD,
+    Workflow, WorkflowScope, MAX_DESCRIPTION_LEN, MAX_NAME_LEN, RESOURCE_DIRS, SKILL_MD,
 };
 
 /// One declared `[[inputs]]` entry as supplied at create time by the
-/// Create-a-Skill form.
+/// Create-a-Workflow form.
 ///
 /// Wire shape (kebab-case-free, mirrors what
-/// `crate::openhuman::workflows::registry::SkillInput` expects when the
+/// `crate::openhuman::workflows::registry::WorkflowInput` expects when the
 /// emitted `skill.toml` is parsed back at run time):
 ///
 /// ```json
@@ -21,11 +21,11 @@ use super::ops_types::{
 ///
 /// `description` and `type` are optional; when omitted the on-disk
 /// `[[inputs]]` entry leaves them absent (the registry's
-/// `SkillInput` defaults already cover this — `description = ""`,
+/// `WorkflowInput` defaults already cover this — `description = ""`,
 /// `kind = None`). `required` defaults to `true` because that is the
 /// only sensible default for a user who bothered to add a row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SkillCreateInputDef {
+pub struct WorkflowCreateInputDef {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -33,7 +33,7 @@ pub struct SkillCreateInputDef {
     pub required: bool,
     /// Type hint — accepted values are `"string"` (default), `"integer"`,
     /// and `"boolean"`. The registry parser stores this verbatim in
-    /// `SkillInput.kind`; it is the Skills Runner that uses it to pick
+    /// `WorkflowInput.kind`; it is the Skills Runner that uses it to pick
     /// the right form control (text / number / checkbox).
     #[serde(default, rename = "type")]
     pub type_: Option<String>,
@@ -52,7 +52,7 @@ pub struct CreateSkillParams {
     pub description: String,
     /// Where to install: `user`, `project`, or `legacy`. Defaults to `user`.
     #[serde(default)]
-    pub scope: SkillScope,
+    pub scope: WorkflowScope,
     /// Optional SPDX license (written to frontmatter `license`).
     #[serde(default)]
     pub license: Option<String>,
@@ -70,7 +70,7 @@ pub struct CreateSkillParams {
     /// generated `SKILL.md` so the Skills Runner can render dynamic
     /// form controls for the inputs at run time.
     #[serde(default)]
-    pub inputs: Vec<SkillCreateInputDef>,
+    pub inputs: Vec<WorkflowCreateInputDef>,
 }
 
 /// Scaffold a new SKILL.md-based skill on disk.
@@ -80,11 +80,11 @@ pub struct CreateSkillParams {
 /// so the author has somewhere to drop bundled resources.
 ///
 /// Scope resolution:
-/// * [`SkillScope::User`] → `~/.openhuman/skills/`
-/// * [`SkillScope::Project`] → `<workspace>/.openhuman/skills/`. Requires the
+/// * [`WorkflowScope::User`] → `~/.openhuman/skills/`
+/// * [`WorkflowScope::Project`] → `<workspace>/.openhuman/skills/`. Requires the
 ///   trust marker at `<workspace>/.openhuman/trust` to be present; otherwise
 ///   rejected with an error.
-/// * [`SkillScope::Legacy`] → rejected. Callers must pick one of the
+/// * [`WorkflowScope::Legacy`] → rejected. Callers must pick one of the
 ///   above; the legacy `<workspace>/skills/` layout is read-only going
 ///   forward.
 ///
@@ -101,7 +101,7 @@ pub struct CreateSkillParams {
 ///
 /// On success the freshly created skill is re-discovered through the standard
 /// pipeline and returned so callers can drop it straight into the UI list.
-pub fn create_skill(workspace_dir: &Path, params: CreateSkillParams) -> Result<Skill, String> {
+pub fn create_skill(workspace_dir: &Path, params: CreateSkillParams) -> Result<Workflow, String> {
     let home = dirs::home_dir();
     create_skill_inner(home.as_deref(), workspace_dir, params)
 }
@@ -110,7 +110,7 @@ pub(crate) fn create_skill_inner(
     home_dir: Option<&Path>,
     workspace_dir: &Path,
     mut params: CreateSkillParams,
-) -> Result<Skill, String> {
+) -> Result<Workflow, String> {
     tracing::debug!(
         name = %params.name,
         scope = ?params.scope,
@@ -141,12 +141,12 @@ pub(crate) fn create_skill_inner(
     let slug = slugify_skill_name(display_name)?;
 
     let scope_root = match params.scope {
-        SkillScope::User => {
+        WorkflowScope::User => {
             let home =
                 home_dir.ok_or_else(|| "could not resolve user home directory".to_string())?;
             home.join(".openhuman").join("skills")
         }
-        SkillScope::Project => {
+        WorkflowScope::Project => {
             if !is_workspace_trusted(workspace_dir) {
                 return Err(format!(
                     "workspace {} is not trusted; create {}/.openhuman/trust to enable project-scope skills",
@@ -156,7 +156,7 @@ pub(crate) fn create_skill_inner(
             }
             workspace_dir.join(".openhuman").join("skills")
         }
-        SkillScope::Legacy => {
+        WorkflowScope::Legacy => {
             return Err(
                 "cannot create skill in legacy scope; choose 'user' or 'project'".to_string(),
             );
@@ -244,7 +244,7 @@ pub(crate) fn create_skill_inner(
 /// all input names so the emitted `skill.toml` never carries a blank or
 /// duplicate `[[inputs]]` key. Names are trimmed in place so every later
 /// consumer (e.g. [`render_skill_toml`]) sees the validated value.
-fn validate_inputs(inputs: &mut [SkillCreateInputDef]) -> Result<(), String> {
+fn validate_inputs(inputs: &mut [WorkflowCreateInputDef]) -> Result<(), String> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for input in inputs.iter_mut() {
         let trimmed = input.name.trim();
@@ -392,7 +392,7 @@ pub(crate) fn yaml_scalar(s: &str) -> String {
 pub(crate) fn render_skill_toml(
     slug: &str,
     description: &str,
-    inputs: &[SkillCreateInputDef],
+    inputs: &[WorkflowCreateInputDef],
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!("id = {}\n", toml_string_literal(slug)));
@@ -448,7 +448,7 @@ mod render_skill_toml_tests {
 
     #[test]
     fn one_input_with_all_fields_roundtrips() {
-        let inputs = vec![SkillCreateInputDef {
+        let inputs = vec![WorkflowCreateInputDef {
             name: "repo".into(),
             description: Some("owner/name".into()),
             required: true,
@@ -470,7 +470,7 @@ mod render_skill_toml_tests {
 
     #[test]
     fn optional_fields_omitted_when_empty() {
-        let inputs = vec![SkillCreateInputDef {
+        let inputs = vec![WorkflowCreateInputDef {
             name: "n".into(),
             description: None,
             required: false,
@@ -487,7 +487,7 @@ mod render_skill_toml_tests {
 
     #[test]
     fn escapes_dangerous_chars_in_strings() {
-        let inputs = vec![SkillCreateInputDef {
+        let inputs = vec![WorkflowCreateInputDef {
             name: "n".into(),
             description: Some("has \"quotes\" and \\ backslash\nand newline".into()),
             required: true,

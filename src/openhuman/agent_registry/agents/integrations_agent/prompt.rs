@@ -18,7 +18,7 @@ use crate::openhuman::context::prompt::{
     render_safety, render_tools, render_user_files, render_workspace, ConnectedIntegration,
     PromptContext,
 };
-use crate::openhuman::workflows::Skill;
+use crate::openhuman::workflows::Workflow;
 use anyhow::Result;
 use std::fmt::Write;
 use std::path::Path;
@@ -76,7 +76,7 @@ pub fn build(ctx: &PromptContext<'_>) -> Result<String> {
 /// Render the `## Available Skills` XML catalogue of QuickJS skills
 /// this agent can invoke through the host runtime. Empty when no skills
 /// are registered.
-fn render_available_skills(skills: &[Skill], workspace_dir: &Path) -> String {
+fn render_available_skills(skills: &[Workflow], workspace_dir: &Path) -> String {
     if skills.is_empty() {
         return String::new();
     }
@@ -205,7 +205,7 @@ mod tests {
 
     fn ctx_with<'a>(
         integrations: &'a [ConnectedIntegration],
-        skills: &'a [Skill],
+        skills: &'a [Workflow],
     ) -> PromptContext<'a> {
         // Leak a HashSet so the returned context borrows a 'static-ish
         // reference — the test owns the value for its lifetime.

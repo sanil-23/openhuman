@@ -178,29 +178,29 @@ fn all_variants_have_correct_domain() {
             },
             "cron",
         ),
-        // Skill
+        // Workflow
         (
-            DomainEvent::SkillLoaded {
+            DomainEvent::WorkflowLoaded {
                 skill_id: "s".into(),
                 runtime: "nodejs".into(),
             },
             "skill",
         ),
         (
-            DomainEvent::SkillStopped {
+            DomainEvent::WorkflowStopped {
                 skill_id: "s".into(),
             },
             "skill",
         ),
         (
-            DomainEvent::SkillStartFailed {
+            DomainEvent::WorkflowStartFailed {
                 skill_id: "s".into(),
                 error: "e".into(),
             },
             "skill",
         ),
         (
-            DomainEvent::SkillExecuted {
+            DomainEvent::WorkflowExecuted {
                 skill_id: "s".into(),
                 tool_name: "t".into(),
                 arguments: serde_json::Value::Null,

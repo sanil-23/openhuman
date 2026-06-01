@@ -159,7 +159,7 @@ pub fn all_tools_with_runtime(
         // follow-up; the tool emits a stable marker today.
         Box::new(TodoTool::new()),
         Box::new(PlanExitTool::new()),
-        // Skill chaining: let an in-flight autonomous skill (e.g.
+        // Workflow chaining: let an in-flight autonomous skill (e.g.
         // `github-issue-crusher`) kick off another bundled skill_run as a
         // fresh background job (e.g. `pr-review-shepherd` against the PR it
         // just opened) so each skill stays narrow + composable. Thin
@@ -262,14 +262,14 @@ pub fn all_tools_with_runtime(
         // above, so it is not duplicated. Reads ship default-ON; the
         // create/install/uninstall mutators ship default-OFF via
         // `tools::user_filter` (install also fetches remote content).
-        Box::new(SkillListTool::new(config.clone())),
-        Box::new(SkillDescribeTool::new(config.clone())),
-        Box::new(SkillReadResourceTool::new(config.clone())),
-        Box::new(SkillRecentRunsTool::new(config.clone())),
-        Box::new(SkillReadRunLogTool::new(config.clone())),
-        Box::new(SkillCreateTool::new(config.clone())),
-        Box::new(SkillInstallFromUrlTool::new(config.clone())),
-        Box::new(SkillUninstallTool),
+        Box::new(WorkflowListTool::new(config.clone())),
+        Box::new(WorkflowDescribeTool::new(config.clone())),
+        Box::new(WorkflowReadResourceTool::new(config.clone())),
+        Box::new(WorkflowRecentRunsTool::new(config.clone())),
+        Box::new(WorkflowReadRunLogTool::new(config.clone())),
+        Box::new(WorkflowCreateTool::new(config.clone())),
+        Box::new(WorkflowInstallFromUrlTool::new(config.clone())),
+        Box::new(WorkflowUninstallTool),
         // Threads (conversation) tools. Read/bounded-write ship default-ON;
         // the destructive thread_delete / thread_purge_all ship default-OFF
         // via `tools::user_filter` (thread_destructive toggle).

@@ -208,7 +208,9 @@ mod tests {
             &self,
             _args: serde_json::Value,
         ) -> anyhow::Result<crate::openhuman::workflows::types::ToolResult> {
-            Ok(crate::openhuman::workflows::types::ToolResult::success("ok"))
+            Ok(crate::openhuman::workflows::types::ToolResult::success(
+                "ok",
+            ))
         }
     }
 

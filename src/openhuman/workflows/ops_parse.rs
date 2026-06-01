@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use super::ops_types::{extract_author, extract_tags, extract_version};
 use super::ops_types::{
-    LegacySkillManifest, Skill, SkillFrontmatter, SkillScope, MAX_DESCRIPTION_LEN, MAX_NAME_LEN,
-    RESOURCE_DIRS,
+    LegacySkillManifest, Workflow, WorkflowFrontmatter, WorkflowScope, MAX_DESCRIPTION_LEN,
+    MAX_NAME_LEN, RESOURCE_DIRS,
 };
 
 /// Split a `SKILL.md` file into parsed frontmatter and the remaining body.
@@ -18,7 +18,7 @@ use super::ops_types::{
 /// malformed. Callers merge these into the skill's user-visible warnings so
 /// the catalog surfaces the real cause instead of a generic "could not parse"
 /// placeholder.
-pub fn parse_skill_md(path: &Path) -> Option<(SkillFrontmatter, String, Vec<String>)> {
+pub fn parse_skill_md(path: &Path) -> Option<(WorkflowFrontmatter, String, Vec<String>)> {
     let content = std::fs::read_to_string(path).ok()?;
     parse_skill_md_str(&content)
 }
@@ -27,12 +27,16 @@ pub fn parse_skill_md(path: &Path) -> Option<(SkillFrontmatter, String, Vec<Stri
 /// fetched over HTTPS (see [`install_skill_from_url`]) and has not yet landed
 /// on disk. Returns `None` when the frontmatter block is opened with `---` but
 /// never terminated — the same failure mode the file-based parser rejects.
-pub fn parse_skill_md_str(content: &str) -> Option<(SkillFrontmatter, String, Vec<String>)> {
+pub fn parse_skill_md_str(content: &str) -> Option<(WorkflowFrontmatter, String, Vec<String>)> {
     let mut lines = content.lines();
     let first = lines.next()?;
     if first.trim() != "---" {
         // No frontmatter — treat whole file as body.
-        return Some((SkillFrontmatter::default(), content.to_string(), Vec::new()));
+        return Some((
+            WorkflowFrontmatter::default(),
+            content.to_string(),
+            Vec::new(),
+        ));
     }
 
     let mut yaml = String::new();
@@ -57,12 +61,12 @@ pub fn parse_skill_md_str(content: &str) -> Option<(SkillFrontmatter, String, Ve
     }
 
     let mut parse_warnings = Vec::new();
-    let frontmatter = match serde_yaml::from_str::<SkillFrontmatter>(&yaml) {
+    let frontmatter = match serde_yaml::from_str::<WorkflowFrontmatter>(&yaml) {
         Ok(fm) => fm,
         Err(err) => {
             log::warn!("[skills] failed to parse frontmatter: {err}");
             parse_warnings.push(format!("frontmatter parse error: {err}"));
-            SkillFrontmatter::default()
+            WorkflowFrontmatter::default()
         }
     };
 
@@ -140,8 +144,8 @@ pub(crate) fn load_from_skill_md(
     skill_md: &Path,
     dir: &Path,
     dir_name: &str,
-    scope: SkillScope,
-) -> Skill {
+    scope: WorkflowScope,
+) -> Workflow {
     let mut warnings = Vec::new();
     let (frontmatter, body) = match parse_skill_md(skill_md) {
         Some((fm, body, parse_warnings)) => {
@@ -153,7 +157,7 @@ pub(crate) fn load_from_skill_md(
                 "could not parse {} — exposing directory as placeholder",
                 skill_md.display()
             ));
-            (SkillFrontmatter::default(), String::new())
+            (WorkflowFrontmatter::default(), String::new())
         }
     };
 
@@ -197,7 +201,7 @@ pub(crate) fn load_from_skill_md(
     let tags = extract_tags(&frontmatter, &mut warnings);
     let tools = frontmatter.allowed_tools.clone();
 
-    Skill {
+    Workflow {
         name,
         dir_name: dir_name.to_string(),
         description,
@@ -220,8 +224,8 @@ pub(crate) fn load_from_legacy_manifest(
     manifest_path: &Path,
     dir: &Path,
     dir_name: &str,
-    scope: SkillScope,
-) -> Skill {
+    scope: WorkflowScope,
+) -> Workflow {
     let mut warnings = vec![format!(
         "skill uses legacy skill.json; migrate to SKILL.md frontmatter"
     )];
@@ -261,7 +265,7 @@ pub(crate) fn load_from_legacy_manifest(
 
     let location = Some(manifest_path.to_path_buf());
 
-    Skill {
+    Workflow {
         name,
         dir_name: dir_name.to_string(),
         description,
@@ -271,7 +275,7 @@ pub(crate) fn load_from_legacy_manifest(
         tools: manifest.tools,
         prompts: manifest.prompts,
         location,
-        frontmatter: SkillFrontmatter::default(),
+        frontmatter: WorkflowFrontmatter::default(),
         resources: inventory_resources(dir),
         scope,
         legacy: true,
@@ -279,7 +283,7 @@ pub(crate) fn load_from_legacy_manifest(
     }
 }
 
-impl Skill {
+impl Workflow {
     /// Re-read the SKILL.md body (everything after the YAML frontmatter
     /// block) from disk. Returns `None` for legacy `skill.json` skills,
     /// for skills whose `location` points nowhere, or when the file
