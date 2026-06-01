@@ -555,6 +555,7 @@ async fn round20_polymarket_covers_discovery_errors_rpc_allowance_and_write_gate
 #[tokio::test]
 async fn round20_spawn_subagent_covers_validation_schema_and_disabled_worker_branch() {
     let _lock = env_lock();
+    let _lock = env_lock();
     let tool = SpawnSubagentTool::new();
 
     assert_eq!(tool.name(), "spawn_subagent");

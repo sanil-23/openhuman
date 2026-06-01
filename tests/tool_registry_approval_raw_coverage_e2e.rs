@@ -1158,6 +1158,7 @@ async fn approval_schema_handlers_validate_params_and_surface_empty_gate_state()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approval_rpc_decision_paths_persist_always_allow_and_recent_audit() {
     let _lock = env_lock();
+    let _lock = env_lock();
     let harness = setup("").await;
     let config = Config::load_or_init()
         .await
