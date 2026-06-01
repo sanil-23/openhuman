@@ -180,6 +180,17 @@ async fn round21_github_reader_covers_commit_issue_comments_and_error_paths() {
     std::fs::create_dir_all(&bin).expect("bin dir");
     let script = bin.join("gh");
     write_fake_gh(&script);
+    let git_stub = bin.join("git");
+    std::fs::write(&git_stub, "#!/usr/bin/env bash\nexit 1\n").expect("write fake git");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&git_stub)
+            .expect("metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&git_stub, perms).expect("chmod fake git");
+    }
     let old_path = std::env::var("PATH").unwrap_or_default();
     let _path = EnvGuard::set_path("PATH", Path::new(&format!("{}:{old_path}", bin.display())));
 
@@ -207,9 +218,11 @@ async fn round21_github_reader_covers_commit_issue_comments_and_error_paths() {
     let issue = reader
         .read_item(&entry, "issue:42", &config)
         .await
-        .expect("read issue with comments");
-    assert!(issue.body.contains("## Comments"));
-    assert!(issue.body.contains("Looks good from the fixture"));
+        .expect("read issue");
+    // #3113 redesign: read_issue no longer inlines comments into the rendered
+    // body (fetch_issue_comments is retained but unused), so assert on the
+    // issue content read_issue still renders rather than the dropped comments.
+    assert!(issue.body.contains("Round21 issue"));
     assert_eq!(
         issue
             .metadata
@@ -238,17 +251,17 @@ if [[ "${1:-}" != "api" ]]; then
   exit 2
 fi
 case "${2:-}" in
-  repos/tinyhumansai/openhuman/commits?per_page=30)
+  repos/tinyhumansai/openhuman/commits\?*)
     cat <<'JSON'
 [{"sha":"abc123","commit":{"message":"Round21 commit subject\n\nBody line","author":{"name":"Ada","email":"ada@example.test","date":"2026-05-30T00:00:00Z"},"committer":{"name":"Ada","email":"ada@example.test","date":"2026-05-30T00:00:00Z"}}}]
 JSON
     ;;
-  repos/tinyhumansai/openhuman/issues?per_page=30\&state=all)
+  repos/tinyhumansai/openhuman/issues\?*)
     cat <<'JSON'
 [{"number":42,"title":"Round21 issue","body":"Issue body","state":"open","user":{"login":"octo"},"labels":[],"created_at":"2026-05-30T00:00:00Z","updated_at":"2026-05-30T00:01:00Z","pull_request":null}]
 JSON
     ;;
-  repos/tinyhumansai/openhuman/pulls?per_page=30\&state=all)
+  repos/tinyhumansai/openhuman/pulls\?*)
     cat <<'JSON'
 [{"number":43,"title":"Round21 PR","body":"PR body","state":"open","user":{"login":"octo"},"labels":[],"created_at":"2026-05-30T00:00:00Z","updated_at":"2026-05-30T00:02:00Z","merged_at":null,"comments":1}]
 JSON
@@ -263,7 +276,7 @@ JSON
 {"number":42,"title":"Round21 issue","body":"Issue body","state":"open","user":{"login":"octo"},"labels":[],"created_at":"2026-05-30T00:00:00Z","updated_at":"2026-05-30T00:01:00Z","pull_request":null}
 JSON
     ;;
-  repos/tinyhumansai/openhuman/issues/42/comments?per_page=50)
+  repos/tinyhumansai/openhuman/issues/42/comments\?*)
     cat <<'JSON'
 [{"user":{"login":"reviewer"},"body":"Looks good from the fixture","created_at":"2026-05-30T00:04:00Z"}]
 JSON
