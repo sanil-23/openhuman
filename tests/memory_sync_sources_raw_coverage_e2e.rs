@@ -311,6 +311,17 @@ async fn github_reader_uses_fake_gh_for_list_and_read_paths() {
     std::fs::create_dir_all(&bin).expect("bin dir");
     let script = bin.join("gh");
     write_fake_gh(&script);
+    let git_stub = bin.join("git");
+    std::fs::write(&git_stub, "#!/usr/bin/env bash\nexit 1\n").expect("write fake git");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&git_stub)
+            .expect("metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&git_stub, perms).expect("chmod fake git");
+    }
     let old_path = std::env::var("PATH").unwrap_or_default();
     let _path = EnvGuard::set("PATH", format!("{}:{old_path}", bin.display()));
 
@@ -341,8 +352,9 @@ async fn github_reader_uses_fake_gh_for_list_and_read_paths() {
         .read_item(&entry, "issue:7", &config)
         .await
         .expect("read issue");
-    assert!(issue.body.contains("## Comments"));
-    assert!(issue.body.contains("Needs fixture coverage"));
+    // #3113 redesign: read_issue no longer inlines comments into the body, so
+    // assert on the issue content it still renders rather than the comments.
+    assert!(issue.body.contains("Issue #7"));
     assert_eq!(
         issue.metadata.get("state").and_then(Value::as_str),
         Some("open")
@@ -611,17 +623,17 @@ if [[ "${1:-}" != "api" ]]; then
   exit 2
 fi
 case "${2:-}" in
-  repos/tinyhumansai/openhuman/commits?per_page=30)
+  repos/tinyhumansai/openhuman/commits\?*)
     cat <<'JSON'
 [{"sha":"abc123","commit":{"message":"Add coverage hooks\n\nMore details","author":{"name":"Ada","email":"ada@example.test","date":"2026-05-28T10:00:00Z"},"committer":{"name":"Ada","email":"ada@example.test","date":"2026-05-28T10:00:00Z"}}}]
 JSON
     ;;
-  repos/tinyhumansai/openhuman/issues?per_page=30\&state=all)
+  repos/tinyhumansai/openhuman/issues\?*)
     cat <<'JSON'
 [{"number":7,"title":"Memory source reader gap","body":"Needs fixture coverage","state":"open","user":{"login":"ada"},"labels":[{"name":"coverage"}],"created_at":"2026-05-27T10:00:00Z","updated_at":"2026-05-28T11:00:00Z","pull_request":null},{"number":99,"title":"PR-shaped issue","body":"","state":"open","user":{"login":"bot"},"labels":[],"created_at":"2026-05-27T10:00:00Z","updated_at":"2026-05-28T11:00:00Z","pull_request":{}}]
 JSON
     ;;
-  repos/tinyhumansai/openhuman/pulls?per_page=30\&state=all)
+  repos/tinyhumansai/openhuman/pulls\?*)
     cat <<'JSON'
 [{"number":9,"title":"Raw coverage PR","body":"PR body","state":"open","user":{"login":"grace"},"labels":[{"name":"tests"}],"created_at":"2026-05-27T10:00:00Z","updated_at":"2026-05-28T12:00:00Z","merged_at":null,"comments":1}]
 JSON
@@ -641,7 +653,7 @@ JSON
 {"number":9,"title":"Raw coverage PR","body":"PR body","state":"open","user":{"login":"grace"},"labels":[{"name":"tests"}],"created_at":"2026-05-27T10:00:00Z","updated_at":"2026-05-28T12:00:00Z","merged_at":null,"comments":1}
 JSON
     ;;
-  repos/tinyhumansai/openhuman/issues/7/comments?per_page=50|repos/tinyhumansai/openhuman/issues/9/comments?per_page=50)
+  repos/tinyhumansai/openhuman/issues/7/comments\?*|repos/tinyhumansai/openhuman/issues/9/comments\?*)
     cat <<'JSON'
 [{"user":{"login":"reviewer"},"body":"Looks deterministic","created_at":"2026-05-28T13:00:00Z"}]
 JSON

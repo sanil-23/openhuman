@@ -430,6 +430,17 @@ async fn round20_memory_sources_readers_and_sync_cover_error_edges_without_netwo
     std::fs::create_dir_all(&bin).expect("bin dir");
     let script = bin.join("gh");
     write_fake_gh_round20(&script);
+    let git_stub = bin.join("git");
+    std::fs::write(&git_stub, "#!/usr/bin/env bash\nexit 1\n").expect("write fake git");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&git_stub)
+            .expect("metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&git_stub, perms).expect("chmod fake git");
+    }
     let old_path = std::env::var("PATH").unwrap_or_default();
     let _path = EnvGuard::set("PATH", format!("{}:{old_path}", bin.display()));
 
@@ -760,17 +771,17 @@ if [[ "${1:-}" != "api" ]]; then
   exit 2
 fi
 case "${2:-}" in
-  repos/tinyhumansai/openhuman/commits?per_page=30)
+  repos/tinyhumansai/openhuman/commits\?*)
     cat <<'JSON'
 [{"sha":"def456","commit":{"message":"Round20 commit fixture","author":{"name":"Ada","email":"ada@example.test","date":"2026-05-29T00:00:00Z"},"committer":{"name":"Ada","email":"ada@example.test","date":"2026-05-29T00:00:00Z"}}}]
 JSON
     ;;
-  repos/tinyhumansai/openhuman/issues?per_page=30\&state=all)
+  repos/tinyhumansai/openhuman/issues\?*)
     cat <<'JSON'
 [{"number":20,"title":"Round20 issue","body":null,"state":"closed","user":null,"labels":[],"created_at":null,"updated_at":"2026-05-29T00:30:00Z","pull_request":null}]
 JSON
     ;;
-  repos/tinyhumansai/openhuman/pulls?per_page=30\&state=all)
+  repos/tinyhumansai/openhuman/pulls\?*)
     cat <<'JSON'
 [{"number":21,"title":"Round20 merged PR","body":null,"state":"closed","user":null,"labels":[],"created_at":null,"updated_at":"2026-05-29T01:00:00Z","merged_at":"2026-05-29T01:00:00Z","comments":0}]
 JSON
@@ -780,7 +791,7 @@ JSON
 {"number":21,"title":"Round20 merged PR","body":null,"state":"closed","user":null,"labels":[],"created_at":null,"updated_at":"2026-05-29T01:00:00Z","merged_at":"2026-05-29T01:00:00Z","comments":0}
 JSON
     ;;
-  repos/tinyhumansai/openhuman/issues/21/comments?per_page=50)
+  repos/tinyhumansai/openhuman/issues/21/comments\?*)
     cat <<'JSON'
 []
 JSON
