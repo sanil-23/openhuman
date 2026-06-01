@@ -376,6 +376,15 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       RUST_BACKTRACE: "1"
+      # The full-workspace debug test build (`cargo test --workspace` over
+      # every `tests/*_e2e.rs` binary) was overflowing the runner disk and
+      # failing with `System.IO.IOException: No space left on device`. Full
+      # DWARF (type/variable tables) is the largest part of `target/debug`;
+      # `line-tables-only` drops it while PRESERVING panic locations
+      # (`#[track_caller]`) and `RUST_BACKTRACE=1` file:line frames, so we
+      # lose only debugger-symbol data CI never reads.
+      CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+      CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
