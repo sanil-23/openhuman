@@ -247,17 +247,6 @@ pub fn all_tools_with_runtime(
             security.clone(),
         )),
         Box::new(GmailUnsubscribeTool),
-        // Workflow tools — let the agent load and activate installed agent
-        // workflows (WORKFLOW.md bundles). `workflow_load` is read-only;
-        // `workflow_phase` runs gated scripts and is Execute-class so the
-        // harness routes it through the ApprovalGate identically to `shell`.
-        Box::new(WorkflowLoadTool),
-        Box::new(WorkflowPhaseTool::new(
-            action_dir.to_path_buf(),
-            security.clone(),
-            Arc::clone(&runtime),
-            Arc::clone(&audit),
-        )),
         // Knowledge & memory tools (agent-tool expansion). Read/bounded-write
         // ship default-ON; the overextending siblings (people_refresh_address_book —
         // bulk OS contacts ingest with a permission prompt) ship default-OFF via
@@ -315,18 +304,13 @@ pub fn all_tools_with_runtime(
         Box::new(LearningResetCacheTool),
         Box::new(LearningSaveProfileTool),
         Box::new(LearningEnrichProfileTool),
-        // Task & workflow productivity tools (issue: agent-tool expansion).
+        // Task & productivity tools (issue: agent-tool expansion).
         // Read/observe + bounded-write tools are registered here; the
         // destructive/overextending siblings (artifact_delete, todo_remove/
-        // replace/clear, task_source_add/update/remove,
-        // agent_workflow_uninstall) are registered too but ship default-OFF
-        // via `tools::user_filter` (their toggle IDs default off in
-        // onboarding). The per-call permission ladder still gates them.
-        Box::new(AgentWorkflowListTool::new(config.clone())),
-        Box::new(AgentWorkflowReadTool),
-        Box::new(AgentWorkflowPhaseInfoTool),
-        Box::new(AgentWorkflowCreateTool),
-        Box::new(AgentWorkflowUninstallTool),
+        // replace/clear, task_source_add/update/remove) are registered too
+        // but ship default-OFF via `tools::user_filter` (their toggle IDs
+        // default off in onboarding). The per-call permission ladder still
+        // gates them.
         Box::new(ArtifactListTool::new(config.clone())),
         Box::new(ArtifactGetTool::new(config.clone())),
         Box::new(ArtifactDeleteTool::new(config.clone())),

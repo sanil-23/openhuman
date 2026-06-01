@@ -410,5 +410,4 @@ mod tests {
             "lowercase serialization: got {s}"
         );
     }
-
 }
