@@ -150,7 +150,7 @@ impl Provider for MockLlm {
     }
 }
 
-/// Seed a RUNNABLE workflow where the run path (`load_skills`/`get_skill`)
+/// Seed a RUNNABLE workflow where the run path (`load_skills`/`get_workflow`)
 /// looks: `<ws>/skills/<id>/{skill.toml, SKILL.md}`. No required inputs, so
 /// `run_workflow` with an empty input map spawns cleanly.
 fn seed_runnable_workflow(ws: &std::path::Path, id: &str) {
@@ -178,7 +178,7 @@ async fn inner_workflow_run_executes_via_mock_llm_and_reaches_done() {
     let ws_root = tempfile::tempdir().unwrap();
     let _env = WorkspaceEnv::set(ws_root.path());
     // Seed exactly where the run path resolves the workspace to (the env maps
-    // OPENHUMAN_WORKSPACE → <root>/workspace), so get_skill/load_skills finds it.
+    // OPENHUMAN_WORKSPACE → <root>/workspace), so get_workflow/load_skills finds it.
     let workspace = crate::openhuman::workflows::schemas::resolve_workspace_dir().await;
     seed_runnable_workflow(&workspace, "triage-inbox");
     let _guard = test_provider_override::install(Arc::new(MockLlm {

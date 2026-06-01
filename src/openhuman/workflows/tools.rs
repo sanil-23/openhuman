@@ -28,7 +28,7 @@ use super::ops_discover::{discover_skills, is_workspace_trusted, read_skill_reso
 use super::ops_install::{
     install_skill_from_url, uninstall_skill, InstallSkillFromUrlParams, UninstallSkillParams,
 };
-use super::registry::get_skill;
+use super::registry::get_workflow;
 use super::run_log::{find_run_log_path, read_run_log_slice, scan_runs};
 
 fn read_required_str(args: &serde_json::Value, key: &str) -> anyhow::Result<String> {
@@ -131,7 +131,7 @@ impl Tool for WorkflowDescribeTool {
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         log::debug!("[tool][workflows] describe invoked");
         let skill_id = read_workflow_id(&args)?;
-        let def = get_skill(&self.workspace_dir, &skill_id)
+        let def = get_workflow(&self.workspace_dir, &skill_id)
             .ok_or_else(|| anyhow::anyhow!("describe_workflow: workflow `{skill_id}` not found"))?;
         Ok(ToolResult::success(serde_json::to_string(&json!({
             "definition": def.definition,

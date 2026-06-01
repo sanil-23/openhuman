@@ -36,7 +36,7 @@ use crate::openhuman::tools::policy::DefaultToolPolicy;
 use crate::openhuman::tools::traits::Tool;
 use crate::openhuman::workflows::ops_create::{create_skill_inner, CreateSkillParams, WorkflowCreateInputDef};
 use crate::openhuman::workflows::ops_types::WorkflowScope;
-use crate::openhuman::workflows::registry::get_skill;
+use crate::openhuman::workflows::registry::get_workflow;
 use crate::openhuman::workflows::run_log;
 use crate::openhuman::workflows::schemas::await_run_outcome;
 
@@ -118,10 +118,10 @@ fn seed_project_workflow(ws: &std::path::Path, slug: &str, description: &str) {
 
 // GAP SURFACED BY THIS TEST (ignored until fixed): the create/discover path
 // (`discover_skills` → `~/.openhuman/skills`, `<ws>/.openhuman/skills`,
-// `<ws>/skills`) and the RUN path (`get_skill` → `load_skills`, which scans
+// `<ws>/skills`) and the RUN path (`get_workflow` → `load_skills`, which scans
 // ONLY `<ws>/skills/*/skill.toml`) use different roots. A workflow created on
 // the Intelligence tab lands in `.openhuman/skills` and is discoverable, but
-// `run_workflow` → `get_skill` can't find it → "unknown workflow". The
+// `run_workflow` → `get_workflow` can't find it → "unknown workflow". The
 // unification needs `load_skills` to read the same roots `discover_skills`
 // does. This test asserts the target (post-fix) behaviour.
 #[ignore = "create→run root divergence: load_skills scans <ws>/skills only; \
@@ -151,7 +151,7 @@ fn create_then_registry_roundtrip_preserves_when_to_use_and_inputs() {
 
     // The registry (what the orchestrator's discovery reads) must surface BOTH
     // halves of the unified form.
-    let def = get_skill(ws.path(), &created.name).expect("created workflow is discoverable");
+    let def = get_workflow(ws.path(), &created.name).expect("created workflow is discoverable");
     assert_eq!(
         def.definition.when_to_use, "when the user asks to triage email",
         "the workflow's trigger (when_to_use) must round-trip, distinct from the description"

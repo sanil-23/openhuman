@@ -695,7 +695,7 @@ fn handle_workflows_describe(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<WorkflowsDescribeParams>(params)?;
         let workspace = resolve_workspace_dir().await;
-        let skill = registry::get_skill(&workspace, &payload.skill_id)
+        let skill = registry::get_workflow(&workspace, &payload.skill_id)
             .ok_or_else(|| format!("workflows_describe: unknown skill '{}'", payload.skill_id))?;
         let inputs = skill
             .inputs
@@ -827,7 +827,7 @@ pub(crate) async fn spawn_skill_run_background(
     inputs_param: Option<Value>,
 ) -> Result<WorkflowRunStarted, String> {
     let workspace = resolve_workspace_dir().await;
-    let skill = registry::get_skill(&workspace, &skill_id_param)
+    let skill = registry::get_workflow(&workspace, &skill_id_param)
         .ok_or_else(|| format!("skill_run: unknown skill '{skill_id_param}'"))?;
     let inputs = inputs_param.unwrap_or(Value::Null);
     let missing = registry::missing_required_inputs(&skill.inputs, &inputs);

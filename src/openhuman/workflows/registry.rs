@@ -122,18 +122,18 @@ pub fn render_inputs_block(defs: &[WorkflowInput], provided: &serde_json::Value)
 /// `(id, skill.toml, SKILL.md)`.
 // Bundled defaults removed in the workflows-unify refactor (the legacy
 // `dev-workflow` plus the `github-issue-crusher` / `pr-review-shepherd`
-// runner skills). Left empty so `seed_default_skills` becomes a no-op until
+// runner skills). Left empty so `seed_default_workflows` becomes a no-op until
 // (and if) we ship example *workflows* under the unified primitive.
-const DEFAULT_SKILLS: &[(&str, &str, &str)] = &[];
+const DEFAULT_WORKFLOWS: &[(&str, &str, &str)] = &[];
 
-/// Seed the bundled [`DEFAULT_SKILLS`] into `<workspace>/skills/<id>/` when
+/// Seed the bundled [`DEFAULT_WORKFLOWS`] into `<workspace>/skills/<id>/` when
 /// absent. Idempotent and non-destructive: an existing `skill.toml` (already
 /// seeded, or user-edited) is left untouched, so a default can be customised or
 /// removed. This is what makes a default skill "come with the system" — every
 /// workspace gets it without a manual drop.
-pub fn seed_default_skills(workspace_dir: &Path) {
+pub fn seed_default_workflows(workspace_dir: &Path) {
     let base = workspace_dir.join("skills");
-    for (id, skill_toml, skill_md) in DEFAULT_SKILLS {
+    for (id, skill_toml, skill_md) in DEFAULT_WORKFLOWS {
         let dir = base.join(id);
         if dir.join("skill.toml").exists() {
             continue; // already present — never clobber
@@ -156,10 +156,10 @@ pub fn seed_default_skills(workspace_dir: &Path) {
 /// `<workspace>/skills/<id>/{skill.toml, SKILL.md}`. A skill's `SKILL.md`, when
 /// present, becomes its inline system prompt. A bad `skill.toml` is skipped
 /// with a warning, not fatal.
-pub fn load_skills(workspace_dir: &Path) -> Vec<WorkflowDefinition> {
+pub fn load_workflows(workspace_dir: &Path) -> Vec<WorkflowDefinition> {
     // Materialise the bundled defaults (idempotent) so they're always present
     // and user-editable in the workspace, then picked up by the scan below.
-    seed_default_skills(workspace_dir);
+    seed_default_workflows(workspace_dir);
 
     let mut skills: Vec<WorkflowDefinition> = Vec::new();
 
@@ -201,8 +201,8 @@ pub fn load_skills(workspace_dir: &Path) -> Vec<WorkflowDefinition> {
 }
 
 /// Look up one skill by id across the registry.
-pub fn get_skill(workspace_dir: &Path, id: &str) -> Option<WorkflowDefinition> {
-    load_skills(workspace_dir)
+pub fn get_workflow(workspace_dir: &Path, id: &str) -> Option<WorkflowDefinition> {
+    load_workflows(workspace_dir)
         .into_iter()
         .find(|s| s.definition.id == id)
 }
@@ -285,7 +285,7 @@ mod tests {
         .unwrap();
         std::fs::write(sd.join("SKILL.md"), "# Issue Crusher\nFix it.").unwrap();
 
-        let skills = load_skills(tmp.path());
+        let skills = load_workflows(tmp.path());
         let s = skills
             .iter()
             .find(|s| s.definition.id == "github-issue-crusher")
