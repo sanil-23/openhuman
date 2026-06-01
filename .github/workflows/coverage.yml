@@ -94,7 +94,10 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run cargo llvm-cov for openhuman core
-        run: cargo llvm-cov -p openhuman --lcov --output-path lcov-core.info
+        # Single-threaded: several raw-coverage tests set the process-global
+        # OPENHUMAN_WORKSPACE per-test and trample each other under llvm-cov's
+        # slower instrumentation when run in parallel. Serialize for hermeticity.
+        run: cargo llvm-cov -p openhuman --lcov --output-path lcov-core.info -- --test-threads=1
       - name: Upload core lcov
         uses: actions/upload-artifact@v5
         with:

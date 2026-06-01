@@ -655,7 +655,9 @@ async fn round16_spawn_subagent_tool_and_runner_error_success_paths() {
         .await
         .expect("dedicated thread returns tool result");
     assert!(disabled_thread.is_error);
-    assert!(disabled_thread.output().contains("temporarily disabled"));
+    // The dedicated_thread flag no longer short-circuits with a "temporarily
+    // disabled" message (see spawn_subagent::dedicated_thread_flag_no_longer_returns_disabled_error).
+    assert!(!disabled_thread.output().contains("temporarily disabled"));
 
     let provider = Arc::new(ScriptedProvider::new(vec![response(
         Some("subagent final answer that will be clipped"),
