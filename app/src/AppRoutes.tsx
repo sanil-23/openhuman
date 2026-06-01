@@ -7,7 +7,6 @@ import PublicRoute from './components/PublicRoute';
 import HumanPage from './features/human/HumanPage';
 import { getIsMobile } from './lib/platform';
 import Accounts from './pages/Accounts';
-import AgentWorkflows from './pages/AgentWorkflows';
 import Channels from './pages/Channels';
 import Home from './pages/Home';
 import Intelligence from './pages/Intelligence';
@@ -175,14 +174,9 @@ const AppRoutes = () => {
         }
       />
 
-      <Route
-        path="/workflows"
-        element={
-          <ProtectedRoute requireAuth={true}>
-            <AgentWorkflows />
-          </ProtectedRoute>
-        }
-      />
+      {/* Workflows moved onto the Intelligence page (its own tab). Keep the
+          old /workflows path working as a deep link into that tab. */}
+      <Route path="/workflows" element={<Navigate to="/intelligence?tab=workflows" replace />} />
 
       <Route path="/webhooks" element={<Navigate to="/settings/webhooks-triggers" replace />} />
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 
 import { ConfirmationModal } from '../components/intelligence/ConfirmationModal';
 import IntelligenceSubconsciousTab from '../components/intelligence/IntelligenceSubconsciousTab';
@@ -6,6 +7,7 @@ import IntelligenceTasksTab from '../components/intelligence/IntelligenceTasksTa
 import MemorySection from '../components/intelligence/MemorySection';
 import ModelCouncilTab from '../components/intelligence/ModelCouncilTab';
 import { ToastContainer } from '../components/intelligence/Toast';
+import WorkflowsTab from '../components/intelligence/WorkflowsTab';
 import PillTabBar from '../components/PillTabBar';
 import {
   useIntelligenceSocket,
@@ -18,14 +20,30 @@ import type {
   ToastNotification,
 } from '../types/intelligence';
 import { IS_DEV } from '../utils/config';
-import AgentWorkflows from './AgentWorkflows';
 
 type IntelligenceTab = 'memory' | 'subconscious' | 'tasks' | 'workflows' | 'council';
+
+const INTELLIGENCE_TABS: IntelligenceTab[] = [
+  'memory',
+  'subconscious',
+  'tasks',
+  'workflows',
+  'council',
+];
 
 export default function Intelligence() {
   const { t } = useT();
 
-  const [activeTab, setActiveTab] = useState<IntelligenceTab>('memory');
+  // Honour `?tab=<id>` so deep links (e.g. the /workflows redirect) can land
+  // directly on a specific tab; default to Tasks otherwise.
+  const location = useLocation();
+  const initialTab: IntelligenceTab = (() => {
+    const requested = new URLSearchParams(location.search).get('tab');
+    return (INTELLIGENCE_TABS as string[]).includes(requested ?? '')
+      ? (requested as IntelligenceTab)
+      : 'tasks';
+  })();
+  const [activeTab, setActiveTab] = useState<IntelligenceTab>(initialTab);
 
   // The legacy header pills (system-status + Ingesting/Queued chips) were
   // sourced from `useConsciousItems` + `useMemoryIngestionStatus`. They are
@@ -93,7 +111,6 @@ export default function Intelligence() {
       id: 'tasks',
       label: t('memory.tab.tasks'),
       description: t('memory.tab.tasksDescription'),
-      devOnly: true,
     },
     { id: 'memory', label: t('memory.tab.memory') },
     { id: 'subconscious', label: t('memory.tab.subconscious') },
@@ -101,7 +118,6 @@ export default function Intelligence() {
       id: 'workflows',
       label: t('memory.tab.workflows'),
       description: t('memory.tab.workflowsDescription'),
-      devOnly: true,
     },
     { id: 'council', label: t('memory.tab.council'), devOnly: true },
   ];
@@ -182,7 +198,7 @@ export default function Intelligence() {
 
             {activeTab === 'tasks' && <IntelligenceTasksTab />}
 
-            {activeTab === 'workflows' && <AgentWorkflows />}
+            {activeTab === 'workflows' && <WorkflowsTab />}
 
             {activeTab === 'council' && <ModelCouncilTab />}
           </div>

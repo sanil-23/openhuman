@@ -4807,9 +4807,11 @@ const en: TranslationMap = {
 
   // ── Agent Workflows ──────────────────────────────────────────────────────
   'nav.workflows': 'Workflows',
-  'workflows.title': 'Agent Workflows',
-  'workflows.subtitle': 'Lifecycle-bound rule sets that guide how the agent behaves during tasks.',
-  'workflows.createNew': 'New Workflow',
+  'workflows.title': 'Workflows',
+  'workflows.subtitle':
+    'Reusable, runnable procedures — a goal plus the steps to reach it. Create one, install from a URL, or open a workflow to run it.',
+  'workflows.createNew': 'New workflow',
+  'workflows.installFromUrl': 'Install from URL',
   'workflows.listHeading': 'Workflows',
   'workflows.delete': 'Delete Workflow',
   'workflows.deleteError': 'Failed to delete workflow',
