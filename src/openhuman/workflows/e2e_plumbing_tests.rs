@@ -114,18 +114,14 @@ fn seed_project_workflow(ws: &std::path::Path, slug: &str, description: &str) {
     .unwrap();
 }
 
-// ── A. create → registry round-trip (the combo persists) ─────────────────
+// ── A. create → registry round-trip (the combo persists + is RUNNABLE) ───
 
-// GAP SURFACED BY THIS TEST (ignored until fixed): the create/discover path
-// (`discover_skills` → `~/.openhuman/skills`, `<ws>/.openhuman/skills`,
-// `<ws>/skills`) and the RUN path (`get_workflow` → `load_skills`, which scans
-// ONLY `<ws>/skills/*/skill.toml`) use different roots. A workflow created on
-// the Intelligence tab lands in `.openhuman/skills` and is discoverable, but
-// `run_workflow` → `get_workflow` can't find it → "unknown workflow". The
-// unification needs `load_skills` to read the same roots `discover_skills`
-// does. This test asserts the target (post-fix) behaviour.
-#[ignore = "create→run root divergence: load_skills scans <ws>/skills only; \
-            un-ignore once the run-path loader is unified with discover_skills"]
+// Regression guard for the create→run unification: a workflow authored via the
+// create path (`create_skill_inner` → `.openhuman/skills`) must be found by the
+// RUN path's `get_workflow` (→ `load_workflows`, now reading the same roots as
+// `discover_skills`), with its `when_to_use` trigger + declared inputs intact.
+// Before the loader unification this failed ("unknown workflow") because the
+// run path scanned only `<ws>/skills`. Hermetic (project scope + temp dir).
 #[test]
 fn create_then_registry_roundtrip_preserves_when_to_use_and_inputs() {
     let ws = tempfile::tempdir().unwrap();

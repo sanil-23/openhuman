@@ -151,21 +151,31 @@ pub fn seed_default_workflows(workspace_dir: &Path) {
     }
 }
 
-/// Load the skill registry: bundled defaults (seeded into the workspace) +
-/// compile-time builtins (no declared inputs) + runtime skills under
-/// `<workspace>/skills/<id>/{skill.toml, SKILL.md}`. A skill's `SKILL.md`, when
-/// present, becomes its inline system prompt. A bad `skill.toml` is skipped
-/// with a warning, not fatal.
+/// Load the runnable workflow registry: compile-time builtins (no declared
+/// inputs) + every workflow `discover_skills` surfaces — user
+/// (`~/.openhuman/skills`), project (`<ws>/.openhuman/skills`, trusted), and
+/// legacy (`<ws>/skills`) — loaded into a runnable [`WorkflowDefinition`].
+///
+/// This is the unification fix: the RUN path now reads the SAME roots the
+/// create/list path writes to, so a workflow authored on the Intelligence tab
+/// (which lands in `.openhuman/skills`) is runnable, not just listable.
+/// Previously this scanned only `<ws>/skills`, so `get_workflow` (and thus
+/// `run_workflow`) returned "unknown workflow" for anything created via the UI.
+///
+/// Per dir: `skill.toml` (id / `when_to_use` / `[[inputs]]` / `[github]`)
+/// + the `SKILL.md` body as the inline system prompt; or, when there's no
+/// `skill.toml`, a synthesized SKILL.md-only definition so a bare workflow is
+/// still runnable. A bad `skill.toml` falls back to the SKILL.md-only form.
 pub fn load_workflows(workspace_dir: &Path) -> Vec<WorkflowDefinition> {
-    // Materialise the bundled defaults (idempotent) so they're always present
-    // and user-editable in the workspace, then picked up by the scan below.
+    // Materialise the bundled defaults (idempotent); discover's legacy scan
+    // picks them up.
     seed_default_workflows(workspace_dir);
 
-    let mut skills: Vec<WorkflowDefinition> = Vec::new();
+    let mut workflows: Vec<WorkflowDefinition> = Vec::new();
 
     if let Ok(builtins) = crate::openhuman::agent_registry::agents::load_builtins() {
         for definition in builtins {
-            skills.push(WorkflowDefinition {
+            workflows.push(WorkflowDefinition {
                 definition,
                 inputs: Vec::new(),
                 github: None,
@@ -173,31 +183,63 @@ pub fn load_workflows(workspace_dir: &Path) -> Vec<WorkflowDefinition> {
         }
     }
 
-    let dir = workspace_dir.join("skills");
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let sd = entry.path();
-            if !sd.is_dir() {
-                continue;
-            }
-            let toml_path = sd.join("skill.toml");
-            let Ok(toml_str) = std::fs::read_to_string(&toml_path) else {
-                continue;
-            };
-            let mut skill: WorkflowDefinition = match toml::from_str(&toml_str) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::warn!("[skills] skipping {}: {e}", toml_path.display());
-                    continue;
-                }
-            };
-            if let Ok(md) = std::fs::read_to_string(sd.join("SKILL.md")) {
-                skill.definition.system_prompt = PromptSource::Inline(md);
-            }
-            skills.push(skill);
+    // Enumerate across all roots (deduped + scope-prioritised) via the same
+    // discovery the create/list path uses, then load each one's definition.
+    let home = dirs::home_dir();
+    let trusted = super::ops_discover::is_workspace_trusted(workspace_dir);
+    for wf in super::ops_discover::discover_skills(home.as_deref(), Some(workspace_dir), trusted) {
+        let Some(skill_md) = wf.location.as_ref() else {
+            continue;
+        };
+        let Some(dir) = skill_md.parent() else {
+            continue;
+        };
+        if let Some(def) = load_workflow_definition(dir, &wf.name, &wf.description) {
+            workflows.push(def);
         }
     }
-    skills
+    workflows
+}
+
+/// Build a runnable [`WorkflowDefinition`] from a single workflow directory.
+/// Prefers `skill.toml`; falls back to a SKILL.md-only definition (id = the
+/// discovered slug, `when_to_use` = the frontmatter description) so a workflow
+/// with no `skill.toml` is still runnable. Returns `None` if `SKILL.md` is
+/// unreadable.
+fn load_workflow_definition(
+    dir: &Path,
+    slug: &str,
+    description: &str,
+) -> Option<WorkflowDefinition> {
+    let md = std::fs::read_to_string(dir.join("SKILL.md")).ok()?;
+
+    if let Ok(toml_str) = std::fs::read_to_string(dir.join("skill.toml")) {
+        match toml::from_str::<WorkflowDefinition>(&toml_str) {
+            Ok(mut def) => {
+                def.definition.system_prompt = PromptSource::Inline(md);
+                return Some(def);
+            }
+            Err(e) => {
+                log::warn!(
+                    "[workflows] {}: bad skill.toml ({e}); falling back to SKILL.md-only",
+                    dir.display()
+                );
+            }
+        }
+    }
+
+    // SKILL.md-only: synthesize a minimal runnable definition. Build the
+    // AgentDefinition through serde (only `id` + `when_to_use` lack defaults)
+    // so the rest of its fields take their normal defaults.
+    let mut table = toml::map::Map::new();
+    table.insert("id".to_string(), toml::Value::String(slug.to_string()));
+    table.insert(
+        "when_to_use".to_string(),
+        toml::Value::String(description.to_string()),
+    );
+    let mut def: WorkflowDefinition = toml::Value::Table(table).try_into().ok()?;
+    def.definition.system_prompt = PromptSource::Inline(md);
+    Some(def)
 }
 
 /// Look up one skill by id across the registry.
