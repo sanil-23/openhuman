@@ -221,10 +221,10 @@ export const SkillsRunnerBody = ({ headerText, className }: SkillsRunnerBodyProp
   const [skillsError, setSkillsError] = useState<string | null>(null);
 
   // Active skill + its full description (inputs declared).
-  // Pre-seeded from the URL `?skill=<id>` query so the SkillsDashboard
-  // (and any other surface that deep-links to a specific skill — e.g.
-  // future "schedule again" CTAs from the run-history view) can land
-  // the user with the picker already pointed at the right skill.
+  // Pre-seeded from the URL `?skill=<id>` query so any surface that
+  // deep-links to a specific workflow (e.g. the workflow detail drawer's
+  // "Run workflow" CTA) can land the user with the picker already pointed
+  // at the right workflow.
   const [searchParams, setSearchParams] = useSearchParams();
   const initialSkillId = searchParams.get('skill') ?? '';
   const [selectedSkillId, setSelectedSkillId] = useState(initialSkillId);
@@ -498,8 +498,7 @@ export const SkillsRunnerBody = ({ headerText, className }: SkillsRunnerBodyProp
       const wanted = `${CRON_NAME_PREFIX}${selectedSkillId}`;
       // For the special dev-workflow skill, also surface legacy crons
       // saved by DevWorkflowPanel (named `dev-workflow-<repo>`) so the
-      // user can toggle / edit them from the unified runner. Matches the
-      // recogniser in SkillsDashboard.tsx.
+      // user can toggle / edit them from the unified runner.
       const isDevWorkflow = selectedSkillId === 'dev-workflow';
       setScheduledJobs(
         allJobs.filter((j) => {
