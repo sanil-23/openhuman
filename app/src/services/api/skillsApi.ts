@@ -98,6 +98,13 @@ export interface CreateSkillInputDef {
 export interface CreateSkillInput {
   name: string;
   description: string;
+  /**
+   * Optional trigger/goal — *when* an agent should reach for this workflow.
+   * This is the workflow half of the unified form (a bare procedure md only
+   * says what it does, not when to run it). Persisted to the workflow's
+   * `skill.toml` `when_to_use`; falls back to `description` when omitted.
+   */
+  whenToUse?: string;
   scope?: SkillScope;
   license?: string;
   author?: string;
@@ -240,6 +247,9 @@ export const skillsApi = {
       params: {
         name: input.name,
         description: input.description,
+        ...(input.whenToUse !== undefined && input.whenToUse.trim().length > 0
+          ? { when_to_use: input.whenToUse }
+          : {}),
         ...(input.scope !== undefined ? { scope: input.scope } : {}),
         ...(input.license !== undefined ? { license: input.license } : {}),
         ...(input.author !== undefined ? { author: input.author } : {}),

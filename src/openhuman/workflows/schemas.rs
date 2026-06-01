@@ -57,6 +57,11 @@ struct WorkflowsReadResourceParams {
 struct WorkflowsCreateParams {
     name: String,
     description: String,
+    /// Optional trigger/goal — *when* an agent should reach for this workflow.
+    /// Merges the old agent-workflow's `when_to_use` into the unified create
+    /// form; written to `skill.toml`. Falls back to `description` when omitted.
+    #[serde(default)]
+    when_to_use: Option<String>,
     #[serde(default)]
     scope: WorkflowScope,
     #[serde(default)]
@@ -82,6 +87,7 @@ impl From<WorkflowsCreateParams> for CreateSkillParams {
         CreateSkillParams {
             name: p.name,
             description: p.description,
+            when_to_use: p.when_to_use,
             scope: p.scope,
             license: p.license,
             author: p.author,

@@ -134,6 +134,9 @@ const CreateSkillForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProps>(
     const { t } = useT();
     const [name, setName] = useState('');
     const [description, setDescription] = useState('');
+    // The workflow half of the unified form: *when* an agent should reach for
+    // this workflow. Optional — falls back to the description on the backend.
+    const [whenToUse, setWhenToUse] = useState('');
     // Scope is fixed to 'user' — the form previously exposed a radio
     // toggle for user/project plus license/author/tags/allowed-tools
     // fields. None of those were useful in practice and they cluttered
@@ -194,6 +197,9 @@ const CreateSkillForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProps>(
         description: description.trim(),
         scope,
       };
+      if (whenToUse.trim()) {
+        payload.whenToUse = whenToUse.trim();
+      }
       if (inputs.length > 0) {
         payload.inputs = inputs.map<CreateSkillInputDef>((r) => {
           const def: CreateSkillInputDef = {
@@ -222,7 +228,7 @@ const CreateSkillForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProps>(
       } finally {
         setSubmitting(false);
       }
-    }, [description, formValid, inputs, name, onCreated]);
+    }, [description, formValid, inputs, name, whenToUse, onCreated]);
 
     useImperativeHandle(
       ref,
@@ -288,6 +294,33 @@ const CreateSkillForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProps>(
             className="mt-1 w-full rounded-lg border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-stone-900 dark:text-neutral-100 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
             placeholder={t('skills.create.descriptionPlaceholder')}
           />
+        </div>
+
+        {/* When to use — the workflow's trigger/goal. Optional; the backend
+            falls back to the description. This is what makes a workflow more
+            than a bare procedure: it tells the agent WHEN to run it. */}
+        <div>
+          <label
+            htmlFor="create-skill-when-to-use"
+            className="block text-xs font-medium text-stone-600 dark:text-neutral-300"
+          >
+            {t('skills.create.whenToUse')}
+            <span className="ml-1 font-normal text-stone-400 dark:text-neutral-500">
+              {t('skills.create.optional')}
+            </span>
+          </label>
+          <textarea
+            id="create-skill-when-to-use"
+            value={whenToUse}
+            onChange={(e) => setWhenToUse(e.target.value)}
+            rows={2}
+            maxLength={500}
+            className="mt-1 w-full rounded-lg border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-stone-900 dark:text-neutral-100 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+            placeholder={t('skills.create.whenToUsePlaceholder')}
+          />
+          <p className="mt-1 text-[11px] text-stone-500 dark:text-neutral-400">
+            {t('skills.create.whenToUseHelp')}
+          </p>
         </div>
 
         {/* Inputs (optional) — declare [[inputs]] for the generated

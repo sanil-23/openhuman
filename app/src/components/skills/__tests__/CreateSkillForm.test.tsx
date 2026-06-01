@@ -119,6 +119,31 @@ describe('CreateSkillForm', () => {
     expect(onCreated).toHaveBeenCalledWith(created);
   });
 
+  it('includes whenToUse in the payload when the trigger field is filled', async () => {
+    hoisted.createSkill.mockResolvedValue({ id: 'wf', name: 'wf', scope: 'user', legacy: false });
+    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText(/skills.create.name/i), {
+      target: { value: 'Triage' },
+    });
+    fireEvent.change(screen.getByLabelText(/skills.create.description/i), {
+      target: { value: 'Summarise the inbox.' },
+    });
+    fireEvent.change(screen.getByLabelText(/skills.create.whenToUse/i), {
+      target: { value: '  when the user asks to triage email  ' },
+    });
+    fireEvent.submit(document.getElementById(FORM_ID)!);
+
+    await waitFor(() => {
+      expect(hoisted.createSkill).toHaveBeenCalledWith({
+        name: 'Triage',
+        description: 'Summarise the inbox.',
+        scope: 'user',
+        whenToUse: 'when the user asks to triage email',
+      });
+    });
+  });
+
   it('surfaces the Rust error message in an alert when createSkill rejects', async () => {
     hoisted.createSkill.mockRejectedValue(new Error('slug already exists'));
     render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);

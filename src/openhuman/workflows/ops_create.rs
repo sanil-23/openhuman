@@ -48,8 +48,16 @@ fn default_required() -> bool {
 pub struct CreateSkillParams {
     /// Human-readable name — slugified into the on-disk folder.
     pub name: String,
-    /// One-line description written into the frontmatter.
+    /// One-line description of the procedure — what the workflow does
+    /// (written into the SKILL.md frontmatter).
     pub description: String,
+    /// Optional trigger/goal: *when* an agent should reach for this workflow.
+    /// This is the "reason to run" a bare procedure md lacks — it merges the
+    /// old agent-workflow's `when_to_use` into the unified create form. Written
+    /// to the `skill.toml` `when_to_use` field; falls back to `description`
+    /// when omitted.
+    #[serde(default)]
+    pub when_to_use: Option<String>,
     /// Where to install: `user`, `project`, or `legacy`. Defaults to `user`.
     #[serde(default)]
     pub scope: WorkflowScope,
@@ -204,14 +212,22 @@ pub(crate) fn create_skill_inner(
     std::fs::write(&skill_md_path, skill_md)
         .map_err(|e| format!("failed to write {}: {e}", skill_md_path.display()))?;
 
-    // Emit a sibling skill.toml when the user declared `[[inputs]]` at
-    // create time. The Skills Runner reads this to render dynamic form
-    // controls (text / number / checkbox) per declared input. Skills
-    // without inputs don't need a skill.toml — the registry happily
-    // parses SKILL.md-only skills.
-    if !params.inputs.is_empty() {
+    // Emit a sibling skill.toml when the user declared `[[inputs]]` OR gave a
+    // distinct `when_to_use` trigger at create time. The registry reads this
+    // for the workflow's `when_to_use` (the "when to run me" signal) and to
+    // render dynamic input controls. A bare workflow with neither needs no
+    // skill.toml — the registry parses SKILL.md-only workflows and derives
+    // `when_to_use` from the description.
+    let when_to_use = params
+        .when_to_use
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if !params.inputs.is_empty() || when_to_use.is_some() {
         let skill_toml_path = skill_dir.join("skill.toml");
-        let skill_toml = render_skill_toml(&slug, description, &params.inputs);
+        // Distinct trigger when provided, else reuse the description so the
+        // field is never empty (matches the prior behaviour).
+        let skill_toml = render_skill_toml(&slug, when_to_use.unwrap_or(description), &params.inputs);
         std::fs::write(&skill_toml_path, skill_toml)
             .map_err(|e| format!("failed to write {}: {e}", skill_toml_path.display()))?;
     }
@@ -391,14 +407,14 @@ pub(crate) fn yaml_scalar(s: &str) -> String {
 /// so `discover_skills_inner` parses the new file identically.
 pub(crate) fn render_skill_toml(
     slug: &str,
-    description: &str,
+    when_to_use: &str,
     inputs: &[WorkflowCreateInputDef],
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!("id = {}\n", toml_string_literal(slug)));
     out.push_str(&format!(
         "when_to_use = {}\n",
-        toml_string_literal(description)
+        toml_string_literal(when_to_use)
     ));
     for input in inputs {
         out.push_str("\n[[inputs]]\n");

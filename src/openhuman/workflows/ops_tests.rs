@@ -545,6 +545,7 @@ fn create_skill_user_scope_scaffolds_skill_md_and_resource_dirs() {
     let params = CreateSkillParams {
         name: "My Demo Workflow".to_string(),
         description: "Send a friendly greeting to the user.".to_string(),
+        when_to_use: None,
         scope: WorkflowScope::User,
         license: Some("MIT".to_string()),
         author: Some("Jane Dev".to_string()),
@@ -591,6 +592,7 @@ fn create_skill_rejects_slug_collision() {
     let params = CreateSkillParams {
         name: "collider".to_string(),
         description: "first".to_string(),
+        when_to_use: None,
         scope: WorkflowScope::User,
         ..Default::default()
     };
@@ -605,6 +607,45 @@ fn create_skill_rejects_slug_collision() {
 }
 
 #[test]
+fn create_skill_writes_distinct_when_to_use_to_skill_toml_without_inputs() {
+    // The unified create form merges the old workflow's `when_to_use` trigger
+    // into the skill form. A workflow with a distinct trigger but NO inputs
+    // must still get a skill.toml so the trigger persists (and is not just
+    // copied from the description).
+    let home = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+
+    let params = CreateSkillParams {
+        name: "Triggered Workflow".to_string(),
+        description: "Summarise the inbox.".to_string(),
+        when_to_use: Some("when the user asks to triage email".to_string()),
+        scope: WorkflowScope::User,
+        ..Default::default()
+    };
+    let created = create_skill_inner(Some(home.path()), ws.path(), params)
+        .expect("create_skill should succeed");
+
+    let skill_md = created.location.expect("created workflow has a location");
+    let skill_toml = skill_md
+        .parent()
+        .expect("SKILL.md has a parent dir")
+        .join("skill.toml");
+    assert!(
+        skill_toml.exists(),
+        "skill.toml must be written when when_to_use is provided, even with no inputs"
+    );
+    let toml = std::fs::read_to_string(&skill_toml).unwrap();
+    assert!(
+        toml.contains("when_to_use = \"when the user asks to triage email\""),
+        "skill.toml must carry the distinct trigger, not the description; got:\n{toml}"
+    );
+    assert!(
+        !toml.contains("Summarise the inbox."),
+        "when_to_use must NOT fall back to the description when a trigger is given"
+    );
+}
+
+#[test]
 fn create_skill_rejects_non_alphanumeric_name() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
@@ -612,6 +653,7 @@ fn create_skill_rejects_non_alphanumeric_name() {
     let params = CreateSkillParams {
         name: "   ///   ".to_string(),
         description: "nothing useful".to_string(),
+        when_to_use: None,
         scope: WorkflowScope::User,
         ..Default::default()
     };
@@ -633,6 +675,7 @@ fn create_skill_rejects_project_scope_without_trust_marker() {
     let params = CreateSkillParams {
         name: "project-skill".to_string(),
         description: "scoped to ws".to_string(),
+        when_to_use: None,
         scope: WorkflowScope::Project,
         ..Default::default()
     };
@@ -661,6 +704,7 @@ fn create_skill_project_scope_writes_under_workspace_when_trusted() {
     let params = CreateSkillParams {
         name: "ws-skill".to_string(),
         description: "project-scoped".to_string(),
+        when_to_use: None,
         scope: WorkflowScope::Project,
         ..Default::default()
     };
@@ -686,6 +730,7 @@ fn create_skill_rejects_legacy_scope() {
     let params = CreateSkillParams {
         name: "legacy-skill".to_string(),
         description: "no".to_string(),
+        when_to_use: None,
         scope: WorkflowScope::Legacy,
         ..Default::default()
     };
@@ -705,6 +750,7 @@ fn create_skill_rejects_empty_description() {
     let params = CreateSkillParams {
         name: "ok-name".to_string(),
         description: "   ".to_string(),
+        when_to_use: None,
         scope: WorkflowScope::User,
         ..Default::default()
     };

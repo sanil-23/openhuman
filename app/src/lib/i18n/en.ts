@@ -4325,8 +4325,12 @@ const en: TranslationMap = {
   'skills.create.createError': 'Could not create skill',
   'skills.create.creating': 'Creating…',
   'skills.create.description': 'Description',
-  'skills.create.descriptionPlaceholder': 'What does this skill do?',
+  'skills.create.descriptionPlaceholder': 'What does this workflow do?',
   'skills.create.optional': '(optional)',
+  'skills.create.whenToUse': 'When to use',
+  'skills.create.whenToUsePlaceholder': 'e.g. when the user asks to triage their inbox',
+  'skills.create.whenToUseHelp':
+    'The trigger an agent matches on to decide to run this workflow. Leave blank to reuse the description.',
   'skills.create.inputs.heading': 'Inputs',
   'skills.create.inputs.help':
     'Declare parameters the workflow needs. Adding inputs is optional, but every input you add needs a description — it is shown to the agent and in the run form. Inputs are optional to fill unless you mark them Required.',
