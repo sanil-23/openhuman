@@ -300,7 +300,7 @@ const en: TranslationMap = {
   'memory.tab.subconscious': 'Subconscious',
   'memory.tab.workflows': 'Workflows',
   'memory.tab.workflowsDescription':
-    'Lifecycle-bound rule sets that guide how the agent behaves during tasks.',
+    'Reusable, runnable procedures — a goal plus the steps to reach it. Create one, install from a URL, or open a workflow to run it.',
   'memory.tab.dreams': 'Dreams',
   'memory.tab.calls': 'Calls',
   'memory.tab.diagram': 'Diagram',
