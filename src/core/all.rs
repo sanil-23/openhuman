@@ -458,7 +458,7 @@ pub fn namespace_description(namespace: &str) -> Option<&'static str> {
         "screen_intelligence" => Some("Screen capture, permissions, and accessibility automation."),
         "security" => Some("Security policy and autonomy guardrail metadata."),
         "service" => Some("Desktop service lifecycle management."),
-        "skills" => Some("Discovered SKILL.md skills and their bundled resources."),
+        "workflows" => Some("Discovered workflows (WORKFLOW.md/SKILL.md bundles) and their resources."),
         "socket" => Some("Backend Socket.IO bridge controls."),
         "memory" => Some("Document storage, vector search, key-value store, and knowledge graph."),
         "memory_tree" => Some(

@@ -226,7 +226,7 @@ pub fn detect_repeated_line(
 }
 
 /// One run extracted from a `.runs/<skill>_<utc>_<run>.log` file. Built by
-/// [`scan_runs`] for the `openhuman.skills_recent_runs` RPC + the Skills
+/// [`scan_runs`] for the `openhuman.workflows_recent_runs` RPC + the Skills
 /// Runner panel's "Recent runs" section. Status is `RUNNING` until the
 /// footer block (`--- result ---` + `status: …` + `duration: … ms`) lands.
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -348,7 +348,7 @@ pub fn scan_runs(workspace: &Path, workflow_id: Option<&str>, limit: usize) -> V
 
 /// Look up the on-disk log path for a given `run_id` by scanning the
 /// `<workspace>/skills/.runs/` directory. Used by
-/// `openhuman.skills_read_run_log` to resolve a stable id back to a path
+/// `openhuman.workflows_read_run_log` to resolve a stable id back to a path
 /// without trusting the caller to send one (no path-traversal surface).
 pub fn find_run_log_path(workspace: &Path, run_id: &str) -> Option<PathBuf> {
     if run_id.is_empty() {
@@ -436,7 +436,7 @@ pub fn read_terminal_outcome(path: &Path) -> Option<RunOutcome> {
 /// forward, capped at `max_bytes`, plus `eof` (true if we hit end-of-
 /// file) and a flag indicating whether the `--- result ---` footer is
 /// present in the file as a whole (so the FE can stop polling). Used by
-/// `openhuman.skills_read_run_log` for the chat-style log viewer's
+/// `openhuman.workflows_read_run_log` for the chat-style log viewer's
 /// scroll + tail behaviour.
 pub fn read_run_log_slice(
     path: &Path,

@@ -3,11 +3,11 @@ use super::*;
 #[test]
 fn schema_names_are_stable() {
     let list = workflows_schemas("workflows_list");
-    assert_eq!(list.namespace, "skills");
+    assert_eq!(list.namespace, "workflows");
     assert_eq!(list.function, "list");
 
     let read = workflows_schemas("workflows_read_resource");
-    assert_eq!(read.namespace, "skills");
+    assert_eq!(read.namespace, "workflows");
     assert_eq!(read.function, "read_resource");
 }
 

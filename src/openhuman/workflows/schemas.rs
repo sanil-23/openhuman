@@ -259,7 +259,7 @@ pub fn all_workflows_registered_controllers() -> Vec<RegisteredController> {
 pub fn workflows_schemas(function: &str) -> ControllerSchema {
     match function {
         "workflows_list" => ControllerSchema {
-            namespace: "skills",
+            namespace: "workflows",
             function: "list",
             description: "List SKILL.md and legacy skills discovered in the user home and workspace.",
             inputs: vec![],
@@ -271,7 +271,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             }],
         },
         "workflows_run" => ControllerSchema {
-            namespace: "skills",
+            namespace: "workflows",
             function: "run",
             description: "Start a skill in the background: run the orchestrator agent focused by the skill's SKILL.md + the given inputs, streaming every step to a per-run log file. Validates required inputs and returns immediately with a run id and the log path.",
             inputs: vec![
@@ -316,7 +316,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             ],
         },
         "workflows_read_resource" => ControllerSchema {
-            namespace: "skills",
+            namespace: "workflows",
             function: "read_resource",
             description: "Read a single bundled SKILL resource file, hardened against traversal, symlink escape, and oversized payloads.",
             inputs: vec![
@@ -361,7 +361,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             ],
         },
         "workflows_create" => ControllerSchema {
-            namespace: "skills",
+            namespace: "workflows",
             function: "create",
             description: "Scaffold a new SKILL.md skill under the user or workspace scope.",
             inputs: vec![
@@ -376,6 +376,12 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
                     ty: TypeSchema::String,
                     comment: "One-line description written into SKILL.md frontmatter.",
                     required: true,
+                },
+                FieldSchema {
+                    name: "when_to_use",
+                    ty: TypeSchema::String,
+                    comment: "Optional 'when to run me' trigger. Written to the sibling skill.toml; the registry surfaces it as the workflow's when_to_use (falls back to description).",
+                    required: false,
                 },
                 FieldSchema {
                     name: "scope",
@@ -422,7 +428,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             }],
         },
         "workflows_install_from_url" => ControllerSchema {
-            namespace: "skills",
+            namespace: "workflows",
             function: "install_from_url",
             description: "Install a remote skill by fetching its SKILL.md over HTTPS and writing it into the user-scope skills directory. URL must be https, resolve to a public host, and point at a single `.md` file (`github.com/.../blob/...` auto-rewrites to raw). Default 60s timeout, max 600s.",
             inputs: vec![
@@ -467,7 +473,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             ],
         },
         "workflows_read_run_log" => ControllerSchema {
-            namespace: "skills",
+            namespace: "workflows",
             function: "read_run_log",
             description: "Read a slice of a skill run's streaming log file by run_id. The FE Skills Runner panel opens this on click of a Recent Runs row and re-calls it every 2s while the run's `status` is RUNNING to tail new bytes (use the returned `offset` as the next call's `offset`). The run id resolves to a path internally — callers don't supply a path, so no traversal surface. `max_bytes` is clamped to 262144 (256 KiB) per call; pages by re-issuing with the returned `offset`.",
             inputs: vec![
@@ -524,7 +530,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             ],
         },
         "workflows_recent_runs" => ControllerSchema {
-            namespace: "skills",
+            namespace: "workflows",
             function: "recent_runs",
             description: "List recent autonomous skill runs by scanning `<workspace>/skills/.runs/`. Returns one entry per log file (header: workflow_id, run_id, started; footer: status, duration_ms, finished) sorted by `started` descending. `status` is `RUNNING` while the footer hasn't landed yet, then `DONE` / `DEGENERATE` / `FAILED`. Optionally filter by `workflow_id` to scope to one skill; `limit` (default 20, max 100) caps the result. Cheap: reads the files top-to-bottom and short-circuits — no schema parsing of the streaming body.",
             inputs: vec![
@@ -549,7 +555,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             }],
         },
         "workflows_describe" => ControllerSchema {
-            namespace: "skills",
+            namespace: "workflows",
             function: "describe",
             description: "Describe a single skill by id — returns its display name, summary, and the declared `[[inputs]]` block. Used by the Settings → Skills Runner panel to render dynamic input controls and let the user fill in the right fields before clicking Run Now or scheduling a cron. `skills_list` does NOT carry `inputs` (it stays the lightweight enumeration); call this once per skill the user picks.",
             inputs: vec![FieldSchema {
@@ -591,7 +597,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             ],
         },
         "workflows_uninstall" => ControllerSchema {
-            namespace: "skills",
+            namespace: "workflows",
             function: "uninstall",
             description: "Remove an installed user-scope SKILL.md skill from `~/.openhuman/skills/<name>/`. Only user-scope installs are supported; project-scope and legacy skills are read-only. Rejects path separators and traversal; canonicalises before delete.",
             inputs: vec![FieldSchema {
@@ -622,7 +628,7 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             ],
         },
         _ => ControllerSchema {
-            namespace: "skills",
+            namespace: "workflows",
             function: "unknown",
             description: "Unknown skills controller.",
             inputs: vec![],
@@ -684,7 +690,7 @@ struct WorkflowsDescribeResult {
     inputs: Vec<WorkflowInputDescription>,
 }
 
-/// `openhuman.skills_describe` — return a single skill's display metadata
+/// `openhuman.workflows_describe` — return a single skill's display metadata
 /// and its declared `[[inputs]]` so the Skills Runner panel can render
 /// the right form controls. `skills_list` deliberately stays the cheap
 /// enumeration without input declarations (its `Workflow` source struct
@@ -733,7 +739,7 @@ struct WorkflowsReadRunLogParams {
     max_bytes: Option<u64>,
 }
 
-/// `openhuman.skills_read_run_log` — return a slice of a skill run's
+/// `openhuman.workflows_read_run_log` — return a slice of a skill run's
 /// log file, identified by `run_id` (NOT a path — no traversal surface).
 /// FE Skills Runner panel uses this to render the streaming log inline
 /// when the user clicks a Recent Runs row, and tails it every 2s while
@@ -773,7 +779,7 @@ struct WorkflowsRecentRunsResult {
     runs: Vec<run_log::ScannedRun>,
 }
 
-/// `openhuman.skills_recent_runs` — list runs from `<workspace>/skills/.runs/`
+/// `openhuman.workflows_recent_runs` — list runs from `<workspace>/skills/.runs/`
 /// (most-recent first), optionally filtered to one skill, capped by `limit`.
 /// Powers the Skills Runner panel's "Recent runs" section + future live-log
 /// tail. Delegates the actual scan + parse to `run_log::scan_runs`.
@@ -813,7 +819,7 @@ pub(crate) struct WorkflowRunStarted {
 }
 
 /// Spawn a single autonomous workflow_run as a detached `tokio::spawn`. Used by
-/// both the `openhuman.skills_run` JSON-RPC controller and the `run_skill`
+/// both the `openhuman.workflows_run` JSON-RPC controller and the `run_skill`
 /// agent tool (which lets the orchestrator chain one skill into another —
 /// e.g. `github-issue-crusher` → `pr-review-shepherd` once the draft PR is
 /// open).
