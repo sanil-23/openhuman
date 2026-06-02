@@ -483,4 +483,66 @@ mod tests {
         // Same id + same inputs → same key (so a tight loop is caught).
         assert_eq!(a, reentrancy_key("wf", &Some(json!({"pr": 1}))));
     }
+
+    // ── Spawn-guard tests ────────────────────────────────────────────────
+    //
+    // The guards are process-global statics, so the await-slot tests share a
+    // lock to avoid clobbering each other's `ACTIVE_AWAITS`/`ACTIVE_KEYS` count
+    // under cargo's parallel runner. The RAII `AwaitGuard` frees its slot + key
+    // on drop, so these leave no residue (unlike the spawn backstop, which is
+    // monotonic by design — see its test).
+    fn guard_serial() -> &'static std::sync::Mutex<()> {
+        static L: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        L.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    #[test]
+    fn acquire_await_rejects_the_same_key_reentrantly() {
+        let _s = guard_serial().lock().unwrap();
+        let key = "reentry-test\u{1}null".to_string();
+        let held = super::guard::acquire_await(key.clone()).expect("first acquire");
+        let again = super::guard::acquire_await(key.clone());
+        assert!(again.is_err(), "the same key while held must be rejected");
+        assert!(again.err().unwrap().contains("re-entrant"));
+        drop(held); // frees the key
+        super::guard::acquire_await(key).expect("after drop the key is free again");
+    }
+
+    #[test]
+    fn acquire_await_caps_concurrent_awaits() {
+        let _s = guard_serial().lock().unwrap();
+        // MAX_ACTIVE_AWAITS is 8; hold 8 distinct keys, then the 9th must reject.
+        let mut held = Vec::new();
+        for i in 0..8 {
+            held.push(
+                super::guard::acquire_await(format!("cap-test-{i}")).expect("under the cap"),
+            );
+        }
+        let ninth = super::guard::acquire_await("cap-test-9".to_string());
+        assert!(ninth.is_err(), "the 9th concurrent await must reject");
+        assert!(ninth.err().unwrap().contains("already being awaited"));
+        // Free one slot → the next acquire succeeds.
+        held.pop();
+        super::guard::acquire_await("cap-test-9".to_string()).expect("a freed slot is reusable");
+    }
+
+    #[test]
+    fn account_spawn_trips_the_process_backstop() {
+        let _s = guard_serial().lock().unwrap();
+        // TOTAL_SPAWN_BACKSTOP is 500 and the counter is process-global +
+        // monotonic (no reset by design — it's a runaway-loop backstop). Drive
+        // well past it and assert it trips. NOTE: this permanently trips the
+        // backstop for the rest of the process, which is fine because no other
+        // non-ignored test calls `account_spawn` (only the #[ignore] e2e run
+        // path does, and that runs in a separate process).
+        let mut last = Ok(());
+        for _ in 0..600 {
+            last = super::guard::account_spawn();
+            if last.is_err() {
+                break;
+            }
+        }
+        let err = last.expect_err("the spawn backstop must trip within 600 accounted spawns");
+        assert!(err.contains("backstop"), "got: {err}");
+    }
 }
