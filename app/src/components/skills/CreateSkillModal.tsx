@@ -8,7 +8,7 @@
  * Escape/click-out to close, focus capture) — see
  * `.claude/rules/15-settings-modal-system.md`.
  *
- * The form fields + submit pipeline live in `CreateSkillForm` so the
+ * The form fields + submit pipeline live in `CreateWorkflowForm` so the
  * `/skills/new` page can share the exact same body. This file is the
  * modal chrome: header, close-button, backdrop, Escape handler,
  * focus-return, submit/cancel footer. The footer's submit button is
@@ -21,7 +21,7 @@ import { createPortal } from 'react-dom';
 
 import { useT } from '../../lib/i18n/I18nContext';
 import { type SkillSummary } from '../../services/api/skillsApi';
-import CreateSkillForm from './CreateSkillForm';
+import CreateWorkflowForm from './CreateWorkflowForm';
 
 const log = debug('skills:create-modal');
 
@@ -131,7 +131,7 @@ export default function CreateSkillModal({ onClose, onCreated }: Props) {
 
         {/* Body — shared form component */}
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
-          <CreateSkillForm
+          <CreateWorkflowForm
             formId={CREATE_FORM_ID}
             onCreated={onCreated}
             onStateChange={handleStateChange}

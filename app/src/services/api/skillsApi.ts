@@ -83,7 +83,7 @@ interface RawSkillsReadResourceResult {
  */
 /**
  * One declared `[[inputs]]` row supplied at create time by
- * `CreateSkillForm.tsx`. Mirrors the Rust `SkillCreateInputDef` wire
+ * `CreateWorkflowForm.tsx`. Mirrors the Rust `SkillCreateInputDef` wire
  * shape — `description` and `type` are optional; `required` defaults
  * to `true` on the Rust side when omitted (we send it explicitly to
  * stay loud).

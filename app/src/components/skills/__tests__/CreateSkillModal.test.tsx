@@ -85,9 +85,9 @@ describe('CreateSkillModal', () => {
   it('submits name + description, calls onCreated with the new skill', async () => {
     // The previous incarnation of this test also drove Tags + Allowed-tools
     // inputs and asserted the `allowedTools` → `allowed-tools` rekey at the
-    // call site. CreateSkillForm dropped those inputs in the refactor (the
+    // call site. CreateWorkflowForm dropped those inputs in the refactor (the
     // form is now Name + Description + the `[[inputs]]` editor only — see
-    // ScheduledCronCard / CreateSkillForm.tsx), so the inputs are no longer
+    // ScheduledCronCard / CreateWorkflowForm.tsx), so the inputs are no longer
     // collectable from the modal UI. The rekey itself still happens in
     // `skillsApi.createSkill` (services/api/skillsApi.ts → params build) and
     // is covered by the skillsApi unit tests; this test now just guards the

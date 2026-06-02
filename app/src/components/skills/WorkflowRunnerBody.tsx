@@ -88,7 +88,7 @@ function resolveLinkedRepo(formValues: Record<string, InputValue>): string {
   return '';
 }
 
-const log = createDebug('app:skills:SkillsRunnerBody');
+const log = createDebug('app:skills:WorkflowRunnerBody');
 
 type InputValue = string | number | boolean;
 
@@ -212,7 +212,7 @@ export interface SkillsRunnerBodyProps {
   className?: string;
 }
 
-export const SkillsRunnerBody = ({ headerText, className }: SkillsRunnerBodyProps) => {
+export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyProps) => {
   const { t } = useT();
 
   // Skill catalog (loaded once on mount)
@@ -1368,4 +1368,4 @@ export const SkillsRunnerBody = ({ headerText, className }: SkillsRunnerBodyProp
   );
 };
 
-export default SkillsRunnerBody;
+export default WorkflowRunnerBody;

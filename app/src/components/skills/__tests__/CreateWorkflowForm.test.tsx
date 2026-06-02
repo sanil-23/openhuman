@@ -1,5 +1,5 @@
 /**
- * CreateSkillForm — standalone form coverage.
+ * CreateWorkflowForm — standalone form coverage.
  *
  * Phase 5 of the /skills IA restructure: validates the form behaves
  * the same way as it did inside CreateSkillModal, so both the modal
@@ -27,7 +27,7 @@ vi.mock('../../../services/api/skillsApi', () => ({
   skillsApi: { createSkill: hoisted.createSkill },
 }));
 
-import CreateSkillForm, { previewSlug } from '../CreateSkillForm';
+import CreateWorkflowForm, { previewSlug } from '../CreateWorkflowForm';
 
 const FORM_ID = 'create-skill-test-form';
 
@@ -49,14 +49,14 @@ describe('previewSlug', () => {
   });
 });
 
-describe('CreateSkillForm', () => {
+describe('CreateWorkflowForm', () => {
   beforeEach(() => {
     hoisted.createSkill.mockReset();
   });
 
   it('renders required fields and the slug preview updates as the name changes', () => {
     render(
-      <CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />
+      <CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} />
     );
 
     const nameInput = screen.getByLabelText(/skills.create.name/i) as HTMLInputElement;
@@ -67,7 +67,7 @@ describe('CreateSkillForm', () => {
   it('reports validity to the wrapper via onStateChange when name and description are filled', () => {
     const onStateChange = vi.fn();
     render(
-      <CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} onStateChange={onStateChange} />
+      <CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} onStateChange={onStateChange} />
     );
 
     // Initially invalid (empty form).
@@ -95,7 +95,7 @@ describe('CreateSkillForm', () => {
     hoisted.createSkill.mockResolvedValue(created);
     const onCreated = vi.fn();
 
-    render(<CreateSkillForm formId={FORM_ID} onCreated={onCreated} />);
+    render(<CreateWorkflowForm formId={FORM_ID} onCreated={onCreated} />);
 
     fireEvent.change(screen.getByLabelText(/skills.create.name/i), {
       target: { value: '  My Skill  ' },
@@ -121,7 +121,7 @@ describe('CreateSkillForm', () => {
 
   it('includes whenToUse in the payload when the trigger field is filled', async () => {
     hoisted.createSkill.mockResolvedValue({ id: 'wf', name: 'wf', scope: 'user', legacy: false });
-    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    render(<CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} />);
 
     fireEvent.change(screen.getByLabelText(/skills.create.name/i), {
       target: { value: 'Triage' },
@@ -146,7 +146,7 @@ describe('CreateSkillForm', () => {
 
   it('surfaces the Rust error message in an alert when createSkill rejects', async () => {
     hoisted.createSkill.mockRejectedValue(new Error('slug already exists'));
-    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    render(<CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} />);
 
     fireEvent.change(screen.getByLabelText(/skills.create.name/i), {
       target: { value: 'Dupe' },
@@ -161,7 +161,7 @@ describe('CreateSkillForm', () => {
   });
 
   it('does not call createSkill if the form is invalid (no name)', async () => {
-    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    render(<CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} />);
     fireEvent.submit(document.getElementById(FORM_ID)!);
     // Give the microtask queue a tick — should still be 0.
     await Promise.resolve();
@@ -194,7 +194,7 @@ describe('CreateSkillForm', () => {
 
   it('zero inputs submits a payload without an `inputs` field', async () => {
     hoisted.createSkill.mockResolvedValue({ id: 'x', name: 'x', scope: 'user', legacy: false });
-    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    render(<CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} />);
     fillRequiredFields();
     fireEvent.submit(document.getElementById(FORM_ID)!);
     await waitFor(() => {
@@ -210,7 +210,7 @@ describe('CreateSkillForm', () => {
 
   it('one filled input row ships in the payload — additional inputs default to required: false', async () => {
     hoisted.createSkill.mockResolvedValue({ id: 'x', name: 'x', scope: 'user', legacy: false });
-    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    render(<CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} />);
     fillRequiredFields();
 
     fireEvent.click(screen.getByTestId('create-skill-add-input'));
@@ -233,7 +233,7 @@ describe('CreateSkillForm', () => {
 
   it('blocks submission when an added input row has no description', async () => {
     hoisted.createSkill.mockResolvedValue({ id: 'x', name: 'x', scope: 'user', legacy: false });
-    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    render(<CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} />);
     fillRequiredFields();
 
     fireEvent.click(screen.getByTestId('create-skill-add-input'));
@@ -257,7 +257,7 @@ describe('CreateSkillForm', () => {
 
   it('ticking Required flips the row to required: true', async () => {
     hoisted.createSkill.mockResolvedValue({ id: 'x', name: 'x', scope: 'user', legacy: false });
-    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    render(<CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} />);
     fillRequiredFields();
 
     fireEvent.click(screen.getByTestId('create-skill-add-input'));
@@ -281,7 +281,7 @@ describe('CreateSkillForm', () => {
 
   it('blocks submission while any row has an invalid name', async () => {
     hoisted.createSkill.mockResolvedValue({ id: 'x', name: 'x', scope: 'user', legacy: false });
-    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    render(<CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} />);
     fillRequiredFields();
 
     fireEvent.click(screen.getByTestId('create-skill-add-input'));
@@ -304,7 +304,7 @@ describe('CreateSkillForm', () => {
 
   it('remove row drops it from the payload — submission then succeeds', async () => {
     hoisted.createSkill.mockResolvedValue({ id: 'x', name: 'x', scope: 'user', legacy: false });
-    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    render(<CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} />);
     fillRequiredFields();
 
     fireEvent.click(screen.getByTestId('create-skill-add-input'));
@@ -326,7 +326,7 @@ describe('CreateSkillForm', () => {
 
   it('integer + required=false (the default) carry through the type + required flags', async () => {
     hoisted.createSkill.mockResolvedValue({ id: 'x', name: 'x', scope: 'user', legacy: false });
-    render(<CreateSkillForm formId={FORM_ID} onCreated={vi.fn()} />);
+    render(<CreateWorkflowForm formId={FORM_ID} onCreated={vi.fn()} />);
     fillRequiredFields();
 
     fireEvent.click(screen.getByTestId('create-skill-add-input'));

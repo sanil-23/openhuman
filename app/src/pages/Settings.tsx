@@ -43,7 +43,7 @@ import ScreenAwarenessDebugPanel from '../components/settings/panels/ScreenAware
 import ScreenIntelligencePanel from '../components/settings/panels/ScreenIntelligencePanel';
 import SearchPanel from '../components/settings/panels/SearchPanel';
 import SecurityPanel from '../components/settings/panels/SecurityPanel';
-import SkillsRunnerPanel from '../components/settings/panels/SkillsRunnerPanel';
+import WorkflowRunnerPanel from '../components/settings/panels/WorkflowRunnerPanel';
 import TaskSourcesPanel from '../components/settings/panels/TaskSourcesPanel';
 import TeamInvitesPanel from '../components/settings/panels/TeamInvitesPanel';
 import TeamManagementPanel from '../components/settings/panels/TeamManagementPanel';
@@ -645,7 +645,7 @@ const Settings = () => {
         <Route path="cron-jobs" element={wrapSettingsPage(<CronJobsPanel />)} />
         <Route path="task-sources" element={wrapSettingsPage(<TaskSourcesPanel />)} />
         <Route path="dev-workflow" element={wrapSettingsPage(<DevWorkflowPanel />)} />
-        <Route path="skills-runner" element={wrapSettingsPage(<SkillsRunnerPanel />)} />
+        <Route path="skills-runner" element={wrapSettingsPage(<WorkflowRunnerPanel />)} />
         <Route
           path="screen-awareness-debug"
           element={wrapSettingsPage(<ScreenAwarenessDebugPanel />)}

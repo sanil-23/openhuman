@@ -4753,7 +4753,7 @@ const en: TranslationMap = {
   'settings.taskSources.providers.clickup': 'ClickUp',
 
   // /skills IA restructure: landing-dashboard + /skills/new authoring page.
-  // The runner UX (existing Skills page → SkillsRunnerBody) moves to
+  // The runner UX (existing Skills page → WorkflowRunnerBody) moves to
   // /skills/run; this dashboard surfaces currently-scheduled skills as
   // DevWorkflowPanel-style cards.
   'skills.dashboard.title': 'Skills',

@@ -1,8 +1,8 @@
 /**
- * SkillNew — Phase 6 coverage.
+ * WorkflowNew — Phase 6 coverage.
  *
  * Covers:
- *  - renders the form (delegates to CreateSkillForm) and the header
+ *  - renders the form (delegates to CreateWorkflowForm) and the header
  *    Cancel/Submit buttons.
  *  - cancel button navigates back to /skills.
  *  - on a successful submit (createSkill resolves), the page
@@ -14,7 +14,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import SkillNew from './SkillNew';
+import WorkflowNew from './WorkflowNew';
 
 const stableT = (key: string) => key;
 vi.mock('../lib/i18n/I18nContext', () => ({ useT: () => ({ t: stableT }) }));
@@ -27,13 +27,13 @@ const renderPage = () =>
   render(
     <MemoryRouter initialEntries={['/skills/new']}>
       <Routes>
-        <Route path="/skills/new" element={<SkillNew />} />
+        <Route path="/skills/new" element={<WorkflowNew />} />
         <Route path="/skills" element={<div data-testid="dashboard-landed">dashboard</div>} />
       </Routes>
     </MemoryRouter>
   );
 
-describe('SkillNew', () => {
+describe('WorkflowNew', () => {
   beforeEach(() => {
     hoisted.createSkill.mockReset();
   });
@@ -42,7 +42,7 @@ describe('SkillNew', () => {
     renderPage();
     expect(screen.getByTestId('skill-new-cancel')).toBeInTheDocument();
     expect(screen.getByTestId('skill-new-submit')).toBeInTheDocument();
-    // CreateSkillForm renders the name + description inputs.
+    // CreateWorkflowForm renders the name + description inputs.
     expect(screen.getByLabelText(/skills.create.name/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/skills.create.description/i)).toBeInTheDocument();
   });

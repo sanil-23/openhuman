@@ -2,10 +2,10 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
-import SkillsRunnerPanel from './SkillsRunnerPanel';
+import WorkflowRunnerPanel from './WorkflowRunnerPanel';
 
 vi.mock('../../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (k: string) => k }) }));
-vi.mock('../../skills/SkillsRunnerBody', () => ({
+vi.mock('../../skills/WorkflowRunnerBody', () => ({
   default: () => <div data-testid="skills-runner-body" />,
 }));
 vi.mock('../components/SettingsHeader', () => ({
@@ -15,11 +15,11 @@ vi.mock('../hooks/useSettingsNavigation', () => ({
   useSettingsNavigation: () => ({ navigateBack: vi.fn(), breadcrumbs: [] }),
 }));
 
-describe('SkillsRunnerPanel', () => {
+describe('WorkflowRunnerPanel', () => {
   it('renders the settings header and runner body', () => {
     render(
       <MemoryRouter>
-        <SkillsRunnerPanel />
+        <WorkflowRunnerPanel />
       </MemoryRouter>
     );
     expect(screen.getByTestId('settings-header')).toBeInTheDocument();

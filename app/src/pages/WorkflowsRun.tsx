@@ -2,18 +2,18 @@
  * /skills/run — single-purpose workflow runner page.
  *
  * Reached from a workflow's detail drawer ("Run workflow" CTA) or any
- * `?skill=<id>` deep link. Hosts the SkillsRunnerBody picker + form +
+ * `?skill=<id>` deep link. Hosts the WorkflowRunnerBody picker + form +
  * run-now + save-schedule flow without the Connections-page tab chrome.
  *
  * Bookmark-friendly and shareable via `?skill=<id>` (the body reads the
- * query param and pre-selects the workflow — see SkillsRunnerBody.tsx).
+ * query param and pre-selects the workflow — see WorkflowRunnerBody.tsx).
  */
 import { useNavigate } from 'react-router-dom';
 
-import SkillsRunnerBody from '../components/skills/SkillsRunnerBody';
+import WorkflowRunnerBody from '../components/skills/WorkflowRunnerBody';
 import { useT } from '../lib/i18n/I18nContext';
 
-export default function SkillsRun() {
+export default function WorkflowsRun() {
   const { t } = useT();
   const navigate = useNavigate();
 
@@ -37,7 +37,7 @@ export default function SkillsRun() {
           </div>
 
           <div className="rounded-2xl border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-6 shadow-soft animate-fade-up">
-            <SkillsRunnerBody />
+            <WorkflowRunnerBody />
           </div>
         </div>
       </div>

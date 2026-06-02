@@ -1,5 +1,5 @@
 /**
- * CreateSkillForm
+ * CreateWorkflowForm
  * ----------------
  *
  * Body of the "create a new SKILL.md" flow, shared between
@@ -21,7 +21,7 @@
  *     backdrop click). Those stay in `CreateSkillModal`.
  *
  * The wrapper drives submission by either calling the imperative
- * handle exposed via a ref (`<CreateSkillForm ref={ref} ... />` →
+ * handle exposed via a ref (`<CreateWorkflowForm ref={ref} ... />` →
  * `ref.current.submit()`) OR by reading `formValid` + `submitting`
  * from the props the form raises and wiring its own submit button to
  * the underlying `<form>` via the standard `form="..."` attribute.
@@ -129,7 +129,7 @@ export function previewSlug(name: string): string {
   return out.replace(/^-+|-+$/g, '');
 }
 
-const CreateSkillForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProps>(
+const CreateWorkflowForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProps>(
   ({ formId, onCreated, onStateChange, autoFocus = false }, ref) => {
     const { t } = useT();
     const [name, setName] = useState('');
@@ -470,4 +470,4 @@ const CreateSkillForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProps>(
   }
 );
 
-export default CreateSkillForm;
+export default CreateWorkflowForm;

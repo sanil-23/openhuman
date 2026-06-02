@@ -1,7 +1,7 @@
 /**
  * ScheduledCronCard — the polished "scheduled skill" card.
  *
- * Now used by SkillsRunnerBody.tsx (the per-workflow saved-schedules
+ * Now used by WorkflowRunnerBody.tsx (the per-workflow saved-schedules
  * list at `/skills/run`). It originally also backed a standalone
  * scheduled-jobs dashboard (`SkillsDashboard`, removed when that overview
  * was phased out — see commit c474bc36 for the original inline version),

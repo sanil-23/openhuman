@@ -1,15 +1,15 @@
 // Settings → Developer Options → Skills Runner — thin wrapper around the
-// reusable `<SkillsRunnerBody />` so the settings shell (header + back
+// reusable `<WorkflowRunnerBody />` so the settings shell (header + back
 // button + breadcrumbs) stays consistent with other panels. The actual
 // picker / Run / Schedule / Recent Runs UX lives in
-// `app/src/components/skills/SkillsRunnerBody.tsx`, shared with the
+// `app/src/components/skills/WorkflowRunnerBody.tsx`, shared with the
 // top-level /skills page's "Runners" tab.
 import { useT } from '../../../lib/i18n/I18nContext';
-import SkillsRunnerBody from '../../skills/SkillsRunnerBody';
+import WorkflowRunnerBody from '../../skills/WorkflowRunnerBody';
 import SettingsHeader from '../components/SettingsHeader';
 import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
 
-const SkillsRunnerPanel = () => {
+const WorkflowRunnerPanel = () => {
   const { t } = useT();
   const { navigateBack, breadcrumbs } = useSettingsNavigation();
 
@@ -22,10 +22,10 @@ const SkillsRunnerPanel = () => {
         breadcrumbs={breadcrumbs}
       />
       <div className="flex-1 overflow-y-auto p-6">
-        <SkillsRunnerBody />
+        <WorkflowRunnerBody />
       </div>
     </div>
   );
 };
 
-export default SkillsRunnerPanel;
+export default WorkflowRunnerPanel;

@@ -2,18 +2,18 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
-import SkillsRun from './SkillsRun';
+import WorkflowsRun from './WorkflowsRun';
 
 vi.mock('../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (k: string) => k }) }));
-vi.mock('../components/skills/SkillsRunnerBody', () => ({
+vi.mock('../components/skills/WorkflowRunnerBody', () => ({
   default: () => <div data-testid="skills-runner-body" />,
 }));
 
-describe('SkillsRun', () => {
+describe('WorkflowsRun', () => {
   const render_ = () =>
     render(
       <MemoryRouter>
-        <SkillsRun />
+        <WorkflowsRun />
       </MemoryRouter>
     );
 
@@ -23,7 +23,7 @@ describe('SkillsRun', () => {
     expect(screen.getByText('skills.run.title')).toBeInTheDocument();
   });
 
-  it('renders SkillsRunnerBody', () => {
+  it('renders WorkflowRunnerBody', () => {
     render_();
     expect(screen.getByTestId('skills-runner-body')).toBeInTheDocument();
   });

@@ -1,7 +1,7 @@
 /**
- * SkillsRunnerBody — vitest coverage for the saved-schedules block.
+ * WorkflowRunnerBody — vitest coverage for the saved-schedules block.
  *
- * Phase 2 of the SkillsRunnerBody / DevWorkflowPanel unification (see
+ * Phase 2 of the WorkflowRunnerBody / DevWorkflowPanel unification (see
  * docs/skills-runner-unification.md): this file is seeded with the
  * smoke-test for the enable/disable toggle so future Phase 3 chunks
  * (run-history, active-config card, smart-issue picker gating) drop
@@ -121,8 +121,8 @@ function makeJob(overrides: Partial<Record<string, unknown>> = {}) {
 }
 
 async function importBody() {
-  const mod = await import('../SkillsRunnerBody');
-  return mod.SkillsRunnerBody;
+  const mod = await import('../WorkflowRunnerBody');
+  return mod.WorkflowRunnerBody;
 }
 
 /**
@@ -141,7 +141,7 @@ function renderBody(Body: React.ComponentType, initialPath = '/skills/run') {
 
 // Tests ──────────────────────────────────────────────────────────────
 
-describe('SkillsRunnerBody — saved-schedule toggle', () => {
+describe('WorkflowRunnerBody — saved-schedule toggle', () => {
   beforeEach(() => {
     Object.values(hoisted).forEach((fn) => fn.mockReset());
 
@@ -246,7 +246,7 @@ function makeRun(
   };
 }
 
-describe('SkillsRunnerBody — per-job history viewer', () => {
+describe('WorkflowRunnerBody — per-job history viewer', () => {
   beforeEach(() => {
     Object.values(hoisted).forEach((fn) => fn.mockReset());
     hoisted.listSkills.mockResolvedValue(skillsList);
@@ -387,7 +387,7 @@ describe('SkillsRunnerBody — per-job history viewer', () => {
   });
 });
 
-describe('SkillsRunnerBody — schedule frequency + save', () => {
+describe('WorkflowRunnerBody — schedule frequency + save', () => {
   beforeEach(() => {
     Object.values(hoisted).forEach((fn) => fn.mockReset());
     hoisted.listSkills.mockResolvedValue(skillsList);
@@ -422,7 +422,7 @@ describe('SkillsRunnerBody — schedule frequency + save', () => {
   });
 });
 
-describe('SkillsRunnerBody — SmartIssuePicker conditional mount', () => {
+describe('WorkflowRunnerBody — SmartIssuePicker conditional mount', () => {
   beforeEach(() => {
     Object.values(hoisted).forEach((fn) => fn.mockReset());
     hoisted.recentRuns.mockResolvedValue([]);
@@ -486,7 +486,7 @@ describe('SkillsRunnerBody — SmartIssuePicker conditional mount', () => {
 
 // ── Phase 4: URL ?skill= preselect binding ───────────────────────────
 
-describe('SkillsRunnerBody — URL ?skill= preselect', () => {
+describe('WorkflowRunnerBody — URL ?skill= preselect', () => {
   beforeEach(() => {
     Object.values(hoisted).forEach((fn) => fn.mockReset());
     hoisted.listSkills.mockResolvedValue([
@@ -563,7 +563,7 @@ describe('SkillsRunnerBody — URL ?skill= preselect', () => {
 // required validation (lines 415-429), and the run-result render paths
 // (lines 441-452).
 
-describe('SkillsRunnerBody — Run Now flow', () => {
+describe('WorkflowRunnerBody — Run Now flow', () => {
   beforeEach(() => {
     Object.values(hoisted).forEach((fn) => fn.mockReset());
     hoisted.listSkills.mockResolvedValue([{ id: 'pr-review-shepherd', name: 'PR Review Shepherd' }]);

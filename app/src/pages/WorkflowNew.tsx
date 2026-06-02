@@ -1,7 +1,7 @@
 /**
  * /skills/new — full-page Create-a-Skill authoring view.
  *
- * Renders `CreateSkillForm` (extracted from CreateSkillModal in
+ * Renders `CreateWorkflowForm` (extracted from CreateSkillModal in
  * Phase 5) inside page chrome, so the same flow is available as a
  * standalone route — entry point for the Skills dashboard's [+ Create
  * a Skill] CTA and bookmark-able for users who routinely scaffold
@@ -19,13 +19,13 @@
 import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import CreateSkillForm from '../components/skills/CreateSkillForm';
+import CreateWorkflowForm from '../components/skills/CreateWorkflowForm';
 import { useT } from '../lib/i18n/I18nContext';
 import { type SkillSummary } from '../services/api/skillsApi';
 
 const PAGE_FORM_ID = 'create-skill-page-form';
 
-export default function SkillNew() {
+export default function WorkflowNew() {
   const { t } = useT();
   const navigate = useNavigate();
 
@@ -86,7 +86,7 @@ export default function SkillNew() {
 
           {/* Form */}
           <div className="rounded-2xl border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-6 shadow-soft">
-            <CreateSkillForm
+            <CreateWorkflowForm
               formId={PAGE_FORM_ID}
               onCreated={handleCreated}
               onStateChange={handleStateChange}

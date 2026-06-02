@@ -16,9 +16,9 @@ import Onboarding from './pages/onboarding/Onboarding';
 import Rewards from './pages/Rewards';
 import Routines from './pages/Routines';
 import Settings from './pages/Settings';
-import SkillNew from './pages/SkillNew';
+import WorkflowNew from './pages/WorkflowNew';
 import Skills from './pages/Skills';
-import SkillsRun from './pages/SkillsRun';
+import WorkflowsRun from './pages/WorkflowsRun';
 import WebCallbackPage from './pages/WebCallbackPage';
 import Welcome from './pages/Welcome';
 
@@ -95,7 +95,7 @@ const AppRoutes = () => {
         path="/skills/new"
         element={
           <ProtectedRoute requireAuth={true}>
-            <SkillNew />
+            <WorkflowNew />
           </ProtectedRoute>
         }
       />
@@ -104,7 +104,7 @@ const AppRoutes = () => {
         path="/skills/run"
         element={
           <ProtectedRoute requireAuth={true}>
-            <SkillsRun />
+            <WorkflowsRun />
           </ProtectedRoute>
         }
       />
