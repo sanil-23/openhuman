@@ -121,17 +121,17 @@ function buildCronJobName(skillId: string, inputs: Record<string, unknown>): str
   return `${CRON_NAME_PREFIX}${skillId}${suffix}`.slice(0, 80);
 }
 
-/** Compose the agent-job prompt that re-fires the skill_run at cron tick. */
-function buildAgentPrompt(skillId: string, inputs: Record<string, unknown>): string {
+/** Compose the agent-job prompt that re-fires the workflow run at cron tick. */
+function buildAgentPrompt(workflowId: string, inputs: Record<string, unknown>): string {
   const inputLines = Object.entries(inputs)
     .filter(([, v]) => v !== undefined && v !== null && v !== '')
     .map(([k, v]) => `- ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
     .join('\n');
   return [
-    `Run the ${skillId} skill via the run_skill tool with these inputs:`,
+    `Run the ${workflowId} workflow via the run_workflow tool (workflow_id: "${workflowId}") with these inputs:`,
     inputLines || '(no inputs)',
     '',
-    'Do NOT do the work yourself — call run_skill and report back the new run_id.',
+    'Do NOT do the work yourself — call run_workflow and report back the new run_id.',
   ].join('\n');
 }
 
