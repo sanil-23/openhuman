@@ -432,3 +432,146 @@ async fn task_with_no_workflow_runs_directly_and_resolves_done() {
         "no workflow should have run for a no-workflow task; got: {runs:?}"
     );
 }
+
+// ── Test 5: a dispatched run that ERRORS resolves the card to Blocked ─────
+
+/// A provider that always errors — stands in for the agent run failing (model
+/// unavailable, a tool/turn error surfaced up). `run_autonomous` maps the error
+/// to `Err`, and `write_back` records it as `Blocked` + a blocker reason.
+struct FailingLlm;
+#[async_trait]
+impl Provider for FailingLlm {
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            native_tool_calling: true,
+            ..ProviderCapabilities::default()
+        }
+    }
+    async fn chat_with_system(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: f64,
+    ) -> anyhow::Result<String> {
+        Ok("ok".into())
+    }
+    async fn chat(
+        &self,
+        _: ChatRequest<'_>,
+        _: &str,
+        _: f64,
+    ) -> anyhow::Result<ChatResponse> {
+        Err(anyhow::anyhow!("simulated provider failure: model unavailable"))
+    }
+}
+
+#[ignore = "process-global provider override + OPENHUMAN_WORKSPACE; run: \
+            cargo test --lib workflows::e2e_run_tests -- --ignored --test-threads=1"]
+#[tokio::test]
+async fn task_run_failure_resolves_card_to_blocked() {
+    let _ =
+        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins();
+    let _serial = serial().lock().await;
+    let ws_root = tempfile::tempdir().unwrap();
+    let _env = WorkspaceEnv::set(ws_root.path());
+    let workspace = resolve_workspace_dir().await;
+    let _guard = test_provider_override::install(Arc::new(FailingLlm));
+
+    let loc = BoardLocation::Thread {
+        workspace_dir: workspace.clone(),
+        thread_id: "t1".into(),
+    };
+    let snap = board_ops::add(&loc, "Do a thing that will fail", CardPatch::default())
+        .expect("add card");
+    let id = snap.cards[0].id.clone();
+    board_ops::update_status(&loc, &id, TaskCardStatus::Ready).expect("ready");
+
+    let card = board_ops::list(&loc)
+        .unwrap()
+        .cards
+        .into_iter()
+        .find(|c| c.id == id)
+        .unwrap();
+    // The card is claimed (→ InProgress) and the run is detached; the failure
+    // happens inside the detached run, so dispatch itself still returns Running.
+    let outcome = dispatch_card(loc.clone(), card).await.expect("dispatch");
+    assert!(matches!(outcome, DispatchOutcome::Running { .. }));
+
+    let blocked = wait_for_status(&loc, &id, TaskCardStatus::Blocked, 25)
+        .await
+        .unwrap_or_else(|| {
+            let c = board_ops::list(&loc)
+                .unwrap()
+                .cards
+                .into_iter()
+                .find(|c| c.id == id)
+                .unwrap();
+            panic!(
+                "card never reached Blocked; status={} blocker={:?}",
+                c.status.as_str(),
+                c.blocker
+            );
+        });
+    assert_eq!(blocked.status, TaskCardStatus::Blocked);
+    assert!(
+        blocked
+            .blocker
+            .as_deref()
+            .map(|b| !b.trim().is_empty())
+            .unwrap_or(false),
+        "a failed run must record a blocker reason; got: {:?}",
+        blocked.blocker
+    );
+}
+
+// ── Test 6: re-dispatching an already-claimed card is rejected (dedup) ─────
+
+#[ignore = "process-global provider override + OPENHUMAN_WORKSPACE; run: \
+            cargo test --lib workflows::e2e_run_tests -- --ignored --test-threads=1"]
+#[tokio::test]
+async fn redispatch_of_claimed_card_is_rejected() {
+    let _ =
+        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins();
+    let _serial = serial().lock().await;
+    let ws_root = tempfile::tempdir().unwrap();
+    let _env = WorkspaceEnv::set(ws_root.path());
+    let workspace = resolve_workspace_dir().await;
+    // Direct-answer mock so the claimed run resolves without needing a workflow.
+    let _guard = test_provider_override::install(Arc::new(MockLlm { workflow_id: None }));
+
+    let loc = BoardLocation::Thread {
+        workspace_dir: workspace.clone(),
+        thread_id: "t1".into(),
+    };
+    let snap =
+        board_ops::add(&loc, "Claim me exactly once", CardPatch::default()).expect("add card");
+    let id = snap.cards[0].id.clone();
+    board_ops::update_status(&loc, &id, TaskCardStatus::Ready).expect("ready");
+    // Capture a Ready snapshot; we'll try to dispatch it twice.
+    let stale = board_ops::list(&loc)
+        .unwrap()
+        .cards
+        .into_iter()
+        .find(|c| c.id == id)
+        .unwrap();
+
+    // First dispatch claims it (re-loads, flips Ready → InProgress, spawns).
+    let first = dispatch_card(loc.clone(), stale.clone())
+        .await
+        .expect("first dispatch");
+    assert!(
+        matches!(first, DispatchOutcome::Running { .. }),
+        "first dispatch should claim the card; got {first:?}"
+    );
+
+    // Re-dispatch the SAME stale Ready snapshot. The claim re-loads the board,
+    // sees the card is no longer Todo/Ready (now InProgress/Done), and rejects
+    // WITHOUT spawning a second run — this is the dedup that stops a re-triggered
+    // card from double-running.
+    let second = dispatch_card(loc.clone(), stale).await;
+    assert!(
+        second.is_err(),
+        "re-dispatch of an already-claimed card must reject without spawning; got {second:?}"
+    );
+}
