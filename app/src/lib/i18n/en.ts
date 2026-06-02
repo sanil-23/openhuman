@@ -286,7 +286,6 @@ const en: TranslationMap = {
   'skills.tabs.composio': 'Composio',
   'skills.tabs.channels': 'Channels',
   'skills.tabs.mcp': 'MCP Servers',
-  'skills.tabs.runners': 'Runners',
   // Intelligence / Memory
   'memory.title': 'Memory',
   'memory.search': 'Search memories...',
@@ -4752,26 +4751,15 @@ const en: TranslationMap = {
   'settings.taskSources.providers.linear': 'Linear',
   'settings.taskSources.providers.clickup': 'ClickUp',
 
-  // /skills IA restructure: landing-dashboard + /skills/new authoring page.
-  // The runner UX (existing Skills page → WorkflowRunnerBody) moves to
-  // /skills/run; this dashboard surfaces currently-scheduled skills as
-  // DevWorkflowPanel-style cards.
-  'skills.dashboard.title': 'Skills',
-  'skills.dashboard.scheduledHeading': 'Scheduled skills',
-  'skills.dashboard.emptyTitle': 'No scheduled skills',
-  'skills.dashboard.emptyBody':
-    'Run a bundled skill once or save a recurring schedule to see it here.',
-  'skills.dashboard.create': 'Create a Skill',
-  'skills.dashboard.run': 'Run a Skill',
-  'skills.dashboard.enable': 'Enable scheduled skill',
-  'skills.dashboard.disable': 'Disable scheduled skill',
+  // Scheduled-workflow card controls (ScheduledCronCard on the workflow
+  // runner page). The standalone scheduled-workflows dashboard was phased
+  // out; only these per-card labels remain in use.
+  'skills.dashboard.enable': 'Enable scheduled workflow',
+  'skills.dashboard.disable': 'Disable scheduled workflow',
   'skills.dashboard.lastRun': 'Last run',
   'skills.dashboard.nextRun': 'Next run',
   'skills.dashboard.cardOpenRunner': 'Open in runner',
-  'skills.dashboard.loadError': 'Failed to load scheduled skills',
-  'skills.new.title': 'Create a skill',
-  'skills.new.placeholderBody':
-    'Authoring form arrives soon. For now, use the “New skill” button on the runner page.',
+  'skills.new.title': 'Create a workflow',
   'settings.agents.title': 'Agents',
   'settings.agents.subtitle':
     'Manage the agents available for delegation — built-in defaults and your own custom agents.',
