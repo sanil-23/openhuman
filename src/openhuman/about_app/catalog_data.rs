@@ -521,7 +521,7 @@ pub(super) const CAPABILITIES: &[Capability] = &[
     },
     Capability {
         id: "skills.connection_status",
-        name: "Monitor Workflow Connection Status",
+        name: "Monitor Skill Connection Status",
         domain: "skills",
         category: CapabilityCategory::Skills,
         description: "See whether a skill-backed integration is connected, offline, or needs setup.",
@@ -531,11 +531,11 @@ pub(super) const CAPABILITIES: &[Capability] = &[
     },
     Capability {
         id: "skills.sync_manual",
-        name: "Manually Sync Workflow Data",
+        name: "Manually Sync Skill Data",
         domain: "skills",
         category: CapabilityCategory::Skills,
         description: "Trigger a manual data sync for a skill integration.",
-        how_to: "Skills > Workflow card > Sync",
+        how_to: "Skills > Skill card > Sync",
         status: CapabilityStatus::Beta,
         privacy: DERIVED_TO_BACKEND,
     },
