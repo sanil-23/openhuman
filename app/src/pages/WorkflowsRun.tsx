@@ -1,11 +1,11 @@
 /**
- * /skills/run — single-purpose workflow runner page.
+ * /workflows/run — single-purpose workflow runner page.
  *
  * Reached from a workflow's detail drawer ("Run workflow" CTA) or any
- * `?skill=<id>` deep link. Hosts the WorkflowRunnerBody picker + form +
+ * `?workflow=<id>` deep link. Hosts the WorkflowRunnerBody picker + form +
  * run-now + save-schedule flow without the Connections-page tab chrome.
  *
- * Bookmark-friendly and shareable via `?skill=<id>` (the body reads the
+ * Bookmark-friendly and shareable via `?workflow=<id>` (the body reads the
  * query param and pre-selects the workflow — see WorkflowRunnerBody.tsx).
  */
 import { useNavigate } from 'react-router-dom';

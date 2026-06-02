@@ -53,13 +53,13 @@ function buildSkill(overrides: Partial<SkillSummary> = {}): SkillSummary {
 }
 
 describe('SkillDetailDrawer', () => {
-  it('Run workflow CTA closes the drawer and navigates to the runner with ?skill=', () => {
+  it('Run workflow CTA closes the drawer and navigates to the runner with ?workflow=', () => {
     routerHoisted.navigate.mockClear();
     const onClose = vi.fn();
     render(<SkillDetailDrawer skill={buildSkill({ id: 'my wf' })} onClose={onClose} />);
     fireEvent.click(screen.getByTestId('skill-detail-run'));
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(routerHoisted.navigate).toHaveBeenCalledWith('/skills/run?skill=my%20wf');
+    expect(routerHoisted.navigate).toHaveBeenCalledWith('/workflows/run?workflow=my%20wf');
   });
 
   it('renders core metadata and scope pill', () => {

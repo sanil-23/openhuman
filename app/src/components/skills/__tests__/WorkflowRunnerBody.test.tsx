@@ -128,10 +128,10 @@ async function importBody() {
 /**
  * Wrap the body in a MemoryRouter so the URL-binding effect (added in
  * Phase 4 of the /skills IA restructure) has a router context to read
- * `?skill=` from / write back to. Default entry is `/skills/run`
+ * `?workflow=` from / write back to. Default entry is `/workflows/run`
  * matching where the runner now lives.
  */
-function renderBody(Body: React.ComponentType, initialPath = '/skills/run') {
+function renderBody(Body: React.ComponentType, initialPath = '/workflows/run') {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <Body />
@@ -484,9 +484,9 @@ describe('WorkflowRunnerBody — SmartIssuePicker conditional mount', () => {
   });
 });
 
-// ── Phase 4: URL ?skill= preselect binding ───────────────────────────
+// ── Phase 4: URL ?workflow= preselect binding ───────────────────────────
 
-describe('WorkflowRunnerBody — URL ?skill= preselect', () => {
+describe('WorkflowRunnerBody — URL ?workflow= preselect', () => {
   beforeEach(() => {
     Object.values(hoisted).forEach((fn) => fn.mockReset());
     hoisted.listSkills.mockResolvedValue([
@@ -504,9 +504,9 @@ describe('WorkflowRunnerBody — URL ?skill= preselect', () => {
     hoisted.cronRuns.mockResolvedValue({ result: { runs: [] } });
   });
 
-  it('pre-selects the skill from the ?skill= query on mount', async () => {
+  it('pre-selects the skill from the ?workflow= query on mount', async () => {
     const Body = await importBody();
-    renderBody(Body, '/skills/run?skill=dev-workflow');
+    renderBody(Body, '/workflows/run?workflow=dev-workflow');
 
     await waitFor(() => expect(hoisted.listSkills).toHaveBeenCalled());
 
@@ -522,9 +522,9 @@ describe('WorkflowRunnerBody — URL ?skill= preselect', () => {
     );
   });
 
-  it('does not preselect when no ?skill= is present', async () => {
+  it('does not preselect when no ?workflow= is present', async () => {
     const Body = await importBody();
-    renderBody(Body, '/skills/run');
+    renderBody(Body, '/workflows/run');
 
     await waitFor(() => expect(hoisted.listSkills).toHaveBeenCalled());
     const select = (await screen.findByLabelText(
@@ -534,15 +534,15 @@ describe('WorkflowRunnerBody — URL ?skill= preselect', () => {
     expect(hoisted.describeSkill).not.toHaveBeenCalled();
   });
 
-  it('ignores ?skill= when the value is not in the skills_list (picker stays empty, describeSkill called once with empty=never)', async () => {
-    // ?skill=unknown-skill is treated as best-effort: we set the state
+  it('ignores ?workflow= when the value is not in the skills_list (picker stays empty, describeSkill called once with empty=never)', async () => {
+    // ?workflow=unknown-skill is treated as best-effort: we set the state
     // but the picker shows "Select a skill" since the option isn't in
     // the list. The describe call IS attempted (we don't pre-filter
     // against the catalog) — but the cancellation effect tears it
     // down if the value never resolves to a real skill.
     hoisted.describeSkill.mockRejectedValue(new Error('unknown skill'));
     const Body = await importBody();
-    renderBody(Body, '/skills/run?skill=does-not-exist');
+    renderBody(Body, '/workflows/run?workflow=does-not-exist');
 
     await waitFor(() => expect(hoisted.listSkills).toHaveBeenCalled());
     await waitFor(() =>

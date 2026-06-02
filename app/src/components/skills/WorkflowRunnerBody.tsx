@@ -221,12 +221,12 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
   const [skillsError, setSkillsError] = useState<string | null>(null);
 
   // Active skill + its full description (inputs declared).
-  // Pre-seeded from the URL `?skill=<id>` query so any surface that
+  // Pre-seeded from the URL `?workflow=<id>` query so any surface that
   // deep-links to a specific workflow (e.g. the workflow detail drawer's
   // "Run workflow" CTA) can land the user with the picker already pointed
   // at the right workflow.
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialSkillId = searchParams.get('skill') ?? '';
+  const initialSkillId = searchParams.get('workflow') ?? '';
   const [selectedSkillId, setSelectedSkillId] = useState(initialSkillId);
   const [description, setDescription] = useState<SkillDescription | null>(null);
   const [descLoading, setDescLoading] = useState(false);
@@ -322,20 +322,20 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
     viewerRef.current = viewer;
   }, [viewer]);
 
-  // ── Keep URL ?skill= in sync with the picker ──────────────────────
+  // ── Keep URL ?workflow= in sync with the picker ──────────────────────
   // Two-way binding so a manual picker change is reflected in the URL
   // (refresh-stable, back-button-friendly, shareable). `replace: true`
   // avoids stacking a history entry on every dropdown change. We only
   // touch the search-params when the value actually drifted to keep
   // React Router's effect bookkeeping quiet.
   useEffect(() => {
-    const current = searchParams.get('skill') ?? '';
+    const current = searchParams.get('workflow') ?? '';
     if (current === selectedSkillId) return;
     const next = new URLSearchParams(searchParams);
     if (selectedSkillId) {
-      next.set('skill', selectedSkillId);
+      next.set('workflow', selectedSkillId);
     } else {
-      next.delete('skill');
+      next.delete('workflow');
     }
     setSearchParams(next, { replace: true });
   }, [selectedSkillId, searchParams, setSearchParams]);
@@ -344,7 +344,7 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
   // If the URL skill param drifts from the picker (back/forward, or
   // a programmatic navigate from elsewhere), follow the URL.
   useEffect(() => {
-    const urlSkillId = searchParams.get('skill') ?? '';
+    const urlSkillId = searchParams.get('workflow') ?? '';
     if (urlSkillId !== selectedSkillId) {
       log('URL drift detected: url=%s picker=%s — following URL', urlSkillId, selectedSkillId);
       setSelectedSkillId(urlSkillId);

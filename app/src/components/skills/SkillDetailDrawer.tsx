@@ -51,11 +51,11 @@ export default function SkillDetailDrawer({ skill, onClose }: Props) {
   const [selectedResource, setSelectedResource] = useState<string | null>(null);
 
   // "Run workflow" → the focused runner page, pre-selected to this workflow
-  // via `?skill=<id>`. Closing the drawer first keeps the back stack clean.
+  // via `?workflow=<id>`. Closing the drawer first keeps the back stack clean.
   const handleRun = useCallback(() => {
     log('run-workflow skillId=%s', skill.id);
     onClose();
-    navigate(`/skills/run?skill=${encodeURIComponent(skill.id)}`);
+    navigate(`/workflows/run?workflow=${encodeURIComponent(skill.id)}`);
   }, [navigate, onClose, skill.id]);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);

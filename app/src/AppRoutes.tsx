@@ -88,11 +88,11 @@ const AppRoutes = () => {
           page — the bottom-bar "Connections" entry has always pointed at
           /skills to surface Composio integrations + MCP, and that muscle
           memory is restored here.
-          `/skills/new` is the create-a-skill authoring page.
-          Order matters: keep `/skills/new` before `/skills` so it wins the
+          `/workflows/new` is the create-a-skill authoring page.
+          Order matters: keep `/workflows/new` before `/skills` so it wins the
           prefix match. */}
       <Route
-        path="/skills/new"
+        path="/workflows/new"
         element={
           <ProtectedRoute requireAuth={true}>
             <WorkflowNew />
@@ -101,7 +101,7 @@ const AppRoutes = () => {
       />
 
       <Route
-        path="/skills/run"
+        path="/workflows/run"
         element={
           <ProtectedRoute requireAuth={true}>
             <WorkflowsRun />

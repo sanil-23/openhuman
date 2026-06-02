@@ -1,5 +1,5 @@
 /**
- * /skills/new — full-page Create-a-Skill authoring view.
+ * /workflows/new — full-page Create-a-Skill authoring view.
  *
  * Renders `CreateWorkflowForm` (extracted from CreateSkillModal in
  * Phase 5) inside page chrome, so the same flow is available as a
@@ -9,7 +9,7 @@
  *
  * Behaviour on submit:
  *   - Success → navigate to /skills (dashboard) so the user lands
- *     somewhere meaningful. We considered /skills/run?skill=<new-id>,
+ *     somewhere meaningful. We considered /workflows/run?workflow=<new-id>,
  *     but new skills aren't auto-scheduled and the runner picker
  *     pre-select only makes sense once the user has filled in inputs.
  *     Dashboard sends a clearer "skill created, here's what's

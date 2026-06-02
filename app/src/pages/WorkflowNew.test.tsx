@@ -25,9 +25,9 @@ vi.mock('../services/api/skillsApi', () => ({ skillsApi: { createSkill: hoisted.
 
 const renderPage = () =>
   render(
-    <MemoryRouter initialEntries={['/skills/new']}>
+    <MemoryRouter initialEntries={['/workflows/new']}>
       <Routes>
-        <Route path="/skills/new" element={<WorkflowNew />} />
+        <Route path="/workflows/new" element={<WorkflowNew />} />
         <Route path="/skills" element={<div data-testid="dashboard-landed">dashboard</div>} />
       </Routes>
     </MemoryRouter>
