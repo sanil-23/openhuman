@@ -74,24 +74,70 @@ impl MessageContent {
     /// parts. Returns the plain-string [`MessageContent::Text`] arm when no
     /// markers are present, so text-only messages are unchanged on the wire.
     pub(crate) fn from_chat_text(content: &str) -> Self {
-        let (text, images) = split_image_markers(content);
-        if images.is_empty() {
-            // No attachments — preserve the exact original string (markerless
-            // content is returned verbatim by `split_image_markers`, but be
-            // explicit so future marker-format tweaks can't alter text turns).
+        // Fast path: markerless content stays the plain-string arm, byte-identical.
+        if !content.contains(IMAGE_MARKER_PREFIX) {
             return MessageContent::Text(content.to_string());
         }
-        let mut parts = Vec::with_capacity(images.len() + 1);
-        if !text.is_empty() {
-            parts.push(ContentPart::Text { text });
+
+        // Scan left-to-right, emitting `text` and `image_url` parts in the exact
+        // order they appear so interleaved prompts (`before [IMAGE:a] after`,
+        // `[IMAGE:a] explain`) keep the multimodal sequence the user authored.
+        let mut parts: Vec<ContentPart> = Vec::new();
+        let mut text_buf = String::new();
+        let mut cursor = 0usize;
+
+        while let Some(rel) = content[cursor..].find(IMAGE_MARKER_PREFIX) {
+            let start = cursor + rel;
+            text_buf.push_str(&content[cursor..start]);
+
+            let marker_start = start + IMAGE_MARKER_PREFIX.len();
+            let Some(rel_end) = content[marker_start..].find(']') else {
+                // Unterminated marker — keep the remainder as literal text.
+                text_buf.push_str(&content[start..]);
+                cursor = content.len();
+                break;
+            };
+
+            let end = marker_start + rel_end;
+            let candidate = content[marker_start..end].trim();
+            if candidate.is_empty() {
+                // `[IMAGE:]` with no payload — keep the literal text, no part.
+                text_buf.push_str(&content[start..=end]);
+            } else {
+                flush_text_part(&mut parts, &mut text_buf);
+                parts.push(ContentPart::ImageUrl {
+                    image_url: ImageUrl {
+                        url: candidate.to_string(),
+                    },
+                });
+            }
+            cursor = end + 1;
         }
-        for url in images {
-            parts.push(ContentPart::ImageUrl {
-                image_url: ImageUrl { url },
-            });
+        text_buf.push_str(&content[cursor..]);
+        flush_text_part(&mut parts, &mut text_buf);
+
+        // Only empty/invalid markers were present (no image parts) — fall back to
+        // the plain-string arm rather than emitting a lone text part.
+        if !parts
+            .iter()
+            .any(|p| matches!(p, ContentPart::ImageUrl { .. }))
+        {
+            return MessageContent::Text(content.to_string());
         }
         MessageContent::Parts(parts)
     }
+}
+
+/// Drain `buf` into a trimmed `ContentPart::Text` when it holds non-whitespace,
+/// then clear it. Whitespace-only spans between markers are dropped.
+fn flush_text_part(parts: &mut Vec<ContentPart>, buf: &mut String) {
+    let trimmed = buf.trim();
+    if !trimmed.is_empty() {
+        parts.push(ContentPart::Text {
+            text: trimmed.to_string(),
+        });
+    }
+    buf.clear();
 }
 
 impl From<String> for MessageContent {
@@ -104,50 +150,6 @@ impl From<&str> for MessageContent {
     fn from(value: &str) -> Self {
         MessageContent::Text(value.to_string())
     }
-}
-
-/// Split `[IMAGE:<data-uri>]` markers out of a message string, returning the
-/// trimmed text remainder and the ordered list of image references.
-///
-/// Mirrors `crate::openhuman::agent::multimodal::parse_image_markers` (the
-/// canonical parser used for counting/normalisation). The format is a stable
-/// contract between the two layers; the provider-side copy exists only because
-/// `provider` sits below `agent` in the dependency graph.
-fn split_image_markers(content: &str) -> (String, Vec<String>) {
-    let mut refs = Vec::new();
-    let mut cleaned = String::with_capacity(content.len());
-    let mut cursor = 0usize;
-
-    while let Some(rel_start) = content[cursor..].find(IMAGE_MARKER_PREFIX) {
-        let start = cursor + rel_start;
-        cleaned.push_str(&content[cursor..start]);
-
-        let marker_start = start + IMAGE_MARKER_PREFIX.len();
-        let Some(rel_end) = content[marker_start..].find(']') else {
-            // Unterminated marker — emit the rest verbatim and stop.
-            cleaned.push_str(&content[start..]);
-            cursor = content.len();
-            break;
-        };
-
-        let end = marker_start + rel_end;
-        let candidate = content[marker_start..end].trim();
-
-        if candidate.is_empty() {
-            // `[IMAGE:]` with no payload — keep the literal text, skip the ref.
-            cleaned.push_str(&content[start..=end]);
-        } else {
-            refs.push(candidate.to_string());
-        }
-
-        cursor = end + 1;
-    }
-
-    if cursor < content.len() {
-        cleaned.push_str(&content[cursor..]);
-    }
-
-    (cleaned.trim().to_string(), refs)
 }
 
 #[derive(Debug, Clone, Serialize)]

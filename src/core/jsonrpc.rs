@@ -871,23 +871,26 @@ pub fn build_core_http_router(socketio_enabled: bool) -> Router {
         .route("/events", get(events_handler))
         .route("/events/webhooks", get(webhook_events_handler))
         .route("/events/domain", get(domain_events_handler))
-        .route("/rpc", post(rpc_handler))
+        // Raise the request-body cap above Axum's 2 MiB default — scoped to
+        // `/rpc` only so other routes keep the default. Chat image attachments
+        // are inlined into the `channel_web_chat` JSON-RPC body as base64
+        // `data:` URIs, and the composer permits up to ATTACHMENT_MAX_IMAGES (4)
+        // × ATTACHMENT_MAX_SIZE_BYTES (8 MiB) of raw image ≈ 43 MiB once
+        // base64-encoded. Without this the whole turn was rejected at the local
+        // RPC boundary with "failed to buffer the request body: length limit
+        // exceeded" before anything reached the provider (issue #3205). The
+        // server binds to 127.0.0.1 behind a per-launch bearer, so a generous
+        // localhost cap is safe.
+        .route(
+            "/rpc",
+            post(rpc_handler).route_layer(DefaultBodyLimit::max(MAX_RPC_BODY_BYTES)),
+        )
         .route("/ws/dictation", get(dictation_ws_handler))
         .route("/auth", get(desktop_auth_handler))
         .route("/auth/telegram", get(telegram_auth_handler))
         // OpenAI-compatible inference endpoint (/v1/chat/completions, /v1/models)
         .nest("/v1", crate::openhuman::inference::http::router())
         .fallback(not_found_handler)
-        // Raise the request-body cap above Axum's 2 MiB default. Chat image
-        // attachments are inlined into the JSON-RPC body as base64 `data:`
-        // URIs (`channel_web_chat`), and the composer permits up to
-        // ATTACHMENT_MAX_IMAGES (4) × ATTACHMENT_MAX_SIZE_BYTES (8 MiB) of raw
-        // image ≈ 43 MiB once base64-encoded. Without this the whole turn was
-        // rejected at the local RPC boundary with "failed to buffer the request
-        // body: length limit exceeded" before anything reached the provider
-        // (issue #3205). The server binds to 127.0.0.1 behind a per-launch
-        // bearer, so a generous localhost cap is safe.
-        .layer(DefaultBodyLimit::max(MAX_RPC_BODY_BYTES))
         .layer(middleware::from_fn(http_request_log_middleware))
         .layer(middleware::from_fn(crate::core::auth::rpc_auth_middleware))
         .layer(middleware::from_fn(cors_middleware))

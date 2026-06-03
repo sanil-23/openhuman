@@ -2397,7 +2397,8 @@ fn message_content_image_only_omits_empty_text_part() {
     );
 }
 
-/// Multiple markers become multiple `image_url` parts, in order.
+/// Multiple markers become multiple `image_url` parts, with the text between
+/// them preserved in authored order (not collapsed before the images).
 #[test]
 fn message_content_multiple_images_serialize_in_order() {
     let raw = format!("compare [IMAGE:{TEST_PNG_DATA_URI}] and [IMAGE:https://example.com/b.jpg]");
@@ -2405,9 +2406,25 @@ fn message_content_multiple_images_serialize_in_order() {
     assert_eq!(
         json,
         serde_json::json!([
-            { "type": "text", "text": "compare  and" },
+            { "type": "text", "text": "compare" },
             { "type": "image_url", "image_url": { "url": TEST_PNG_DATA_URI } },
+            { "type": "text", "text": "and" },
             { "type": "image_url", "image_url": { "url": "https://example.com/b.jpg" } },
+        ])
+    );
+}
+
+/// Interleaved order is preserved exactly — an image-first prompt keeps the
+/// image before the trailing text (CodeRabbit #3268).
+#[test]
+fn message_content_preserves_image_first_then_text_order() {
+    let raw = format!("[IMAGE:{TEST_PNG_DATA_URI}] then explain");
+    let json = serde_json::to_value(MessageContent::from_chat_text(&raw)).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!([
+            { "type": "image_url", "image_url": { "url": TEST_PNG_DATA_URI } },
+            { "type": "text", "text": "then explain" },
         ])
     );
 }
