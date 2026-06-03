@@ -1356,19 +1356,14 @@ impl Provider for OpenAiCompatibleProvider {
     fn capabilities(&self) -> crate::openhuman::inference::provider::traits::ProviderCapabilities {
         crate::openhuman::inference::provider::traits::ProviderCapabilities {
             native_tool_calling: self.native_tool_calling,
-            // Only the chat-completions path serializes images as `image_url`
-            // content parts; `chat_via_responses()` (used when
-            // `responses_api_primary` is set) builds text-only `input` parts and
-            // would send the raw `[IMAGE:…]` marker as text. So only claim vision
-            // when this provider routes through chat-completions (issue #3205).
-            // Vision-capable OpenAI-compatible models (gpt-4o, gpt-4.1, …) then
-            // accept the standard `image_url` array the provider emits. NOTE:
-            // this is provider-level, not per-model — a non-vision model behind a
-            // chat-completions provider will still receive the image and return
-            // an upstream error/empty. (Edge: a chat-completions request that
-            // 404s and falls back to the Responses API would degrade to text;
-            // the proper per-model fix lands with backend vision routing.)
-            vision: !self.responses_api_primary,
+            // Kept `false` for now. The provider already serializes images as
+            // `image_url` content parts on the chat-completions path (#3205), but
+            // vision is a per-*model* property the provider can't know here — and
+            // the Responses-API path (`chat_via_responses`) is still text-only.
+            // Claiming vision provider-wide would let image turns through the
+            // gate to a possibly-non-vision model. The capability stays off until
+            // it can be driven per-model (e.g. from `model_registry.vision`).
+            vision: false,
         }
     }
 
