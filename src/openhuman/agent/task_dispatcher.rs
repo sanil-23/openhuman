@@ -133,18 +133,26 @@ pub fn build_task_prompt(card: &TaskBoardCard) -> String {
 /// task card current via the `update_task` tool while it works.
 ///
 /// The card is already `in_progress` (the dispatcher claimed it before
-/// spawning the run) and its terminal `done`/`blocked` state is written by
-/// [`write_back`] from the run outcome — so this asks only for *progress*
-/// updates (notes/evidence), addressed to the exact card id + board the run
-/// owns. Without the explicit `threadId` the tool would default to the
-/// `task-sources` board and miss a `user-tasks` card.
+/// spawning the run), addressed by the exact card id + board the run owns
+/// (without the explicit `threadId` the tool defaults to the `task-sources`
+/// board and would miss a `user-tasks` card). Two things this asks for:
+/// 1. *progress* updates (notes/evidence) as the run works, and
+/// 2. an explicit `status: blocked` + `blocker` when the run needs a
+///    decision/information from the user or cannot proceed — which
+///    [`write_back`] now preserves rather than force-completing, so the task
+///    pauses for the user instead of being silently marked done.
 fn build_progress_instruction(card_id: &str, thread_id: &str) -> String {
     format!(
-        "\n\nThis task is tracked as card `{card_id}` on the `{thread_id}` board. As you make \
-         progress, call the `update_task` tool (id `{card_id}`, threadId `{thread_id}`) to keep \
-         the card current — append `notes` and `evidence` as you go so the board reflects live \
-         status. You do not need to set the final status: the system records `done`/`blocked` \
-         from your run outcome automatically."
+        "\n\nThis task is tracked as card `{card_id}` on the `{thread_id}` board. As you work, \
+         call the `update_task` tool (id `{card_id}`, threadId `{thread_id}`) to keep the card \
+         current — append `notes`/`evidence` as you make progress.\n\nIf you need a decision or \
+         information from the user, or you genuinely cannot proceed (missing access, ambiguous \
+         requirement, an action that needs the user's confirmation), call `update_task` with \
+         `status: blocked` and a `blocker` that states exactly what you need from the user. The \
+         task will stay paused in that blocked state until the user responds — do NOT guess, \
+         fabricate, or take a risky irreversible action just to avoid blocking. If instead you \
+         finish the work, end with a summary of what you did and the evidence; completion is \
+         recorded automatically."
     )
 }
 
@@ -435,48 +443,77 @@ async fn run_autonomous(
 /// Success → `done` + evidence; failure → `blocked` + blocker reason. An
 /// external write failure here is logged, never propagated — the run already
 /// happened.
+/// Current persisted status of a card, or `None` if the board can't be read or
+/// the card is gone. Used by `write_back` to detect a run that blocked itself.
+fn current_card_status(location: &BoardLocation, card_id: &str) -> Option<TaskCardStatus> {
+    ops::list(location)
+        .ok()
+        .and_then(|snap| snap.cards.into_iter().find(|c| c.id == card_id))
+        .map(|c| c.status)
+}
+
 fn write_back(
     location: &BoardLocation,
     card_id: &str,
     run_id: &str,
     outcome: Result<String, String>,
 ) {
-    let patch = match &outcome {
-        Ok(output) => {
-            tracing::info!(
-                card_id = %card_id,
-                run_id = %run_id,
-                output_chars = output.chars().count(),
-                "[task_dispatcher] run complete → done"
-            );
-            CardPatch {
-                status: Some(TaskCardStatus::Done),
-                evidence: Some(vec![truncate_chars(output.trim(), EVIDENCE_MAX_CHARS)]),
-                ..Default::default()
+    // Respect a status the run set for itself: if the agent marked the card
+    // `blocked` via `update_task` (it needs a decision/input from the user, or
+    // genuinely cannot proceed), leave it blocked — do NOT force-complete it.
+    // The task then stays paused in that state until the user responds, instead
+    // of a "clean turn" being silently recorded as done. Otherwise mark done
+    // with evidence; a run error marks blocked with the error as the blocker.
+    let agent_self_blocked =
+        outcome.is_ok() && current_card_status(location, card_id) == Some(TaskCardStatus::Blocked);
+
+    let patch = if agent_self_blocked {
+        tracing::info!(
+            card_id = %card_id,
+            run_id = %run_id,
+            "[task_dispatcher] run ended with card self-blocked → leaving blocked (awaiting user input), not auto-completing"
+        );
+        None
+    } else {
+        match &outcome {
+            Ok(output) => {
+                tracing::info!(
+                    card_id = %card_id,
+                    run_id = %run_id,
+                    output_chars = output.chars().count(),
+                    "[task_dispatcher] run complete → done"
+                );
+                Some(CardPatch {
+                    status: Some(TaskCardStatus::Done),
+                    evidence: Some(vec![truncate_chars(output.trim(), EVIDENCE_MAX_CHARS)]),
+                    ..Default::default()
+                })
             }
-        }
-        Err(err) => {
-            tracing::warn!(
-                card_id = %card_id,
-                run_id = %run_id,
-                error = %err,
-                "[task_dispatcher] run failed → blocked"
-            );
-            CardPatch {
-                status: Some(TaskCardStatus::Blocked),
-                blocker: Some(truncate_chars(err, EVIDENCE_MAX_CHARS)),
-                ..Default::default()
+            Err(err) => {
+                tracing::warn!(
+                    card_id = %card_id,
+                    run_id = %run_id,
+                    error = %err,
+                    "[task_dispatcher] run failed → blocked"
+                );
+                Some(CardPatch {
+                    status: Some(TaskCardStatus::Blocked),
+                    blocker: Some(truncate_chars(err, EVIDENCE_MAX_CHARS)),
+                    ..Default::default()
+                })
             }
         }
     };
 
-    if let Err(e) = ops::edit(location, card_id, patch) {
-        tracing::error!(
-            card_id = %card_id,
-            run_id = %run_id,
-            error = %e,
-            "[task_dispatcher] board write-back failed (run outcome lost from board)"
-        );
+    if let Some(patch) = patch {
+        if let Err(e) = ops::edit(location, card_id, patch) {
+            tracing::error!(
+                card_id = %card_id,
+                run_id = %run_id,
+                error = %e,
+                "[task_dispatcher] board write-back failed (run outcome lost from board)"
+            );
+        }
     }
 
     let (run_outcome, run_error, run_evidence) = match &outcome {
@@ -923,8 +960,10 @@ mod tests {
         assert!(s.contains("task-42"));
         assert!(s.contains("user-tasks"));
         assert!(s.contains("update_task"));
-        // It must NOT ask the agent to set the terminal status itself.
-        assert!(s.contains("do not need to set the final status"));
+        // It must instruct the agent to self-block (status: blocked + blocker)
+        // when it needs the user, so write_back can preserve that state.
+        assert!(s.contains("status: blocked"));
+        assert!(s.contains("blocker"));
     }
 
     #[test]
@@ -993,6 +1032,58 @@ mod tests {
             .unwrap();
         assert_eq!(card.status, TaskCardStatus::Done);
         assert!(card.evidence.iter().any(|e| e.contains("opened PR #5")));
+    }
+
+    #[test]
+    fn write_back_preserves_agent_set_blocked_on_clean_run() {
+        // The run marked its own card `blocked` (needs user input) via
+        // update_task, then ended cleanly. write_back must NOT force it to
+        // `done` — the task stays blocked, with the agent's blocker intact,
+        // awaiting the user.
+        let dir = tempfile::tempdir().unwrap();
+        let loc = board_loc(dir.path());
+        let id = ops::add(&loc, "update alan", CardPatch::default())
+            .unwrap()
+            .cards[0]
+            .id
+            .clone();
+        ops::update_status(&loc, &id, TaskCardStatus::InProgress).unwrap();
+        // Agent self-blocks mid-run, as build_progress_instruction asks it to.
+        ops::edit(
+            &loc,
+            &id,
+            CardPatch {
+                status: Some(TaskCardStatus::Blocked),
+                blocker: Some("Slack isn't connected — confirm how to reach Alan".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Run returns Ok (the turn finished) — but the card is self-blocked.
+        write_back(
+            &loc,
+            &id,
+            "run-2",
+            Ok("I checked GitHub and memory…".to_string()),
+        );
+
+        let card = ops::list(&loc)
+            .unwrap()
+            .cards
+            .into_iter()
+            .find(|c| c.id == id)
+            .unwrap();
+        assert_eq!(
+            card.status,
+            TaskCardStatus::Blocked,
+            "a clean run over a self-blocked card must stay blocked, not auto-done"
+        );
+        assert_eq!(
+            card.blocker.as_deref(),
+            Some("Slack isn't connected — confirm how to reach Alan"),
+            "the agent's blocker reason is preserved"
+        );
     }
 
     #[test]
