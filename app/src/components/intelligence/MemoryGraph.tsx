@@ -77,6 +77,13 @@ interface SimNode extends GraphNode {
   vy: number;
 }
 
+interface SimState {
+  sim: SimNode[];
+  edges: Array<[number, number]>;
+  radii: number[];
+  alpha: number;
+}
+
 // Stable empties so the worker-layout effect's deps don't change every render
 // when there's no graph yet.
 const NO_NODES: SimNode[] = [];
@@ -215,9 +222,10 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
   const userInteractedRef = useRef(false);
   // Re-frame the SVG graph from "Reset view" (set after fitToView below).
   const fitRef = useRef<() => void>(() => {});
-  // Last on-screen position per node id; read by seedSvgLayout to carry
-  // survivors over (and seed new nodes near their parent) on a data change.
-  const positionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  // Holds the current sim across renders; during the next build it still points
+  // at the OUTGOING sim, whose nodes carry the latest live coordinates (the
+  // worker / a drag mutate them in place) — read for position carry-over.
+  const liveSimRef = useRef<SimState | null>(null);
 
   const clientToGraph = useCallback(
     (clientX: number, clientY: number) => {
@@ -232,8 +240,6 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
     (e: ReactPointerEvent, n: SimNode) => {
       // Stop the background pan from also starting on this pointer down.
       e.stopPropagation();
-      stopLayoutRef.current(); // freeze worker layout — manual drag takes over
-      userInteractedRef.current = true;
       movedRef.current = false;
       const g = clientToGraph(e.clientX, e.clientY);
       if (!g) return;
@@ -246,8 +252,6 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
 
   const onBackgroundPointerDown = useCallback(
     (e: ReactPointerEvent) => {
-      stopLayoutRef.current(); // freeze worker layout on pan
-      userInteractedRef.current = true;
       movedRef.current = false;
       const vb = clientToViewBox(svgRef.current, e.clientX, e.clientY);
       if (!vb) return;
@@ -262,6 +266,12 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
     (e: ReactPointerEvent) => {
       const d = dragRef.current;
       if (!d) return;
+      // On the first real movement (not a plain click), hand the camera to the
+      // user: freeze the worker layout and suppress the settle-time auto-fit.
+      if (!movedRef.current) {
+        stopLayoutRef.current();
+        userInteractedRef.current = true;
+      }
       if (d.kind === 'node') {
         const g = clientToGraph(e.clientX, e.clientY);
         if (!g) return;
@@ -341,9 +351,15 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
   // surviving node so a live data update doesn't reshuffle the whole graph
   // (seedSvgLayout). The O(n²) relax only runs as the no-worker fallback (test
   // env); the worker settles otherwise; the Pixi path runs its own sim.
-  const sim = useMemo(() => {
+  const sim = useMemo<SimState | null>(() => {
     if (!nodes || nodes.length === 0) return null;
-    const seed = seedSvgLayout(nodes, edges, mode, positionsRef.current);
+    // Snapshot the OUTGOING graph's live coordinates so survivors carry over
+    // from where they actually are now — not a stale init/settle snapshot —
+    // even mid-settle or after a drag.
+    const prev = liveSimRef.current;
+    const prevPos = new Map<string, { x: number; y: number }>();
+    if (prev) for (const n of prev.sim) prevPos.set(n.id, { x: n.x, y: n.y });
+    const seed = seedSvgLayout(nodes, edges, mode, prevPos);
     const sim: SimNode[] = nodes.map((n, i) => ({
       ...n,
       x: seed.positions[i].x,
@@ -355,6 +371,8 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
     if (!useWebGL && !WORKER_SUPPORTED) relaxLayout(sim, seed.edges);
     return { sim, edges: seed.edges, radii, alpha: seed.reheatAlpha };
   }, [nodes, edges, mode, useWebGL]);
+  // Becomes the "previous" sim on the next build (above).
+  liveSimRef.current = sim;
 
   // Element refs for imperative position updates: while the worker streams
   // positions we write cx/cy (and line endpoints) straight to the DOM instead
@@ -379,16 +397,14 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
     setSvgVisible(sim ? Math.min(sim.sim.length, FIRST_BATCH) : 0);
   }
 
-  // Latest sim/visible read by the stable imperative applier without
+  // Latest visible count read by the stable imperative applier without
   // re-subscribing the worker every render.
-  const latestSimRef = useRef(sim);
-  latestSimRef.current = sim;
   const latestVisibleRef = useRef(svgVisible);
   latestVisibleRef.current = svgVisible;
 
   // Write current positions straight to the mounted SVG elements.
   const applyPositions = useCallback(() => {
-    const s = latestSimRef.current;
+    const s = liveSimRef.current;
     if (!s) return;
     const vis = latestVisibleRef.current;
     const ns = s.sim;
@@ -417,7 +433,7 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
   // `view` state (single source) so pan/zoom keep working; called once the
   // worker settles, unless the user already grabbed the camera.
   const fitToView = useCallback(() => {
-    const s = latestSimRef.current;
+    const s = liveSimRef.current;
     if (!s || userInteractedRef.current) return;
     const ns = s.sim;
     if (ns.length === 0) return;
@@ -447,21 +463,6 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
   }, []);
   fitRef.current = fitToView;
 
-  // Snapshot current positions by id so the next data change can carry them
-  // over (seedSvgLayout reads positionsRef). Stable for the hook/effect deps.
-  const capturePositions = useCallback(() => {
-    const s = latestSimRef.current;
-    if (!s) return;
-    const m = positionsRef.current;
-    m.clear();
-    for (const n of s.sim) m.set(n.id, { x: n.x, y: n.y });
-  }, []);
-  // On settle: snapshot final positions, then frame the graph.
-  const onSettled = useCallback(() => {
-    capturePositions();
-    fitToView();
-  }, [capturePositions, fitToView]);
-
   // Coalesce worker ticks to one DOM write per frame.
   const applyPendingRef = useRef(false);
   const scheduleApply = useCallback(() => {
@@ -486,16 +487,9 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
     SVG_CENTER,
     sim?.alpha ?? 1,
     scheduleApply,
-    onSettled
+    fitToView
   );
   stopLayoutRef.current = svgLayout.stop;
-
-  // Capture positions after each layout build so the next data change can carry
-  // them over. Covers the no-worker/test path (relaxLayout settled in the memo)
-  // and seeds the ref before the worker streams its first tick.
-  useEffect(() => {
-    capturePositions();
-  }, [sim, capturePositions]);
 
   // Ramp the rest in per-frame batches (setState only inside the rAF callback).
   useEffect(() => {

@@ -47,6 +47,9 @@ export function useSvgForceLayout(
   onSettled: () => void
 ): { drag: (index: number, x: number, y: number, fixed: boolean) => void; stop: () => void } {
   const workerRef = useRef<Worker | null>(null);
+  // Session-alive guard, shared by the message handler, the effect cleanup, and
+  // stop(); flipping it false makes any in-flight tick/end a no-op.
+  const aliveRef = useRef(false);
 
   useEffect(() => {
     if (!enabled || !WORKER_SUPPORTED || nodes.length === 0) return;
@@ -55,11 +58,14 @@ export function useSvgForceLayout(
       type: 'module',
     });
     workerRef.current = worker;
-    let alive = true;
+    aliveRef.current = true;
 
     worker.onmessage = (e: MessageEvent) => {
+      // aliveRef is flipped false by the cleanup AND by stop(), so a late
+      // tick/end from a just-stopped worker can't mutate nodes or fit.
+      if (!aliveRef.current) return;
       const msg = e.data as WorkerTickMessage | { type: 'end' };
-      if (msg.type === 'tick' && alive) {
+      if (msg.type === 'tick') {
         const pos = msg.positions;
         const n = Math.min(nodes.length, pos.length >> 1);
         for (let i = 0; i < n; i++) {
@@ -67,7 +73,7 @@ export function useSvgForceLayout(
           nodes[i].y = pos[i * 2 + 1];
         }
         onTick();
-      } else if (msg.type === 'end' && alive) {
+      } else if (msg.type === 'end') {
         onSettled();
       }
     };
@@ -82,7 +88,7 @@ export function useSvgForceLayout(
     });
 
     return () => {
-      alive = false;
+      aliveRef.current = false;
       worker.postMessage({ type: 'stop' });
       worker.terminate();
       workerRef.current = null;
@@ -93,6 +99,7 @@ export function useSvgForceLayout(
     workerRef.current?.postMessage({ type: 'drag', index, x, y, fixed });
   }, []);
   const stop = useCallback(() => {
+    aliveRef.current = false; // ignore any in-flight tick/end from this worker
     workerRef.current?.postMessage({ type: 'stop' });
     workerRef.current?.terminate();
     workerRef.current = null;
