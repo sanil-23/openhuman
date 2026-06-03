@@ -26,9 +26,9 @@ use crate::openhuman::agent::harness::definition::{AgentDefinitionRegistry, Prom
 use crate::openhuman::agent::harness::session::Agent;
 use crate::openhuman::agent::harness::subagent_runner::with_autonomous_iter_cap;
 use crate::openhuman::agent::personality_paths::PersonalityContext;
-use crate::openhuman::agent::task_board::{TaskBoardCard, TaskCardStatus};
+use crate::openhuman::agent::task_board::{TaskApprovalMode, TaskBoardCard, TaskCardStatus};
 use crate::openhuman::config::Config;
-use crate::openhuman::todos::ops::{self, BoardLocation, CardPatch};
+use crate::openhuman::todos::ops::{self, BoardLocation, CardPatch, USER_TASKS_THREAD_ID};
 use crate::openhuman::todos::runs::{self, RunLimits, RunOutcome};
 
 /// Max chars of a personality SOUL.md / MEMORY.md or skill guideline block
@@ -129,6 +129,25 @@ pub fn build_task_prompt(card: &TaskBoardCard) -> String {
     lines.join("\n")
 }
 
+/// Instruction appended to the run prompt so the autonomous turn keeps its own
+/// task card current via the `update_task` tool while it works.
+///
+/// The card is already `in_progress` (the dispatcher claimed it before
+/// spawning the run) and its terminal `done`/`blocked` state is written by
+/// [`write_back`] from the run outcome — so this asks only for *progress*
+/// updates (notes/evidence), addressed to the exact card id + board the run
+/// owns. Without the explicit `threadId` the tool would default to the
+/// `task-sources` board and miss a `user-tasks` card.
+fn build_progress_instruction(card_id: &str, thread_id: &str) -> String {
+    format!(
+        "\n\nThis task is tracked as card `{card_id}` on the `{thread_id}` board. As you make \
+         progress, call the `update_task` tool (id `{card_id}`, threadId `{thread_id}`) to keep \
+         the card current — append `notes` and `evidence` as you go so the board reflects live \
+         status. You do not need to set the final status: the system records `done`/`blocked` \
+         from your run outcome automatically."
+    )
+}
+
 /// Outcome of a dispatch attempt.
 #[derive(Debug)]
 pub enum DispatchOutcome {
@@ -161,7 +180,16 @@ pub async fn dispatch_card(
     // approval before it can run. `Ready` (already approved) bypasses. We
     // attempt the AwaitingApproval claim first so the gate is also atomic —
     // two dispatchers racing the same Todo card won't both park it.
-    if config.autonomy.require_task_plan_approval {
+    //
+    // A card explicitly marked `approval_mode = NotRequired` also bypasses the
+    // gate: it has already cleared human review (e.g. a task approved out of
+    // the `task-sources` inbox onto the `user-tasks` board, stamped
+    // `not_required` at approval time). Re-parking it under the global default
+    // would strand it on a board nobody approves from. Per-card opt-out wins.
+    if requires_plan_approval(
+        config.autonomy.require_task_plan_approval,
+        card.approval_mode.as_ref(),
+    ) {
         match ops::claim_card(
             &location,
             &card_id,
@@ -199,7 +227,14 @@ pub async fn dispatch_card(
     )
     .map_err(|e| format!("[task_dispatcher] claim rejected for {card_id}: {e}"))?;
 
-    let prompt = build_task_prompt(&fresh_card);
+    let mut prompt = build_task_prompt(&fresh_card);
+    // Tell the run which card it owns so it can post live progress via the
+    // `update_task` tool (notes/evidence) as it works. The terminal
+    // `done`/`blocked` transition is still stamped deterministically by
+    // `write_back` from the run outcome.
+    if let Some(thread_id) = location.thread_id() {
+        prompt.push_str(&build_progress_instruction(&card_id, thread_id));
+    }
 
     let run_id = uuid::Uuid::new_v4().to_string();
 
@@ -510,9 +545,19 @@ pub fn start_board_poller() {
     });
 }
 
-/// One poller tick: dispatch the highest-urgency `todo` card on the
-/// task-sources board, if any and if capacity allows. `pub(crate)` so tests can
+/// One poller tick: sweep each executor board and dispatch its highest-urgency
+/// dispatchable card, if any and if capacity allows. `pub(crate)` so tests can
 /// drive a tick without the real interval.
+///
+/// Two boards are swept, each independently (own stale-reclaim + single
+/// `in_progress` cap):
+/// - **`user-tasks`** (the kanban work board) — always swept, but only
+///   **agent-assigned** cards are run, so a human's manually-created todo is
+///   never auto-executed. This is where tasks approved out of the inbox run.
+/// - **`task-sources`** (the proactive inbox) — swept only when ingestion is
+///   enabled. With plan-approval required this only ever parks a `todo` at
+///   `awaiting_approval`; it runs a card directly only when approval is off.
+///   Kept in the sweep so its stale/wedged runs are still reclaimed.
 pub(crate) async fn poll_once() -> Result<(), String> {
     // Gate on background-AI capacity (autonomy / power / pause). Dropping the
     // permit immediately is fine: this is a "may background work start now"
@@ -525,21 +570,50 @@ pub(crate) async fn poll_once() -> Result<(), String> {
     let config = Config::load_or_init()
         .await
         .map_err(|e| format!("load config: {e:#}"))?;
-    if !config.task_sources.enabled {
-        return Ok(());
+
+    // (board location, agent_assigned_only). user-tasks first — it's the real
+    // work board; task-sources is only included for parking + reclaim.
+    let mut boards: Vec<(BoardLocation, bool)> = vec![(
+        BoardLocation::Thread {
+            workspace_dir: config.workspace_dir.clone(),
+            thread_id: USER_TASKS_THREAD_ID.to_string(),
+        },
+        true,
+    )];
+    if config.task_sources.enabled {
+        boards.push((
+            BoardLocation::Thread {
+                workspace_dir: config.workspace_dir.clone(),
+                thread_id: crate::openhuman::task_sources::TASK_SOURCES_THREAD_ID.to_string(),
+            },
+            false,
+        ));
     }
 
-    let location = BoardLocation::Thread {
-        workspace_dir: config.workspace_dir.clone(),
-        thread_id: crate::openhuman::task_sources::TASK_SOURCES_THREAD_ID.to_string(),
-    };
+    for (location, agent_assigned_only) in boards {
+        if let Err(e) = poll_board(&location, agent_assigned_only).await {
+            tracing::warn!(
+                thread_id = ?location.thread_id(),
+                error = %e,
+                "[task_dispatcher:poller] board sweep failed (continuing)"
+            );
+        }
+    }
+    Ok(())
+}
 
+/// Sweep one board: reclaim stale runs, then (unless one is already running)
+/// dispatch its highest-urgency dispatchable card. When `agent_assigned_only`
+/// is set, only cards with an `assigned_agent` are eligible — the guard that
+/// keeps the poller off a human's manual `user-tasks` cards.
+async fn poll_board(location: &BoardLocation, agent_assigned_only: bool) -> Result<(), String> {
     // Reclaim stale/wedged runs before looking for new work. Reclaimed
     // cards move back to `todo` (re-dispatchable) so they appear in the
     // snapshot below and can be picked up in the same tick.
-    match runs::reclaim_stale(&location, &RunLimits::default()) {
+    match runs::reclaim_stale(location, &RunLimits::default()) {
         Ok(result) if result.reclaimed_count > 0 || result.blocked_count > 0 => {
             tracing::info!(
+                thread_id = ?location.thread_id(),
                 reclaimed = result.reclaimed_count,
                 blocked = result.blocked_count,
                 "[task_dispatcher:poller] stale runs reclaimed"
@@ -547,6 +621,7 @@ pub(crate) async fn poll_once() -> Result<(), String> {
         }
         Err(e) => {
             tracing::warn!(
+                thread_id = ?location.thread_id(),
                 error = %e,
                 "[task_dispatcher:poller] stale reclaim failed (continuing)"
             );
@@ -554,7 +629,7 @@ pub(crate) async fn poll_once() -> Result<(), String> {
         _ => {}
     }
 
-    let snapshot = ops::list(&location)?;
+    let snapshot = ops::list(location)?;
 
     // `enforce_single_in_progress` caps the board at one running card, so if
     // one is already in progress there's nothing for this tick to claim.
@@ -566,26 +641,39 @@ pub(crate) async fn poll_once() -> Result<(), String> {
         return Ok(());
     }
 
-    let Some(card) = pick_next_todo(&snapshot.cards) else {
+    let Some(card) = pick_next_todo(&snapshot.cards, agent_assigned_only) else {
         return Ok(());
     };
 
     tracing::info!(
         card_id = %card.id,
+        thread_id = ?location.thread_id(),
         urgency = card_urgency(&card),
-        "[task_dispatcher:poller] dispatching highest-urgency todo card"
+        agent_assigned_only,
+        "[task_dispatcher:poller] dispatching highest-urgency dispatchable card"
     );
-    dispatch_card(location, card).await.map(|_| ())
+    dispatch_card(location.clone(), card).await.map(|_| ())
 }
 
 /// Highest-urgency dispatchable card (`todo` or approved `ready`; urgency from
 /// `source_metadata.urgency`, default 0.0; ties broken toward the lower board
 /// `order`). Returns a clone. `dispatch_card` then either runs a `ready` card
 /// or parks a `todo` one for approval, per the autonomy setting.
-fn pick_next_todo(cards: &[TaskBoardCard]) -> Option<TaskBoardCard> {
+///
+/// When `agent_assigned_only` is set, cards without an `assigned_agent` are
+/// excluded — used on the `user-tasks` board so the poller runs only
+/// agent-generated tasks and never picks up a human's manually-created card.
+fn pick_next_todo(cards: &[TaskBoardCard], agent_assigned_only: bool) -> Option<TaskBoardCard> {
     cards
         .iter()
         .filter(|c| matches!(c.status, TaskCardStatus::Todo | TaskCardStatus::Ready))
+        .filter(|c| {
+            !agent_assigned_only
+                || c.assigned_agent
+                    .as_deref()
+                    .map(|a| !a.trim().is_empty())
+                    .unwrap_or(false)
+        })
         .max_by(|a, b| {
             card_urgency(a)
                 .partial_cmp(&card_urgency(b))
@@ -595,6 +683,18 @@ fn pick_next_todo(cards: &[TaskBoardCard]) -> Option<TaskBoardCard> {
                 .then(b.order.cmp(&a.order))
         })
         .cloned()
+}
+
+/// Whether a card must be parked at `awaiting_approval` before it can run.
+///
+/// The global `require_task_plan_approval` setting applies *unless* the card is
+/// explicitly marked `approval_mode = NotRequired` — a per-card opt-out for
+/// tasks that have already cleared human review (e.g. approved out of the
+/// `task-sources` inbox onto `user-tasks`). Per-card opt-out wins over the
+/// global default; without this, an already-approved card would be re-parked
+/// and stranded.
+fn requires_plan_approval(global_required: bool, approval_mode: Option<&TaskApprovalMode>) -> bool {
+    global_required && approval_mode != Some(&TaskApprovalMode::NotRequired)
 }
 
 fn card_urgency(card: &TaskBoardCard) -> f64 {
@@ -728,7 +828,7 @@ mod tests {
             card_with("c", TaskCardStatus::Todo, Some(0.8), 2),
             card_with("d", TaskCardStatus::Todo, None, 3),
         ];
-        let picked = pick_next_todo(&cards).expect("a todo card is available");
+        let picked = pick_next_todo(&cards, false).expect("a todo card is available");
         assert_eq!(
             picked.id, "c",
             "highest-urgency todo wins, done card ignored"
@@ -741,13 +841,13 @@ mod tests {
             card_with("late", TaskCardStatus::Todo, Some(0.5), 5),
             card_with("early", TaskCardStatus::Todo, Some(0.5), 2),
         ];
-        assert_eq!(pick_next_todo(&cards).unwrap().id, "early");
+        assert_eq!(pick_next_todo(&cards, false).unwrap().id, "early");
     }
 
     #[test]
     fn poller_returns_none_when_no_todo_cards() {
         let cards = vec![card_with("a", TaskCardStatus::Done, Some(0.9), 0)];
-        assert!(pick_next_todo(&cards).is_none());
+        assert!(pick_next_todo(&cards, false).is_none());
     }
 
     #[test]
@@ -759,7 +859,7 @@ mod tests {
             card_with("rej", TaskCardStatus::Rejected, Some(0.95), 1),
             card_with("ready", TaskCardStatus::Ready, Some(0.5), 2),
         ];
-        assert_eq!(pick_next_todo(&cards).unwrap().id, "ready");
+        assert_eq!(pick_next_todo(&cards, false).unwrap().id, "ready");
     }
 
     #[test]
@@ -768,7 +868,63 @@ mod tests {
             card_with("ready-low", TaskCardStatus::Ready, Some(0.3), 0),
             card_with("todo-high", TaskCardStatus::Todo, Some(0.9), 1),
         ];
-        assert_eq!(pick_next_todo(&cards).unwrap().id, "todo-high");
+        assert_eq!(pick_next_todo(&cards, false).unwrap().id, "todo-high");
+    }
+
+    #[test]
+    fn poller_agent_only_skips_unassigned_cards() {
+        // On the user-tasks board we run only agent-assigned cards. A human's
+        // manual todo (no assigned_agent) must be skipped even at high urgency.
+        let mut human = card_with("human", TaskCardStatus::Todo, Some(0.99), 0);
+        human.assigned_agent = None;
+        let mut agent = card_with("agent", TaskCardStatus::Todo, Some(0.20), 1);
+        agent.assigned_agent = Some("orchestrator".into());
+        let cards = vec![human, agent];
+
+        // Agent-only: the lower-urgency assigned card wins; the human card is invisible.
+        assert_eq!(pick_next_todo(&cards, true).unwrap().id, "agent");
+        // Unfiltered (task-sources behaviour): highest urgency wins regardless.
+        assert_eq!(pick_next_todo(&cards, false).unwrap().id, "human");
+    }
+
+    #[test]
+    fn poller_agent_only_returns_none_when_all_unassigned() {
+        let mut a = card_with("a", TaskCardStatus::Todo, Some(0.9), 0);
+        a.assigned_agent = None;
+        let mut b = card_with("b", TaskCardStatus::Todo, Some(0.5), 1);
+        b.assigned_agent = Some("   ".into()); // blank handle is not "assigned"
+        let cards = vec![a, b];
+        assert!(pick_next_todo(&cards, true).is_none());
+    }
+
+    #[test]
+    fn approval_gate_respects_global_and_per_card_optout() {
+        // Global off → never park.
+        assert!(!requires_plan_approval(false, None));
+        assert!(!requires_plan_approval(
+            false,
+            Some(&TaskApprovalMode::Required)
+        ));
+        // Global on → park, unless the card opts out via NotRequired.
+        assert!(requires_plan_approval(true, None));
+        assert!(requires_plan_approval(
+            true,
+            Some(&TaskApprovalMode::Required)
+        ));
+        assert!(!requires_plan_approval(
+            true,
+            Some(&TaskApprovalMode::NotRequired)
+        ));
+    }
+
+    #[test]
+    fn progress_instruction_names_card_thread_and_tool() {
+        let s = build_progress_instruction("task-42", "user-tasks");
+        assert!(s.contains("task-42"));
+        assert!(s.contains("user-tasks"));
+        assert!(s.contains("update_task"));
+        // It must NOT ask the agent to set the terminal status itself.
+        assert!(s.contains("do not need to set the final status"));
     }
 
     #[test]

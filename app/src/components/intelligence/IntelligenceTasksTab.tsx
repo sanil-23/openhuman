@@ -397,7 +397,7 @@ export default function IntelligenceTasksTab() {
               status: 'todo',
               objective: draft.objective,
               notes: draft.notes,
-              assignedAgent: 'agent_coder',
+              assignedAgent: 'orchestrator',
               approvalMode: 'not_required',
               plan: draft.plan,
               allowedTools: draft.allowedTools,
