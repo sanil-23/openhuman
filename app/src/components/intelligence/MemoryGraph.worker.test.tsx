@@ -148,25 +148,32 @@ describe('<MemoryGraph /> worker-backed SVG path', () => {
     ).not.toThrow();
   });
 
-  it('handles node drag, wheel zoom, and reset view', () => {
+  it('pins the node in the worker on a node drag (live physics, not a freeze)', () => {
+    const { container } = render(<MemoryGraph nodes={treeNodes(3)} edges={[]} mode="tree" />);
+    const svg = container.querySelector('[data-testid="memory-graph-svg"]') as Element;
+    withCTM(svg);
+    const w = last();
+
+    const node = container.querySelector('[data-testid="memory-graph-node-c0"]') as Element;
+    fireEvent.pointerDown(node, { clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(svg, { clientX: 90, clientY: 90 });
+    // Worker keeps running and is told to pin the node — it is NOT terminated.
+    expect(w.terminated).toBe(false);
+    const pin = w.posted.find(m => m.type === 'drag' && m.fixed === true);
+    expect(pin).toBeTruthy();
+
+    // Releasing unpins so physics resumes for that node.
+    fireEvent.pointerUp(svg, { clientX: 90, clientY: 90 });
+    expect(w.posted.some(m => m.type === 'drag' && m.fixed === false)).toBe(true);
+  });
+
+  it('handles wheel zoom and reset view without throwing', () => {
     const { container, getByTestId } = render(
       <MemoryGraph nodes={treeNodes(3)} edges={[]} mode="tree" />
     );
     const svg = container.querySelector('[data-testid="memory-graph-svg"]') as Element;
     withCTM(svg);
-    const w = last();
-
-    // Drag a node → freezes layout and repositions the node.
-    const node = container.querySelector('[data-testid="memory-graph-node-c0"]') as Element;
-    fireEvent.pointerDown(node, { clientX: 20, clientY: 20 });
-    fireEvent.pointerMove(svg, { clientX: 90, clientY: 90 });
-    fireEvent.pointerUp(svg, { clientX: 90, clientY: 90 });
-    expect(w.terminated).toBe(true);
-
-    // Wheel zoom is a real interaction (no throw).
     expect(() => fireEvent.wheel(svg, { deltaY: -120, clientX: 50, clientY: 50 })).not.toThrow();
-
-    // Reset view re-frames.
     expect(() => fireEvent.click(getByTestId('memory-graph-reset-view'))).not.toThrow();
   });
 });

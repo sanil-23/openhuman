@@ -207,16 +207,21 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
   const [pixiFailed, setPixiFailed] = useState(false);
   const useWebGL = HAS_WEBGL && !pixiFailed;
   const dragRef = useRef<
-    | { kind: 'node'; node: SimNode; dx: number; dy: number }
+    | { kind: 'node'; node: SimNode; index: number; dx: number; dy: number }
     | { kind: 'pan'; vbStartX: number; vbStartY: number; tx0: number; ty0: number }
     | null
   >(null);
   // True once the pointer moved during the current gesture — guards the
   // node click so a drag doesn't also open the summary file.
   const movedRef = useRef(false);
-  // Halts the SVG layout worker once the user grabs a node/background, so its
-  // streamed positions stop fighting the manual drag. Set after the hook below.
+  // Halts the SVG layout worker (background pan = camera takeover). Set after
+  // the hook below.
   const stopLayoutRef = useRef<() => void>(() => {});
+  // Pins/unpins a node in the worker during a node drag so physics keeps
+  // running and neighbours re-flow around it. Set after the hook below.
+  const dragLayoutRef = useRef<(index: number, x: number, y: number, fixed: boolean) => void>(
+    () => {}
+  );
   // Set once the user grabs the camera, so the settle-time auto-fit doesn't
   // yank the view out from under them.
   const userInteractedRef = useRef(false);
@@ -237,14 +242,14 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
   );
 
   const onNodePointerDown = useCallback(
-    (e: ReactPointerEvent, n: SimNode) => {
+    (e: ReactPointerEvent, n: SimNode, index: number) => {
       // Stop the background pan from also starting on this pointer down.
       e.stopPropagation();
       movedRef.current = false;
       const g = clientToGraph(e.clientX, e.clientY);
       if (!g) return;
       (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-      dragRef.current = { kind: 'node', node: n, dx: g.x - n.x, dy: g.y - n.y };
+      dragRef.current = { kind: 'node', node: n, index, dx: g.x - n.x, dy: g.y - n.y };
       setGrabbing(true);
     },
     [clientToGraph]
@@ -266,22 +271,25 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
     (e: ReactPointerEvent) => {
       const d = dragRef.current;
       if (!d) return;
+      const firstMove = !movedRef.current;
       // On the first real movement (not a plain click), hand the camera to the
-      // user: freeze the worker layout and suppress the settle-time auto-fit.
-      if (!movedRef.current) {
-        stopLayoutRef.current();
-        userInteractedRef.current = true;
-      }
+      // user so the settle-time auto-fit doesn't yank the view.
+      if (firstMove) userInteractedRef.current = true;
       if (d.kind === 'node') {
         const g = clientToGraph(e.clientX, e.clientY);
         if (!g) return;
         d.node.x = g.x - d.dx;
         d.node.y = g.y - d.dy;
         movedRef.current = true;
+        // Pin the node in the worker: physics keeps running so neighbours
+        // re-flow around it (mirrors the WebGL path), then repaint locally.
+        dragLayoutRef.current(d.index, d.node.x, d.node.y, true);
         bumpTick();
       } else {
         const vb = clientToViewBox(svgRef.current, e.clientX, e.clientY);
         if (!vb) return;
+        // Panning is a camera takeover — freeze the layout worker.
+        if (firstMove) stopLayoutRef.current();
         movedRef.current = true;
         setView(v => ({ ...v, tx: d.tx0 + (vb.x - d.vbStartX), ty: d.ty0 + (vb.y - d.vbStartY) }));
       }
@@ -290,6 +298,11 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
   );
 
   const endDrag = useCallback(() => {
+    const d = dragRef.current;
+    // Release the worker pin so physics resumes for the dragged node.
+    if (d && d.kind === 'node' && movedRef.current) {
+      dragLayoutRef.current(d.index, d.node.x, d.node.y, false);
+    }
     dragRef.current = null;
     setGrabbing(false);
   }, []);
@@ -490,6 +503,7 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
     fitToView
   );
   stopLayoutRef.current = svgLayout.stop;
+  dragLayoutRef.current = svgLayout.drag;
 
   // Ramp the rest in per-frame batches (setState only inside the rAF callback).
   useEffect(() => {
@@ -653,7 +667,7 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
                     stroke={isHover ? '#0f172a' : '#ffffff'}
                     strokeWidth={isHover ? 1.4 : 0.8}
                     style={{ cursor: grabbing ? 'grabbing' : 'pointer', filter: glow }}
-                    onPointerDown={e => onNodePointerDown(e, n)}
+                    onPointerDown={e => onNodePointerDown(e, n, i)}
                     onMouseEnter={() => setHovered(n)}
                     onClick={() => {
                       // A drag ends with a click event too — skip the open
