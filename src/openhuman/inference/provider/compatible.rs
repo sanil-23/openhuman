@@ -41,6 +41,16 @@ use compatible_types::{
     ResponsesRequest, StreamChunkResponse, StreamingToolCall, ToolCall,
 };
 
+/// `frequency_penalty` applied to every chat-completions request.
+///
+/// Autoregressive models have a self-reinforcing bias toward repeating spans
+/// already in their context; with no penalty a momentary repeat can spiral into
+/// the same line emitted until the output-token cap (degenerate decoding). A
+/// small positive penalty damps that loop without harming coherence. Sent on
+/// real requests only (test fixtures pass `None`); skipped in serialisation when
+/// `None` so providers that don't accept the field are unaffected.
+const CHAT_FREQUENCY_PENALTY: f64 = 0.3;
+
 /// A provider that speaks the OpenAI-compatible chat completions API.
 /// Used by: Venice, Vercel AI Gateway, Cloudflare AI Gateway, Moonshot,
 /// Synthetic, `OpenCode` Zen, `Z.AI`, `GLM`, `MiniMax`, Bedrock, Qianfan, Groq, Mistral, `xAI`, etc.
@@ -1914,6 +1924,7 @@ impl Provider for OpenAiCompatibleProvider {
                     include_usage: true,
                 }),
                 options: self.build_ollama_options(),
+                frequency_penalty: Some(CHAT_FREQUENCY_PENALTY),
             };
             let stream_dump_seq = reserve_dump_seq();
             dump_prompt_if_enabled(&self.name, model, stream_dump_seq, &native_request);
@@ -1985,6 +1996,7 @@ impl Provider for OpenAiCompatibleProvider {
             thread_id,
             stream_options: None,
             options: self.build_ollama_options(),
+            frequency_penalty: Some(CHAT_FREQUENCY_PENALTY),
         };
         let dump_seq = reserve_dump_seq();
         dump_prompt_if_enabled(&self.name, model, dump_seq, &native_request);
