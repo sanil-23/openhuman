@@ -193,12 +193,15 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
   const [previewingPath, setPreviewingPath] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  // Pan / zoom transform applied to the graph group, plus the live drag
-  // state. Node positions live in the memoised `sim` buffer and are
-  // mutated in place during a node drag; `bumpTick` forces a re-render so
-  // the moved node repaints without re-running the physics.
+  // Pan / zoom transform applied to the graph group plus the live drag state.
+  // Node positions live in the memoised `sim` buffer; during a drag the worker
+  // streams them back and we write them to the DOM imperatively (no re-render).
   const [view, setView] = useState({ tx: 0, ty: 0, scale: 1 });
-  const [, bumpTick] = useReducer((c: number) => c + 1, 0);
+  // Element refs for imperative position updates: while the worker streams
+  // positions we write cx/cy (and line endpoints) straight to the DOM instead
+  // of re-rendering thousands of elements through React.
+  const circleEls = useRef<(SVGCircleElement | null)[]>([]);
+  const lineEls = useRef<(SVGLineElement | null)[]>([]);
   const [grabbing, setGrabbing] = useState(false);
   // Bumped by "Reset view" — the Pixi renderer watches it to recentre.
   const [resetSignal, bumpReset] = useReducer((c: number) => c + 1, 0);
@@ -279,9 +282,15 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
         d.node.y = g.y - d.dy;
         movedRef.current = true;
         // Pin the node in the worker: physics keeps running so neighbours
-        // re-flow around it (mirrors the WebGL path), then repaint locally.
+        // re-flow around it (mirrors the WebGL path). Update just the dragged
+        // circle imperatively for instant feedback — no full React re-render
+        // (neighbours repaint via the worker stream / applyPositions).
         dragLayoutRef.current(d.index, d.node.x, d.node.y, true);
-        bumpTick();
+        const el = circleEls.current[d.index];
+        if (el) {
+          el.setAttribute('cx', String(d.node.x));
+          el.setAttribute('cy', String(d.node.y));
+        }
       } else {
         const vb = clientToViewBox(svgRef.current, e.clientX, e.clientY);
         if (!vb) return;
@@ -382,12 +391,6 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
   }, [nodes, edges, mode, useWebGL]);
   // Becomes the "previous" sim on the next build (above).
   liveSimRef.current = sim;
-
-  // Element refs for imperative position updates: while the worker streams
-  // positions we write cx/cy (and line endpoints) straight to the DOM instead
-  // of re-rendering up to 10k elements through React every frame.
-  const circleEls = useRef<(SVGCircleElement | null)[]>([]);
-  const lineEls = useRef<(SVGLineElement | null)[]>([]);
 
   // Progressive DOM mount for the SVG path: reveal nodes in per-frame batches
   // so a large graph never blocks building thousands of elements in one commit.
