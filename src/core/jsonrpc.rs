@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Query, State, WebSocketUpgrade};
+use axum::extract::{DefaultBodyLimit, Query, State, WebSocketUpgrade};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -846,6 +846,14 @@ async fn dictation_ws_handler(ws: WebSocketUpgrade) -> Response {
     })
 }
 
+/// Maximum accepted request-body size for the core HTTP server (64 MiB).
+///
+/// Sized to comfortably hold a `channel_web_chat` turn carrying the composer's
+/// maximum image payload — 4 × 8 MiB raw ≈ 43 MiB once base64-encoded into
+/// `[IMAGE:data:…]` markers — plus message text and JSON-RPC envelope overhead.
+/// Axum's 2 MiB default would otherwise reject any image attachment (#3205).
+const MAX_RPC_BODY_BYTES: usize = 64 * 1024 * 1024;
+
 /// Builds the main Axum router for the core HTTP server.
 ///
 /// Includes routes for health, schema, SSE events, JSON-RPC, and Telegram auth.
@@ -870,6 +878,16 @@ pub fn build_core_http_router(socketio_enabled: bool) -> Router {
         // OpenAI-compatible inference endpoint (/v1/chat/completions, /v1/models)
         .nest("/v1", crate::openhuman::inference::http::router())
         .fallback(not_found_handler)
+        // Raise the request-body cap above Axum's 2 MiB default. Chat image
+        // attachments are inlined into the JSON-RPC body as base64 `data:`
+        // URIs (`channel_web_chat`), and the composer permits up to
+        // ATTACHMENT_MAX_IMAGES (4) × ATTACHMENT_MAX_SIZE_BYTES (8 MiB) of raw
+        // image ≈ 43 MiB once base64-encoded. Without this the whole turn was
+        // rejected at the local RPC boundary with "failed to buffer the request
+        // body: length limit exceeded" before anything reached the provider
+        // (issue #3205). The server binds to 127.0.0.1 behind a per-launch
+        // bearer, so a generous localhost cap is safe.
+        .layer(DefaultBodyLimit::max(MAX_RPC_BODY_BYTES))
         .layer(middleware::from_fn(http_request_log_middleware))
         .layer(middleware::from_fn(crate::core::auth::rpc_auth_middleware))
         .layer(middleware::from_fn(cors_middleware))

@@ -25,7 +25,129 @@ pub(crate) struct ApiChatRequest {
 #[derive(Debug, Serialize)]
 pub(crate) struct Message {
     pub(crate) role: String,
-    pub(crate) content: String,
+    pub(crate) content: MessageContent,
+}
+
+/// OpenAI Chat Completions message `content` — a union of a plain string
+/// (text-only, the overwhelming majority of messages) and an array of typed
+/// parts when the message carries image attachments.
+///
+/// Serialises with `#[serde(untagged)]` so the wire shape matches the OpenAI
+/// contract exactly: a bare JSON string for text, or a
+/// `[{ "type": "text", … }, { "type": "image_url", … }]` array for multimodal
+/// messages. Text-only requests stay byte-identical to the legacy wire shape,
+/// so this change is transparent for every non-attachment turn.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub(crate) enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+/// One element of a multimodal `content` array.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub(crate) enum ContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrl },
+}
+
+/// OpenAI `image_url` payload. `url` accepts either a base64 `data:` URI (what
+/// the chat composer produces) or a remote `https://` link.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ImageUrl {
+    pub(crate) url: String,
+}
+
+/// `[IMAGE:<data-uri>]` marker prefix. Mirrors
+/// [`crate::openhuman::agent::multimodal`] — the agent harness embeds image
+/// attachments as these markers inside the message text, and the provider
+/// layer promotes them back into structured `image_url` parts at the wire
+/// boundary. Kept local to avoid a provider→agent dependency cycle.
+const IMAGE_MARKER_PREFIX: &str = "[IMAGE:";
+
+impl MessageContent {
+    /// Build message content from a raw chat-message string, promoting any
+    /// embedded `[IMAGE:<data-uri>]` markers into structured `image_url`
+    /// parts. Returns the plain-string [`MessageContent::Text`] arm when no
+    /// markers are present, so text-only messages are unchanged on the wire.
+    pub(crate) fn from_chat_text(content: &str) -> Self {
+        let (text, images) = split_image_markers(content);
+        if images.is_empty() {
+            // No attachments — preserve the exact original string (markerless
+            // content is returned verbatim by `split_image_markers`, but be
+            // explicit so future marker-format tweaks can't alter text turns).
+            return MessageContent::Text(content.to_string());
+        }
+        let mut parts = Vec::with_capacity(images.len() + 1);
+        if !text.is_empty() {
+            parts.push(ContentPart::Text { text });
+        }
+        for url in images {
+            parts.push(ContentPart::ImageUrl {
+                image_url: ImageUrl { url },
+            });
+        }
+        MessageContent::Parts(parts)
+    }
+}
+
+impl From<String> for MessageContent {
+    fn from(value: String) -> Self {
+        MessageContent::Text(value)
+    }
+}
+
+impl From<&str> for MessageContent {
+    fn from(value: &str) -> Self {
+        MessageContent::Text(value.to_string())
+    }
+}
+
+/// Split `[IMAGE:<data-uri>]` markers out of a message string, returning the
+/// trimmed text remainder and the ordered list of image references.
+///
+/// Mirrors `crate::openhuman::agent::multimodal::parse_image_markers` (the
+/// canonical parser used for counting/normalisation). The format is a stable
+/// contract between the two layers; the provider-side copy exists only because
+/// `provider` sits below `agent` in the dependency graph.
+fn split_image_markers(content: &str) -> (String, Vec<String>) {
+    let mut refs = Vec::new();
+    let mut cleaned = String::with_capacity(content.len());
+    let mut cursor = 0usize;
+
+    while let Some(rel_start) = content[cursor..].find(IMAGE_MARKER_PREFIX) {
+        let start = cursor + rel_start;
+        cleaned.push_str(&content[cursor..start]);
+
+        let marker_start = start + IMAGE_MARKER_PREFIX.len();
+        let Some(rel_end) = content[marker_start..].find(']') else {
+            // Unterminated marker — emit the rest verbatim and stop.
+            cleaned.push_str(&content[start..]);
+            cursor = content.len();
+            break;
+        };
+
+        let end = marker_start + rel_end;
+        let candidate = content[marker_start..end].trim();
+
+        if candidate.is_empty() {
+            // `[IMAGE:]` with no payload — keep the literal text, skip the ref.
+            cleaned.push_str(&content[start..=end]);
+        } else {
+            refs.push(candidate.to_string());
+        }
+
+        cursor = end + 1;
+    }
+
+    if cursor < content.len() {
+        cleaned.push_str(&content[cursor..]);
+    }
+
+    (cleaned.trim().to_string(), refs)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -86,7 +208,7 @@ pub(crate) struct OpenAiStreamOptions {
 pub(crate) struct NativeMessage {
     pub(crate) role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) content: Option<String>,
+    pub(crate) content: Option<MessageContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

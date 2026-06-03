@@ -130,7 +130,12 @@ impl Provider for OpenHumanBackendProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             native_tool_calling: true,
-            vision: false,
+            // The hosted OpenHuman backend proxies to vision-capable models and
+            // accepts the standard OpenAI `image_url` content-array form that
+            // the provider now emits (issue #3205). Declaring vision support
+            // lets chat image attachments pass the agent-loop capability gate
+            // instead of failing with a generic error before they're ever sent.
+            vision: true,
         }
     }
 
