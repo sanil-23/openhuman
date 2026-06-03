@@ -107,21 +107,21 @@ describe('<MemoryGraph /> worker-backed SVG path', () => {
     expect(g?.getAttribute('transform')).toMatch(/translate\(.*\) scale\(/);
   });
 
-  it('freezes the worker on a drag, but NOT on a plain click', () => {
+  it('keeps the worker running on background pan (camera-only, WebGL parity)', () => {
     const { container } = render(<MemoryGraph nodes={treeNodes(3)} edges={[]} mode="tree" />);
     const svg = container.querySelector('[data-testid="memory-graph-svg"]') as Element;
     withCTM(svg);
     const w = last();
 
-    // Plain click (down + up, no move) must not stop layout.
+    // A plain click does nothing, and panning the background no longer stops
+    // the layout — the simulation keeps running underneath, like the WebGL path.
     fireEvent.pointerDown(svg, { clientX: 10, clientY: 10 });
     fireEvent.pointerUp(svg, { clientX: 10, clientY: 10 });
     expect(w.terminated).toBe(false);
 
-    // Drag (down + move) hands the camera over → stop().
     fireEvent.pointerDown(svg, { clientX: 10, clientY: 10 });
     fireEvent.pointerMove(svg, { clientX: 80, clientY: 80 });
-    expect(w.terminated).toBe(true);
+    expect(w.terminated).toBe(false);
   });
 
   it('reheats gently and carries positions over on an incremental update', () => {

@@ -131,14 +131,18 @@ ctx.onmessage = (e: MessageEvent) => {
     const n = nodes[msg.index];
     if (n) {
       if (msg.fixed) {
+        const freshGrab = n.fx == null;
         n.fx = msg.x;
         n.fy = msg.y;
+        // Match the WebGL/Pixi reheat profile: 0.3 on grab, hold ≥0.1 while
+        // dragging so neighbours re-flow with the same energy.
+        if (sim) sim.alpha(freshGrab ? 0.3 : Math.max(sim.alpha(), 0.1));
       } else {
         n.fx = null;
         n.fy = null;
+        if (sim) sim.alpha(Math.max(sim.alpha(), 0.1)); // let it settle on release
       }
     }
-    if (sim) sim.alpha(Math.max(sim.alpha(), 0.2));
     if (!timer) loop();
   } else if (msg.type === 'stop') {
     stop();

@@ -45,7 +45,7 @@ export function useSvgForceLayout(
   alpha: number,
   onTick: () => void,
   onSettled: () => void
-): { drag: (index: number, x: number, y: number, fixed: boolean) => void; stop: () => void } {
+): { drag: (index: number, x: number, y: number, fixed: boolean) => void } {
   const workerRef = useRef<Worker | null>(null);
   // Session-alive guard, shared by the message handler, the effect cleanup, and
   // stop(); flipping it false makes any in-flight tick/end a no-op.
@@ -98,12 +98,6 @@ export function useSvgForceLayout(
   const drag = useCallback((index: number, x: number, y: number, fixed: boolean) => {
     workerRef.current?.postMessage({ type: 'drag', index, x, y, fixed });
   }, []);
-  const stop = useCallback(() => {
-    aliveRef.current = false; // ignore any in-flight tick/end from this worker
-    workerRef.current?.postMessage({ type: 'stop' });
-    workerRef.current?.terminate();
-    workerRef.current = null;
-  }, []);
 
-  return { drag, stop };
+  return { drag };
 }

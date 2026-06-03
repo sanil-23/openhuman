@@ -214,9 +214,6 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
   // True once the pointer moved during the current gesture — guards the
   // node click so a drag doesn't also open the summary file.
   const movedRef = useRef(false);
-  // Halts the SVG layout worker (background pan = camera takeover). Set after
-  // the hook below.
-  const stopLayoutRef = useRef<() => void>(() => {});
   // Pins/unpins a node in the worker during a node drag so physics keeps
   // running and neighbours re-flow around it. Set after the hook below.
   const dragLayoutRef = useRef<(index: number, x: number, y: number, fixed: boolean) => void>(
@@ -288,8 +285,7 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
       } else {
         const vb = clientToViewBox(svgRef.current, e.clientX, e.clientY);
         if (!vb) return;
-        // Panning is a camera takeover — freeze the layout worker.
-        if (firstMove) stopLayoutRef.current();
+        // Pan is camera-only — the layout worker keeps running (WebGL parity).
         movedRef.current = true;
         setView(v => ({ ...v, tx: d.tx0 + (vb.x - d.vbStartX), ty: d.ty0 + (vb.y - d.vbStartY) }));
       }
@@ -502,7 +498,6 @@ export function MemoryGraph({ nodes, edges, mode, emptyHint }: MemoryGraphProps)
     scheduleApply,
     fitToView
   );
-  stopLayoutRef.current = svgLayout.stop;
   dragLayoutRef.current = svgLayout.drag;
 
   // Ramp the rest in per-frame batches (setState only inside the rAF callback).
