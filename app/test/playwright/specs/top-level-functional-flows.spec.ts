@@ -44,9 +44,18 @@ test.describe('Top-level functional flows', () => {
     const created = workflows.workflows?.find(workflow => workflow.name === name);
     expect(created?.id).toBeTruthy();
 
-    await page.getByTestId(`workflow-card-${created!.id}-delete`).click();
-    await expect(page.getByRole('alertdialog')).toBeVisible();
-    await page.getByTestId('wf-delete-confirm-btn').click();
+    // Creating navigates to the runner page locked to the new workflow, so
+    // return to the Workflows list to delete it. The delete action lives in
+    // the card's "More actions" menu.
+    await page.goto('/#/workflows');
+    await waitForAppReady(page);
+    await dismissWalkthroughIfPresent(page);
+
+    const card = page.getByTestId(`workflow-card-${created!.id}`);
+    await card.getByTitle('More actions').click();
+    await page.getByTestId(`workflow-uninstall-${created!.id}`).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await page.getByTestId('uninstall-skill-confirm').click();
     await expect(page.getByText(name)).toHaveCount(0, { timeout: 15_000 });
   });
 
