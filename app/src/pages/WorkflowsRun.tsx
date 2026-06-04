@@ -21,12 +21,17 @@ export default function WorkflowsRun() {
     <div className="min-h-full flex flex-col">
       <div className="flex-1 flex items-start justify-center p-4 pt-6">
         <div className="w-full max-w-3xl space-y-4">
-          {/* Page header with a "back to Connections" affordance so the
-              user can always retreat without clicking the bottom-tab. */}
+          {/* Back goes one layer up to wherever the runner was opened from
+              (e.g. the Workflows tab via a workflow's Run/Schedule action),
+              not a hard-coded route. Param syncing uses `replace`, so history
+              isn't polluted and `-1` lands on the originating page. Falls back
+              to the Workflows tab on a cold deep-link with no history. */}
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => navigate('/skills')}
+              onClick={() =>
+                window.history.length > 1 ? navigate(-1) : navigate('/intelligence?tab=workflows')
+              }
               aria-label={t('common.back')}
               className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-stone-600 dark:text-neutral-300 hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors">
               <span aria-hidden="true">←</span> {t('common.back')}
