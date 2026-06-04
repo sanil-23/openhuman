@@ -1,14 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MemoryWorkspace } from './MemoryWorkspace';
 import { memoryTreeGraphExport } from '../../utils/tauriCommands';
+import { MemoryWorkspace } from './MemoryWorkspace';
 
 // Stub the i18n hook and the heavy child panels so the test renders just the
 // MemoryWorkspace shell (graph fetch effect + the refresh control + poll).
-vi.mock('../../lib/i18n/I18nContext', () => ({
-  useT: () => ({ t: (k: string) => k }),
-}));
+vi.mock('../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (k: string) => k }) }));
 vi.mock('./MemoryGraph', () => ({ MemoryGraph: () => null }));
 vi.mock('./MemorySourcesRegistry', () => ({ MemorySourcesRegistry: () => null }));
 vi.mock('./MemoryTreeStatusPanel', () => ({ MemoryTreeStatusPanel: () => null }));
