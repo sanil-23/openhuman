@@ -4819,6 +4819,16 @@ const messages: TranslationMap = {
   'memoryData.windowError': 'Finestra di memoria',
   'memoryData.windowUpdated': 'Finestra di memoria aggiornata',
   'memoryData.windowUpdatedMsg': 'Impostata su {window}.',
+  'skills.create.whenToUse': 'Quando usarlo',
+  'skills.create.whenToUsePlaceholder':
+    "es. quando l'utente chiede di organizzare la posta in arrivo",
+  'skills.create.whenToUseHelp':
+    "L'attivatore che un agente riconosce per decidere di eseguire questo workflow. Lascia vuoto per riutilizzare la descrizione.",
+  'skills.create.inputs.row.descriptionError': 'È richiesta una descrizione per ogni input.',
+  'skills.detail.run': 'Esegui workflow',
+  'skills.detail.runAriaLabel': 'Esegui questo workflow',
+  'skills.run.title': 'Esegui workflow',
+  'workflows.installFromUrl': 'Installa da URL',
 };
 
 export default messages;

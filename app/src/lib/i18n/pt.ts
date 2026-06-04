@@ -4816,6 +4816,16 @@ const messages: TranslationMap = {
   'memoryData.windowError': 'Janela de memória',
   'memoryData.windowUpdated': 'Janela de memória atualizada',
   'memoryData.windowUpdatedMsg': 'Definida para {window}.',
+  'skills.create.whenToUse': 'Quando usar',
+  'skills.create.whenToUsePlaceholder':
+    'ex.: quando o usuário pede para organizar a caixa de entrada',
+  'skills.create.whenToUseHelp':
+    'O gatilho que um agente reconhece para decidir executar este fluxo de trabalho. Deixe em branco para reutilizar a descrição.',
+  'skills.create.inputs.row.descriptionError': 'É necessária uma descrição para cada entrada.',
+  'skills.detail.run': 'Executar fluxo de trabalho',
+  'skills.detail.runAriaLabel': 'Executar este fluxo de trabalho',
+  'skills.run.title': 'Executar fluxo de trabalho',
+  'workflows.installFromUrl': 'Instalar a partir de URL',
 };
 
 export default messages;

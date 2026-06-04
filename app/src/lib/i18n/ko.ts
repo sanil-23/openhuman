@@ -4683,6 +4683,15 @@ const messages: TranslationMap = {
   'memoryData.windowError': '메모리 창',
   'memoryData.windowUpdated': '메모리 창 업데이트됨',
   'memoryData.windowUpdatedMsg': '{window}(으)로 설정되었습니다.',
+  'skills.create.whenToUse': '사용 시점',
+  'skills.create.whenToUsePlaceholder': '예: 사용자가 받은 편지함 정리를 요청할 때',
+  'skills.create.whenToUseHelp':
+    '에이전트가 이 워크플로 실행을 결정하는 트리거입니다. 비워 두면 설명을 사용합니다.',
+  'skills.create.inputs.row.descriptionError': '각 입력에는 설명이 필요합니다.',
+  'skills.detail.run': '워크플로 실행',
+  'skills.detail.runAriaLabel': '이 워크플로 실행',
+  'skills.run.title': '워크플로 실행',
+  'workflows.installFromUrl': 'URL에서 설치',
 };
 
 export default messages;

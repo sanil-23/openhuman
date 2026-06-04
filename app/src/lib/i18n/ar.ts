@@ -4639,6 +4639,15 @@ const messages: TranslationMap = {
   'memoryData.windowError': 'نافذة الذاكرة',
   'memoryData.windowUpdated': 'تم تحديث نافذة الذاكرة',
   'memoryData.windowUpdatedMsg': 'تم الضبط على {window}.',
+  'skills.create.whenToUse': 'متى يُستخدم',
+  'skills.create.whenToUsePlaceholder': 'مثال: عندما يطلب المستخدم تنظيم صندوق الوارد',
+  'skills.create.whenToUseHelp':
+    'المُحفِّز الذي يعتمد عليه الوكيل لتقرير تشغيل سير العمل هذا. اتركه فارغًا لإعادة استخدام الوصف.',
+  'skills.create.inputs.row.descriptionError': 'يلزم وصف لكل إدخال.',
+  'skills.detail.run': 'تشغيل سير العمل',
+  'skills.detail.runAriaLabel': 'تشغيل سير العمل هذا',
+  'skills.run.title': 'تشغيل سير العمل',
+  'workflows.installFromUrl': 'التثبيت من رابط',
 };
 
 export default messages;

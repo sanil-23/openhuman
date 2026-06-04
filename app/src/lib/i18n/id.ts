@@ -4747,6 +4747,15 @@ const messages: TranslationMap = {
   'memoryData.windowError': 'Jendela memori',
   'memoryData.windowUpdated': 'Jendela memori diperbarui',
   'memoryData.windowUpdatedMsg': 'Diatur ke {window}.',
+  'skills.create.whenToUse': 'Kapan digunakan',
+  'skills.create.whenToUsePlaceholder': 'mis. saat pengguna meminta untuk memilah kotak masuk',
+  'skills.create.whenToUseHelp':
+    'Pemicu yang dikenali agen untuk memutuskan menjalankan alur kerja ini. Biarkan kosong untuk memakai deskripsi.',
+  'skills.create.inputs.row.descriptionError': 'Deskripsi diperlukan untuk setiap input.',
+  'skills.detail.run': 'Jalankan alur kerja',
+  'skills.detail.runAriaLabel': 'Jalankan alur kerja ini',
+  'skills.run.title': 'Jalankan alur kerja',
+  'workflows.installFromUrl': 'Instal dari URL',
 };
 
 export default messages;

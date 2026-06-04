@@ -4811,6 +4811,16 @@ const messages: TranslationMap = {
   'memoryData.windowError': 'Okno pamięci',
   'memoryData.windowUpdated': 'Okno pamięci zaktualizowane',
   'memoryData.windowUpdatedMsg': 'Ustawiono na {window}.',
+  'skills.create.whenToUse': 'Kiedy używać',
+  'skills.create.whenToUsePlaceholder':
+    'np. gdy użytkownik prosi o uporządkowanie skrzynki odbiorczej',
+  'skills.create.whenToUseHelp':
+    'Wyzwalacz, na podstawie którego agent decyduje o uruchomieniu tego przepływu pracy. Pozostaw puste, aby użyć opisu.',
+  'skills.create.inputs.row.descriptionError': 'Każde pole wejściowe wymaga opisu.',
+  'skills.detail.run': 'Uruchom przepływ pracy',
+  'skills.detail.runAriaLabel': 'Uruchom ten przepływ pracy',
+  'skills.run.title': 'Uruchom przepływ pracy',
+  'workflows.installFromUrl': 'Zainstaluj z adresu URL',
 };
 
 export default messages;

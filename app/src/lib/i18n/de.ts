@@ -4863,6 +4863,17 @@ const messages: TranslationMap = {
   'memoryData.windowError': 'Speicherfenster',
   'memoryData.windowUpdated': 'Speicherfenster aktualisiert',
   'memoryData.windowUpdatedMsg': 'Auf {window} gesetzt.',
+  'skills.create.whenToUse': 'Wann verwenden',
+  'skills.create.whenToUsePlaceholder':
+    'z. B. wenn der Nutzer darum bittet, seinen Posteingang zu sichten',
+  'skills.create.whenToUseHelp':
+    'Der Auslöser, anhand dessen ein Agent entscheidet, diesen Workflow auszuführen. Leer lassen, um die Beschreibung zu verwenden.',
+  'skills.create.inputs.row.descriptionError':
+    'Für jede Eingabe ist eine Beschreibung erforderlich.',
+  'skills.detail.run': 'Workflow ausführen',
+  'skills.detail.runAriaLabel': 'Diesen Workflow ausführen',
+  'skills.run.title': 'Workflow ausführen',
+  'workflows.installFromUrl': 'Von URL installieren',
 };
 
 export default messages;

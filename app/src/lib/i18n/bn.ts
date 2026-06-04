@@ -4728,6 +4728,15 @@ const messages: TranslationMap = {
   'memoryData.windowError': 'মেমোরি উইন্ডো',
   'memoryData.windowUpdated': 'মেমোরি উইন্ডো আপডেট হয়েছে',
   'memoryData.windowUpdatedMsg': '{window}-এ সেট করা হয়েছে।',
+  'skills.create.whenToUse': 'কখন ব্যবহার করবেন',
+  'skills.create.whenToUsePlaceholder': 'যেমন, যখন ব্যবহারকারী তাদের ইনবক্স গোছাতে বলেন',
+  'skills.create.whenToUseHelp':
+    'যে ট্রিগারের ভিত্তিতে একটি এজেন্ট এই ওয়ার্কফ্লো চালানোর সিদ্ধান্ত নেয়। বিবরণ পুনরায় ব্যবহার করতে ফাঁকা রাখুন।',
+  'skills.create.inputs.row.descriptionError': 'প্রতিটি ইনপুটের জন্য একটি বিবরণ প্রয়োজন।',
+  'skills.detail.run': 'ওয়ার্কফ্লো চালান',
+  'skills.detail.runAriaLabel': 'এই ওয়ার্কফ্লো চালান',
+  'skills.run.title': 'ওয়ার্কফ্লো চালান',
+  'workflows.installFromUrl': 'URL থেকে ইনস্টল করুন',
 };
 
 export default messages;

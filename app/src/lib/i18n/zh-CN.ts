@@ -4500,6 +4500,14 @@ const messages: TranslationMap = {
   'memoryData.windowError': '记忆时间窗口',
   'memoryData.windowUpdated': '记忆时间窗口已更新',
   'memoryData.windowUpdatedMsg': '已设置为 {window}。',
+  'skills.create.whenToUse': '使用时机',
+  'skills.create.whenToUsePlaceholder': '例如，当用户要求整理收件箱时',
+  'skills.create.whenToUseHelp': '代理据以决定运行此工作流的触发条件。留空则沿用描述。',
+  'skills.create.inputs.row.descriptionError': '每个输入项都需要填写描述。',
+  'skills.detail.run': '运行工作流',
+  'skills.detail.runAriaLabel': '运行此工作流',
+  'skills.run.title': '运行工作流',
+  'workflows.installFromUrl': '从 URL 安装',
 };
 
 export default messages;

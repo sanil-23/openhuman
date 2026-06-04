@@ -4776,6 +4776,15 @@ const messages: TranslationMap = {
   'memoryData.windowError': 'Окно памяти',
   'memoryData.windowUpdated': 'Окно памяти обновлено',
   'memoryData.windowUpdatedMsg': 'Установлено значение {window}.',
+  'skills.create.whenToUse': 'Когда использовать',
+  'skills.create.whenToUsePlaceholder': 'напр., когда пользователь просит разобрать входящие',
+  'skills.create.whenToUseHelp':
+    'Триггер, по которому агент решает запустить этот рабочий процесс. Оставьте пустым, чтобы использовать описание.',
+  'skills.create.inputs.row.descriptionError': 'Для каждого ввода требуется описание.',
+  'skills.detail.run': 'Запустить рабочий процесс',
+  'skills.detail.runAriaLabel': 'Запустить этот рабочий процесс',
+  'skills.run.title': 'Запустить рабочий процесс',
+  'workflows.installFromUrl': 'Установить по URL',
 };
 
 export default messages;

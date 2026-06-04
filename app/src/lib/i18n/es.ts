@@ -4829,6 +4829,16 @@ const messages: TranslationMap = {
   'memoryData.windowError': 'Ventana de memoria',
   'memoryData.windowUpdated': 'Ventana de memoria actualizada',
   'memoryData.windowUpdatedMsg': 'Establecida en {window}.',
+  'skills.create.whenToUse': 'Cuándo usar',
+  'skills.create.whenToUsePlaceholder':
+    'p. ej., cuando el usuario pide organizar su bandeja de entrada',
+  'skills.create.whenToUseHelp':
+    'El desencadenante que un agente reconoce para decidir ejecutar este flujo de trabajo. Déjalo en blanco para reutilizar la descripción.',
+  'skills.create.inputs.row.descriptionError': 'Se requiere una descripción para cada entrada.',
+  'skills.detail.run': 'Ejecutar flujo de trabajo',
+  'skills.detail.runAriaLabel': 'Ejecutar este flujo de trabajo',
+  'skills.run.title': 'Ejecutar flujo de trabajo',
+  'workflows.installFromUrl': 'Instalar desde URL',
 };
 
 export default messages;
