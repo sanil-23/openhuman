@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 
 import { ConfirmationModal } from '../components/intelligence/ConfirmationModal';
 import IntelligenceSubconsciousTab from '../components/intelligence/IntelligenceSubconsciousTab';
@@ -36,14 +36,36 @@ export default function Intelligence() {
 
   // Honour `?tab=<id>` so deep links (e.g. the /workflows redirect) can land
   // directly on a specific tab; default to Tasks otherwise.
-  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const initialTab: IntelligenceTab = (() => {
-    const requested = new URLSearchParams(location.search).get('tab');
+    const requested = searchParams.get('tab');
     return (INTELLIGENCE_TABS as string[]).includes(requested ?? '')
       ? (requested as IntelligenceTab)
       : 'tasks';
   })();
   const [activeTab, setActiveTab] = useState<IntelligenceTab>(initialTab);
+
+  // Persist the active tab to `?tab=` so it survives refresh AND is restored
+  // when navigating back here (e.g. Back from the workflow runner lands on the
+  // Workflows tab, not the Tasks default). `replace` keeps tab clicks out of
+  // the history stack.
+  const selectTab = useCallback(
+    (tab: IntelligenceTab) => {
+      setActiveTab(tab);
+      const next = new URLSearchParams(searchParams);
+      next.set('tab', tab);
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
+
+  // Follow the URL when it changes under us (back/forward, deep links).
+  useEffect(() => {
+    const requested = searchParams.get('tab');
+    if (requested && (INTELLIGENCE_TABS as string[]).includes(requested)) {
+      setActiveTab(requested as IntelligenceTab);
+    }
+  }, [searchParams]);
 
   // The legacy header pills (system-status + Ingesting/Queued chips) were
   // sourced from `useConsciousItems` + `useMemoryIngestionStatus`. They are
@@ -126,7 +148,7 @@ export default function Intelligence() {
         <PillTabBar
           items={tabs.map(tab => ({ label: tab.label, value: tab.id }))}
           selected={activeTab}
-          onChange={setActiveTab}
+          onChange={selectTab}
           activeClassName="border-primary-600 bg-primary-600 text-white"
           renderItem={(item, active) => {
             const tab = tabs.find(entry => entry.id === item.value);
