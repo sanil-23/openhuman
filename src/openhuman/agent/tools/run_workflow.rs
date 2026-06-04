@@ -291,11 +291,16 @@ impl Tool for RunWorkflowTool {
         // Fire-and-forget: only the spawn backstop applies — no await, so no
         // re-entrancy/nesting slot to take.
         if wait_seconds == 0 {
-            if let Err(e) = guard::account_spawn() {
-                return Ok(ToolResult::error(format!("run_workflow: {e}")));
-            }
             return match spawn_workflow_run_background(workflow_id.clone(), inputs).await {
-                Ok(started) => Ok(ToolResult::success(
+                // Count only spawns that actually start against the backstop —
+                // unknown-workflow / bad-input rejections (the Err arm) must not
+                // burn the budget, or rejected calls accumulate and trip the
+                // guard for legitimate ones.
+                Ok(started) => {
+                    if let Err(e) = guard::account_spawn() {
+                        return Ok(ToolResult::error(format!("run_workflow: {e}")));
+                    }
+                    Ok(ToolResult::success(
                     json!({
                         "run_id": started.run_id,
                         "workflow_id": started.workflow_id,
@@ -305,23 +310,28 @@ impl Tool for RunWorkflowTool {
                                  Use `await_workflow` with this `run_id` if you want its result.",
                     })
                     .to_string(),
-                )),
+                    ))
+                }
                 Err(e) => Ok(ToolResult::error(format!("run_workflow: {e}"))),
             };
         }
 
         // Awaited path: take the re-entrancy/nesting slot first (so a tight
-        // loop is rejected before we even spawn), then the spawn backstop.
+        // loop is rejected before we even spawn), then account the spawn —
+        // but only once it actually starts, so a rejected spawn doesn't burn
+        // the process backstop.
         let _guard = match guard::acquire_await(reentrancy_key(&workflow_id, &inputs)) {
             Ok(g) => g,
             Err(e) => return Ok(ToolResult::error(format!("run_workflow: {e}"))),
         };
-        if let Err(e) = guard::account_spawn() {
-            return Ok(ToolResult::error(format!("run_workflow: {e}")));
-        }
 
         let started = match spawn_workflow_run_background(workflow_id.clone(), inputs).await {
-            Ok(s) => s,
+            Ok(s) => {
+                if let Err(e) = guard::account_spawn() {
+                    return Ok(ToolResult::error(format!("run_workflow: {e}")));
+                }
+                s
+            }
             Err(e) => return Ok(ToolResult::error(format!("run_workflow: {e}"))),
         };
         tracing::debug!(

@@ -91,8 +91,8 @@ fn catalog_includes_additional_user_facing_surfaces() {
         .collect();
 
     for expected in [
-        "skills.open_connections_hub",
-        "skills.connect_google",
+        "workflows.open_connections_hub",
+        "workflows.connect_google",
         "auth.backup_recovery_phrase",
         "auth.configure_tool_access",
         "settings.manage_service",

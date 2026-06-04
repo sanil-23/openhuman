@@ -190,13 +190,9 @@ named = [
     # `src/openhuman/update/` end-to-end — no parallel release logic.
     "update_check",
     "update_apply",
-    # structured slide spec via a native Rust engine (`ppt-rs`) running
-    # in-process — no Python subprocess, no managed venv. Output lands
-    # in the workspace artifacts directory and the tool returns the
-    # artifact id + absolute path so the orchestrator can quote it in
-    # the reply. Full agent-definition wiring + per-tier tool_filter
-    # policy lands in #2780; this entry exists so the orchestrator can
-    # drive the tool today (matches the user-facing "create slides"
-    # routing case the parent issue #1535 asks for).
-    "generate_presentation",
+    # NOTE: `generate_presentation` is intentionally NOT listed here — deck
+    # generation policy (grounding, citations, image verification) belongs to
+    # `presentation_agent`, which the orchestrator reaches via
+    # `delegate_make_presentation`. Listing it directly is asserted against in
+    # tests/orchestrator_presentation_wiring.rs.
 ]
