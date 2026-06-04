@@ -32,7 +32,7 @@ use crate::openhuman::agent::harness::run_tool_call_loop;
 use crate::openhuman::agent::task_board::{TaskBoardCard, TaskCardStatus};
 use crate::openhuman::agent::task_dispatcher::{dispatch_card, DispatchOutcome};
 use crate::openhuman::agent::tools::RunWorkflowTool;
-use crate::openhuman::config::MultimodalConfig;
+use crate::openhuman::config::{MultimodalConfig, MultimodalFileConfig};
 use crate::openhuman::inference::provider::factory::test_provider_override;
 use crate::openhuman::inference::provider::traits::{
     ChatMessage, ChatRequest, ChatResponse, ProviderCapabilities,
@@ -249,6 +249,7 @@ async fn orchestrator_runs_workflow_tool_and_gets_inner_result() {
         true,
         "channel",
         &MultimodalConfig::default(),
+        &MultimodalFileConfig::default(),
         5,
         None,
         None,

@@ -29,7 +29,7 @@ use parking_lot::Mutex;
 
 use crate::openhuman::agent::harness::run_tool_call_loop;
 use crate::openhuman::agent::tools::RunWorkflowTool;
-use crate::openhuman::config::{Config, MultimodalConfig};
+use crate::openhuman::config::{Config, MultimodalConfig, MultimodalFileConfig};
 use crate::openhuman::inference::provider::traits::{ChatMessage, ProviderCapabilities};
 use crate::openhuman::inference::provider::{ChatRequest, ChatResponse, Provider, ToolCall};
 use crate::openhuman::tools::policy::DefaultToolPolicy;
@@ -203,6 +203,7 @@ async fn mock_llm_orchestrator_lists_and_runs_workflows_through_the_loop() {
         true,
         "channel",
         &MultimodalConfig::default(),
+        &MultimodalFileConfig::default(),
         5,
         None,
         None,
