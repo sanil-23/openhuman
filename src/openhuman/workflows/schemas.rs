@@ -210,6 +210,7 @@ pub fn all_workflows_controller_schemas() -> Vec<ControllerSchema> {
         workflows_schemas("workflows_read_run_log"),
         workflows_schemas("workflows_read_resource"),
         workflows_schemas("workflows_create"),
+        workflows_schemas("workflows_update"),
         workflows_schemas("workflows_install_from_url"),
         workflows_schemas("workflows_uninstall"),
         workflows_schemas("workflows_run"),
@@ -241,6 +242,10 @@ pub fn all_workflows_registered_controllers() -> Vec<RegisteredController> {
         RegisteredController {
             schema: workflows_schemas("workflows_create"),
             handler: handle_workflows_create,
+        },
+        RegisteredController {
+            schema: workflows_schemas("workflows_update"),
+            handler: handle_workflows_update,
         },
         RegisteredController {
             schema: workflows_schemas("workflows_install_from_url"),
@@ -428,6 +433,15 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
                 required: true,
             }],
         },
+        // Same wire shape as create; overwrites the workflow at the resolved
+        // slug (frontmatter + workflow.toml) while preserving the body.
+        "workflows_update" => {
+            let mut s = workflows_schemas("workflows_create");
+            s.function = "update";
+            s.description =
+                "Edit an existing workflow: overwrite frontmatter + workflow.toml at the resolved slug, preserving the hand-authored body.";
+            s
+        }
         "workflows_install_from_url" => ControllerSchema {
             namespace: "workflows",
             function: "install_from_url",
@@ -1163,6 +1177,35 @@ fn handle_workflows_create(params: Map<String, Value>) -> ControllerFuture {
             }
             Err(err) => {
                 tracing::debug!(error = %err, "[skills][rpc] create: rejected");
+                Err(err)
+            }
+        }
+    })
+}
+
+/// `openhuman.workflows_update` — edit an existing workflow. Same payload as
+/// create, but overwrites the workflow at the resolved slug (frontmatter +
+/// workflow.toml rewritten; the hand-authored body is preserved).
+fn handle_workflows_update(params: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move {
+        let payload = deserialize_params::<WorkflowsCreateParams>(params)?;
+        tracing::debug!(
+            name = %payload.name,
+            scope = ?payload.scope,
+            "[workflows][rpc] update"
+        );
+        let workspace = resolve_workspace_dir().await;
+        let mut create_params: CreateWorkflowParams = payload.into();
+        create_params.overwrite = true;
+        match create_workflow(workspace.as_path(), create_params) {
+            Ok(skill) => to_json(RpcOutcome::new(
+                WorkflowsCreateResult {
+                    skill: WorkflowSummary::from(skill),
+                },
+                Vec::new(),
+            )),
+            Err(err) => {
+                tracing::debug!(error = %err, "[workflows][rpc] update: rejected");
                 Err(err)
             }
         }
