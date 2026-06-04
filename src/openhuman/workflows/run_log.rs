@@ -33,26 +33,32 @@ static RUN_CANCELS: Lazy<Mutex<HashMap<String, CancellationToken>>> =
 /// passes the returned token into its run loop's `select!`.
 pub fn register_run_cancel(run_id: &str) -> CancellationToken {
     let token = CancellationToken::new();
-    RUN_CANCELS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(run_id.to_string(), token.clone());
+    let live = {
+        let mut map = RUN_CANCELS.lock().unwrap_or_else(|e| e.into_inner());
+        map.insert(run_id.to_string(), token.clone());
+        map.len()
+    };
+    log::debug!("[workflows::run-cancel] registered run_id={run_id} (live={live})");
     token
 }
 
 /// Drop the registry entry for `run_id` (call once the run is fully done).
 pub fn unregister_run_cancel(run_id: &str) {
-    RUN_CANCELS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(run_id);
+    let (existed, live) = {
+        let mut map = RUN_CANCELS.lock().unwrap_or_else(|e| e.into_inner());
+        let existed = map.remove(run_id).is_some();
+        (existed, map.len())
+    };
+    log::debug!(
+        "[workflows::run-cancel] unregistered run_id={run_id} (existed={existed}, live={live})"
+    );
 }
 
 /// Signal cancellation for a running run. Returns `true` if a live run with
 /// this id was found and signalled, `false` if it's unknown (already finished
 /// or never existed).
 pub fn cancel_run(run_id: &str) -> bool {
-    match RUN_CANCELS
+    let found = match RUN_CANCELS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(run_id)
@@ -62,7 +68,9 @@ pub fn cancel_run(run_id: &str) -> bool {
             true
         }
         None => false,
-    }
+    };
+    log::debug!("[workflows::run-cancel] cancel requested run_id={run_id} (found={found})");
+    found
 }
 
 /// `<workspace>/skills/.runs`.
@@ -454,6 +462,7 @@ pub fn read_terminal_outcome(path: &Path) -> Option<RunOutcome> {
     let idx = text.find(marker)?;
     let after = &text[idx + marker.len()..];
     let mut status = String::new();
+    let mut saw_finished = false;
     let mut lines = after.lines();
     // Consume the footer header lines (status/duration/finished); the first
     // blank line after `finished:` separates them from the output body.
@@ -468,11 +477,17 @@ pub fn read_terminal_outcome(path: &Path) -> Option<RunOutcome> {
         };
         match label.trim() {
             "status" => status = value.trim().to_string(),
-            "finished" => break,
+            "finished" => {
+                saw_finished = true;
+                break;
+            }
             _ => {}
         }
     }
-    if status.is_empty() {
+    // Require BOTH `status:` and the closing `finished:` line — write_footer
+    // emits `finished:` last, so its absence means we raced a partially
+    // written (or malformed) footer and the run isn't actually terminal yet.
+    if status.is_empty() || !saw_finished {
         return None;
     }
     // Everything past the footer header is the final output body.
@@ -784,6 +799,36 @@ mod tests {
         let outcome = read_terminal_outcome(&path).expect("footer landed");
         assert_eq!(outcome.status, "DONE");
         assert_eq!(outcome.output, "the final answer\nspanning two lines");
+    }
+
+    #[test]
+    fn read_terminal_outcome_requires_finished_line() {
+        // A footer with `status:` but no closing `finished:` line is a
+        // partially-written (or malformed) footer — racing it must NOT report a
+        // terminal outcome.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let path = tmp.path().join("partial.log");
+        std::fs::write(
+            &path,
+            "==== workflow_run: x ====\nrun_id : x\n\n--- result ---\nstatus  : DONE\n",
+        )
+        .unwrap();
+        assert!(
+            read_terminal_outcome(&path).is_none(),
+            "footer missing `finished:` must not be treated as terminal"
+        );
+        // Append the closing line and it becomes terminal.
+        std::fs::write(
+            &path,
+            "==== workflow_run: x ====\nrun_id : x\n\n--- result ---\nstatus  : DONE\nduration: 5 ms\nfinished: 2026-01-01 UTC\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_terminal_outcome(&path)
+                .expect("complete footer")
+                .status,
+            "DONE"
+        );
     }
 
     #[test]

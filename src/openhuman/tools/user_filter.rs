@@ -164,6 +164,19 @@ const TOOL_FAMILIES: &[ToolFamily] = &[
         ],
         default_enabled: false,
     },
+    // Legacy alias: pre-rename `enabled_tool_names` snapshots stored this
+    // family as `skill_manage`. Retain it (same rust_names) so users who had
+    // already opted in keep these default-OFF tools enabled after the
+    // skills→workflows rename instead of silently losing them.
+    ToolFamily {
+        id: "skill_manage",
+        rust_names: &[
+            "create_workflow",
+            "install_workflow_from_url",
+            "uninstall_workflow",
+        ],
+        default_enabled: false,
+    },
     ToolFamily {
         id: "thread_destructive",
         rust_names: &["thread_delete", "thread_purge_all"],

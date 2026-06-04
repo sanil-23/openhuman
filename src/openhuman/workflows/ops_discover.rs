@@ -226,13 +226,24 @@ fn load_skill_dir(dir: &Path, dir_name: &str, scope: WorkflowScope) -> Option<Wo
     let legacy_md = dir.join(SKILL_MD);
     let legacy_manifest = dir.join(SKILL_JSON);
 
-    if workflow_md.exists() {
+    // `exists()` follows symlinks, so a manifest could point at an arbitrary
+    // file outside the bundle and discovery would ingest its contents into the
+    // catalog/prompt flow. Since the legacy `skills/` roots are scanned without
+    // a trust marker, require a real (non-symlink) regular file before loading.
+    let is_safe_manifest = |path: &Path| {
+        matches!(
+            std::fs::symlink_metadata(path),
+            Ok(meta) if meta.is_file() && !meta.file_type().is_symlink()
+        )
+    };
+
+    if is_safe_manifest(&workflow_md) {
         return Some(load_from_workflow_md(&workflow_md, dir, dir_name, scope));
     }
-    if legacy_md.exists() {
+    if is_safe_manifest(&legacy_md) {
         return Some(load_from_workflow_md(&legacy_md, dir, dir_name, scope));
     }
-    if legacy_manifest.exists() {
+    if is_safe_manifest(&legacy_manifest) {
         return Some(load_from_legacy_manifest(
             &legacy_manifest,
             dir,

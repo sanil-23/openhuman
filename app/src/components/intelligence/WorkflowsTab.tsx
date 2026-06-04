@@ -38,6 +38,7 @@ export default function WorkflowsTab() {
   const [loading, setLoading] = useState(true);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [uninstallCandidate, setUninstallCandidate] = useState<SkillSummary | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
   const addToast = useCallback((toast: Omit<ToastNotification, 'id'>) => {
@@ -52,10 +53,15 @@ export default function WorkflowsTab() {
     try {
       const list = await skillsApi.listSkills();
       log('listWorkflows ok count=%d', list.length);
+      setLoadError(null);
       setWorkflows(list);
       return list;
     } catch (err) {
-      log('listWorkflows error %s', err instanceof Error ? err.message : String(err));
+      // Don't let a backend failure masquerade as "no workflows installed" —
+      // surface it as an error/retry state instead of the empty state.
+      const message = err instanceof Error ? err.message : String(err);
+      log('listWorkflows error %s', message);
+      setLoadError(message);
       return [];
     } finally {
       setLoading(false);
@@ -74,7 +80,7 @@ export default function WorkflowsTab() {
     };
   }, [refresh]);
 
-  const isEmpty = workflows.length === 0 && !loading;
+  const isEmpty = workflows.length === 0 && !loading && !loadError;
 
   return (
     <div className="space-y-4">
@@ -93,6 +99,30 @@ export default function WorkflowsTab() {
           </button>
         </div>
       </div>
+
+      {/* Load error — shown instead of the empty state when listSkills fails,
+          so an outage doesn't read as "you have no workflows". */}
+      {loadError && !loading ? (
+        <div
+          data-testid="workflows-load-error"
+          className="rounded-2xl border border-coral-200 dark:border-coral-800 bg-coral-50 dark:bg-coral-950/40 p-4 text-center shadow-soft animate-fade-up">
+          <h2 className="text-sm font-semibold text-coral-800 dark:text-coral-200">
+            {t('common.error')}
+          </h2>
+          <p className="mt-1 break-words font-mono text-[11px] text-coral-700/90 dark:text-coral-300/90">
+            {loadError}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setLoading(true);
+              void refresh();
+            }}
+            className="mt-3 rounded-lg border border-coral-300 dark:border-coral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-xs font-medium text-coral-700 dark:text-coral-300 hover:bg-coral-50 dark:hover:bg-coral-900/40">
+            {t('common.retry')}
+          </button>
+        </div>
+      ) : null}
 
       {/* Loading skeleton */}
       {loading && workflows.length === 0 ? (
@@ -213,12 +243,17 @@ export default function WorkflowsTab() {
           onClose={() => setUninstallCandidate(null)}
           onUninstalled={result => {
             log('uninstalled name=%s', result.name);
+            // Reconcile by the workflow's id/slug — the uninstall flow is keyed
+            // by `skill.id`, which can diverge from the display `name`. Keying
+            // the filter off `result.name` would leave the card rendered when
+            // they differ (and never clear if the refetch fails).
+            const removedId = uninstallCandidate.id;
             addToast({
               type: 'success',
               title: t('workflows.delete'),
               message: `"${result.name}" ${t('common.success')}`,
             });
-            setWorkflows(prev => prev.filter(s => s.id !== result.name));
+            setWorkflows(prev => prev.filter(s => s.id !== removedId));
             void refresh();
           }}
         />

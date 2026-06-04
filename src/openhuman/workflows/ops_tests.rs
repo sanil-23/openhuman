@@ -1475,3 +1475,90 @@ fn skill_create_input_def_round_trips_through_registry_skill_input() {
     assert!(!parsed.inputs[2].required);
     assert!(parsed.inputs[2].kind.is_none());
 }
+
+#[test]
+fn edit_refuses_to_overwrite_an_unparseable_body() {
+    // Data-loss guard: when editing a workflow whose existing markdown can't be
+    // parsed (here an unterminated frontmatter block), the update must fail
+    // rather than silently replace the user's instructions with the scaffold.
+    let home = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let dir = home
+        .path()
+        .join(".openhuman")
+        .join("skills")
+        .join("broken-wf");
+    // `---` opened but never closed → parse_workflow_md returns None.
+    write(
+        &dir.join(SKILL_MD),
+        "---\nname: broken-wf\ndescription: x\n",
+    );
+
+    let params = CreateWorkflowParams {
+        name: "broken-wf".to_string(),
+        description: "new description".to_string(),
+        when_to_use: None,
+        scope: WorkflowScope::User,
+        overwrite: true,
+        ..Default::default()
+    };
+    let err = create_workflow_inner(Some(home.path()), ws.path(), params)
+        .expect_err("edit must refuse when the existing body can't be parsed");
+    assert!(
+        err.to_lowercase().contains("could not be parsed"),
+        "unexpected error: {err}"
+    );
+    // The original file is left untouched and no WORKFLOW.md scaffold is written.
+    let still = std::fs::read_to_string(dir.join(SKILL_MD)).unwrap();
+    assert!(still.contains("name: broken-wf"), "original must be intact");
+    assert!(
+        !dir.join(WORKFLOW_MD).exists(),
+        "no scaffold WORKFLOW.md should be written on a refused edit"
+    );
+}
+
+#[test]
+fn uninstall_resolves_agents_skills_legacy_root() {
+    // discover_workflows surfaces ~/.agents/skills/, so uninstall must reach it
+    // too — otherwise a listed workflow can never be deleted via this API.
+    let home = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let dir = home.path().join(".agents").join("skills").join("agenty");
+    write(
+        &dir.join(SKILL_MD),
+        "---\nname: agenty\ndescription: legacy root\n---\n\nbody\n",
+    );
+
+    let outcome = uninstall_workflow(
+        UninstallWorkflowParams {
+            name: "agenty".into(),
+        },
+        Some(home.path()),
+    )
+    .expect("uninstall should resolve the ~/.agents/skills/ legacy root");
+    assert_eq!(outcome.name, "agenty");
+    assert!(!dir.exists(), "uninstall should remove the dir");
+}
+
+#[test]
+fn symlinked_manifest_file_is_rejected() {
+    // `exists()` follows symlinks; a manifest pointed at an external file would
+    // otherwise be ingested into the catalog/prompt flow. Discovery must skip it.
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path();
+    write(&ws.join(".openhuman").join(TRUST_MARKER), "");
+    let skill_dir = ws.join(".openhuman").join("skills").join("sneaky");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    let external = dir.path().join("secret.md");
+    write(
+        &external,
+        "---\nname: sneaky\ndescription: leaked\n---\n\nsecret\n",
+    );
+    std::os::unix::fs::symlink(&external, skill_dir.join(WORKFLOW_MD)).unwrap();
+
+    let skills = load_skills_ws(ws);
+    assert!(
+        skills.iter().all(|s| s.name != "sneaky"),
+        "a symlinked manifest must not be loaded; got {skills:?}"
+    );
+}

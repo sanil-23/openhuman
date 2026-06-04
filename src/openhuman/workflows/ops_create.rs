@@ -306,6 +306,14 @@ pub(crate) fn create_workflow_inner(
             }
             out
         }
+        // On edit, refuse rather than overwrite the user's instructions with
+        // the scaffold template when the existing body couldn't be parsed —
+        // silently replacing it would be data loss.
+        None if params.overwrite => {
+            return Err(format!(
+                "cannot update workflow '{slug}': existing markdown could not be parsed safely (refusing to overwrite the body)"
+            ));
+        }
         None => render_workflow_md(
             &slug,
             description,

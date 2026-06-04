@@ -406,12 +406,16 @@ pub fn uninstall_workflow(
     };
 
     // Workflows created post-rename live under `~/.openhuman/workflows/`; older
-    // ones under `~/.openhuman/skills/`. Resolve whichever root actually holds
-    // this id so delete works regardless of when it was authored.
+    // ones under `~/.openhuman/skills/` or the legacy `~/.agents/skills/` root.
+    // Resolve whichever root actually holds this id so delete works regardless
+    // of when/where it was authored — and matches every user root
+    // discover_workflows_inner surfaces (else a listed workflow can't be
+    // uninstalled).
     let openhuman_dir = home.join(".openhuman");
     let root = [
         openhuman_dir.join("workflows"),
         openhuman_dir.join("skills"),
+        home.join(".agents").join("skills"),
     ]
     .into_iter()
     .find(|r| r.join(&trimmed).exists());

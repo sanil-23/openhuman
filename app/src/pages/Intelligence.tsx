@@ -31,6 +31,15 @@ const INTELLIGENCE_TABS: IntelligenceTab[] = [
   'council',
 ];
 
+// Tabs gated to dev builds (mirrors the `devOnly` flags on `allTabs` below).
+// A `?tab=` deep link must be validated against the *visible* set, not the raw
+// enum, so `?tab=council` can't force-open a hidden dev-only tab in prod.
+const DEV_ONLY_TABS: IntelligenceTab[] = ['council'];
+
+const isVisibleTab = (tab: string | null | undefined): tab is IntelligenceTab =>
+  (INTELLIGENCE_TABS as string[]).includes(tab ?? '') &&
+  (IS_DEV || !(DEV_ONLY_TABS as string[]).includes(tab ?? ''));
+
 export default function Intelligence() {
   const { t } = useT();
 
@@ -39,9 +48,7 @@ export default function Intelligence() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab: IntelligenceTab = (() => {
     const requested = searchParams.get('tab');
-    return (INTELLIGENCE_TABS as string[]).includes(requested ?? '')
-      ? (requested as IntelligenceTab)
-      : 'tasks';
+    return isVisibleTab(requested) ? requested : 'tasks';
   })();
   const [activeTab, setActiveTab] = useState<IntelligenceTab>(initialTab);
 
@@ -60,10 +67,12 @@ export default function Intelligence() {
   );
 
   // Follow the URL when it changes under us (back/forward, deep links).
+  // Validated against the visible set so a stale/forged `?tab=council` can't
+  // open a dev-only tab in prod.
   useEffect(() => {
     const requested = searchParams.get('tab');
-    if (requested && (INTELLIGENCE_TABS as string[]).includes(requested)) {
-      setActiveTab(requested as IntelligenceTab);
+    if (isVisibleTab(requested)) {
+      setActiveTab(requested);
     }
   }, [searchParams]);
 
