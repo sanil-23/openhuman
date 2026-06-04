@@ -1,16 +1,17 @@
-//! Identity-based, status-aware dedup for task-source cards.
+//! Identity matching + the replace-safety rule for per-source card dedup.
 //!
-//! The per-source ledger (`store::ingested_tasks`, keyed on
-//! `(source_id, external_id)`) only catches the *same* upstream item
-//! re-fetched by the *same* source. It does **not** catch the same item
-//! arriving through two overlapping sources, or through a source that was
-//! deleted and recreated (new `source_id`) — each produces a duplicate
-//! card on the `task-sources` board.
+//! The content-hash ledger (`store::ingested_tasks`, keyed on
+//! `(source_id, external_id)`) skips an *unchanged* re-fetch, but once an
+//! item is edited (new hash) the fetch falls through to routing. To stop a
+//! source from extracting a second card for an item it already has,
+//! [`route`](super::route) scans that source's own board cards by a stable
+//! [`TaskIdentity`] and decides whether to skip, refresh, or create.
 //!
-//! This module supplies the cross-source half: a stable [`TaskIdentity`]
-//! that is independent of `source_id`, a predicate to recognise a board
-//! card that already represents the same upstream item, and the rule for
-//! when such a card may be safely replaced.
+//! This module supplies the pure, I/O-free pieces of that decision: the
+//! identity, the predicate that recognises a board card representing the
+//! same upstream item, and the rule for when a card may be replaced.
+//! (Scoping to a single source — by `source_metadata.source_id` — happens
+//! in [`route`](super::route); dedup is intentionally not cross-source.)
 //!
 //! **Safety rule:** dedup may only ever remove/replace a card that is
 //! still *untouched* — status [`TaskCardStatus::Todo`] **and** unclaimed

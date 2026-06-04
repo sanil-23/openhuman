@@ -5,7 +5,7 @@
 //! The periodic poll ([`periodic`]) fetches matching items through the
 //! existing Composio providers' [`fetch_tasks`] surface, the pipeline
 //! ([`pipeline`]) skips unchanged re-fetches and enriches the rest, and
-//! [`route`] applies cross-source, status-aware dedup ([`dedup`]) before
+//! [`route`] applies per-source, status-aware dedup ([`dedup`]) before
 //! dropping a todo card onto the dedicated `task-sources` thread board and
 //! (for proactive sources) dispatching a triage turn so an agent can start
 //! working.

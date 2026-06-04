@@ -48,12 +48,13 @@ fn board_location(config: &Config) -> BoardLocation {
     }
 }
 
-/// Route an enriched task with cross-source, status-aware dedup, then (for
+/// Route an enriched task with per-source, status-aware dedup, then (for
 /// proactive sources whose card was freshly created) dispatch a triage turn.
 ///
-/// `own_prior_card_id` is the card this *same* source last created for this
-/// upstream item (from the ledger), if any — used to distinguish an edit of
-/// our own card from a duplicate owned by another source.
+/// Dedup is scoped to the *originating* source: a source never extracts a card
+/// for an item it already has on the board. (Two different sources that both
+/// match the same upstream item each keep their own card — dedup deliberately
+/// does not collapse across sources.)
 ///
 /// Dedup never removes a card that has progressed past `Todo` or is claimed by
 /// a run: such a card is in-flight or already resolved, so the new fetch skips
@@ -62,9 +63,8 @@ pub async fn route_enriched(
     config: &Config,
     source: &TaskSource,
     enriched: &EnrichedTask,
-    own_prior_card_id: Option<&str>,
 ) -> Result<RouteOutcome, String> {
-    match decide_and_add(config, source, enriched, own_prior_card_id)? {
+    match decide_and_add(config, source, enriched)? {
         Decision::Deduped(existing_card_id) => Ok(RouteOutcome::Deduped { existing_card_id }),
         Decision::Created(card_id) => match source.target {
             SourceTarget::TodoOnly => {
@@ -113,22 +113,24 @@ fn has_active_run(location: &BoardLocation, card_id: &str) -> bool {
     }
 }
 
-/// Decide whether to create a card for `enriched` or dedup against one already
-/// on the board, then perform the chosen action.
+/// Decide whether to create a card for `enriched` or dedup against one this
+/// **same source** already has on the board, then perform the chosen action.
+///
+/// Only cards owned by `source` (matched via `source_metadata.source_id`) are
+/// considered — a different source's card for the same item is left alone.
 ///
 /// Rules:
-/// 1. **Cross-source duplicate** — a card owned by another source (or a
-///    recreated/deleted source) already represents this item → skip silently,
-///    sweeping our own redundant card if it's still an untouched `Todo`.
-/// 2. **Same-source refresh** — only our own prior card matches → replace it if
-///    it's still an untouched `Todo`; if it has progressed/resolved, leave it
-///    and skip (don't yank in-flight work or resurface a rejected/done item).
-/// 3. **New item** — no match → create a fresh card.
+/// 1. **In-flight / resolved** — this source already has a card for the item
+///    that has progressed past `Todo` (or is claimed by a run) → skip silently,
+///    sweeping any redundant untouched `Todo` duplicates this source leaked.
+/// 2. **Untouched refresh** — this source's only cards for the item are still
+///    `Todo` → remove them and add one fresh card (heals accumulated dupes and
+///    picks up edited content).
+/// 3. **New item** — this source has no card for the item → create one.
 fn decide_and_add(
     config: &Config,
     source: &TaskSource,
     enriched: &EnrichedTask,
-    own_prior_card_id: Option<&str>,
 ) -> Result<Decision, String> {
     let location = board_location(config);
     let identity = dedup::task_identity(&enriched.task);
@@ -136,63 +138,63 @@ fn decide_and_add(
         .map_err(|e| format!("[task_sources:route] failed to list board: {e}"))?
         .cards;
 
-    // Split existing cards for this item into our own prior card vs any card
-    // owned by a different source/handler.
-    let mut own_prior: Option<&TaskBoardCard> = None;
-    let mut foreign: Option<&TaskBoardCard> = None;
+    // This source's existing cards for this item: the untouched `Todo` ones we
+    // may replace, and the first in-flight/resolved one that blocks creation.
+    let mut replaceable_todo_ids: Vec<String> = Vec::new();
+    let mut blocking_id: Option<String> = None;
     for card in &cards {
-        if !dedup::card_matches_identity(card, &identity) {
+        if !card_owned_by(card, &source.id) || !dedup::card_matches_identity(card, &identity) {
             continue;
         }
-        if Some(card.id.as_str()) == own_prior_card_id {
-            own_prior = Some(card);
-        } else if foreign.is_none() {
-            foreign = Some(card);
+        if is_replaceable(&location, card) {
+            replaceable_todo_ids.push(card.id.clone());
+        } else if blocking_id.is_none() {
+            blocking_id = Some(card.id.clone());
         }
     }
 
-    // (1) Another card already covers this upstream item.
-    if let Some(existing) = foreign {
-        if let Some(prior) = own_prior {
-            if is_replaceable(&location, prior) {
-                let _ = todo_remove(&location, &prior.id);
-            }
+    // (1) An in-flight/resolved card from this source already covers the item.
+    // Skip, but sweep any redundant untouched-Todo duplicates left behind.
+    if let Some(existing_id) = blocking_id {
+        for id in &replaceable_todo_ids {
+            let _ = todo_remove(&location, id);
         }
         tracing::info!(
             source_id = %source.id,
             external_id = %identity.external_id,
-            existing_card_id = %existing.id,
-            existing_status = existing.status.as_str(),
-            "[task_sources:route] cross-source duplicate; skipping (existing card covers item)"
+            existing_card_id = %existing_id,
+            swept_dupes = replaceable_todo_ids.len(),
+            "[task_sources:route] source already has an in-flight/resolved card; skipping"
         );
-        return Ok(Decision::Deduped(existing.id.clone()));
+        return Ok(Decision::Deduped(existing_id));
     }
 
-    // (2) Same-source refresh of our own prior card.
-    if let Some(prior) = own_prior {
-        if is_replaceable(&location, prior) {
-            let _ = todo_remove(&location, &prior.id);
-            tracing::debug!(
-                source_id = %source.id,
-                external_id = %identity.external_id,
-                stale_card_id = %prior.id,
-                "[task_sources:route] replacing own stale Todo card with refreshed ingest"
-            );
-        } else {
-            tracing::info!(
-                source_id = %source.id,
-                external_id = %identity.external_id,
-                card_id = %prior.id,
-                status = prior.status.as_str(),
-                "[task_sources:route] own card is in-flight/resolved; skipping refresh"
-            );
-            return Ok(Decision::Deduped(prior.id.clone()));
-        }
+    // (2) Only untouched `Todo` cards (or none) → replace them with one fresh
+    // card (refreshes edited content and collapses any leaked duplicates).
+    for id in &replaceable_todo_ids {
+        let _ = todo_remove(&location, id);
+    }
+    if !replaceable_todo_ids.is_empty() {
+        tracing::debug!(
+            source_id = %source.id,
+            external_id = %identity.external_id,
+            replaced = replaceable_todo_ids.len(),
+            "[task_sources:route] replacing this source's untouched Todo card(s) with fresh ingest"
+        );
     }
 
-    // (3) New item (or our prior Todo was just swept) → create a fresh card.
+    // (3) Create the fresh card.
     let card_id = create_card(config, source, enriched, &location)?;
     Ok(Decision::Created(card_id))
+}
+
+/// True when `card` was ingested by `source_id` (per its `source_metadata`).
+fn card_owned_by(card: &TaskBoardCard, source_id: &str) -> bool {
+    card.source_metadata
+        .as_ref()
+        .and_then(|m| m.get("source_id"))
+        .and_then(|v| v.as_str())
+        == Some(source_id)
 }
 
 /// Remove every still-untouched (`Todo`, unclaimed) card belonging to
@@ -208,13 +210,7 @@ pub fn remove_source_cards(config: &Config, source_id: &str) -> Result<(usize, u
     let mut removed = 0usize;
     let mut preserved = 0usize;
     for card in &cards {
-        let owned = card
-            .source_metadata
-            .as_ref()
-            .and_then(|m| m.get("source_id"))
-            .and_then(|v| v.as_str())
-            == Some(source_id);
-        if !owned {
+        if !card_owned_by(card, source_id) {
             continue;
         }
         if is_replaceable(&location, card) {
@@ -671,56 +667,64 @@ mod tests {
     }
 
     #[test]
-    fn cross_source_duplicate_skips_second_card() {
+    fn same_source_unchanged_reingest_skips() {
+        // The same source re-extracting the same item → no second card.
         let (_tmp, config) = temp_config();
-        let src_a = source_with_id("source-a");
-        let src_b = source_with_id("source-b");
+        let src = source_with_id("source-a");
         let e = enriched("42", Some("https://github.com/octo/repo/issues/42"), 0.5);
 
-        // Source A creates the card.
-        let first = decide_and_add(&config, &src_a, &e, None).expect("first add");
-        let card_a = match first {
+        let card1 = match decide_and_add(&config, &src, &e).expect("first add") {
             Decision::Created(id) => id,
             Decision::Deduped(_) => panic!("first ingest should create"),
         };
+        // Move it off Todo so the source is "already working" the item.
+        set_status(&config, &card1, TaskCardStatus::AwaitingApproval);
 
-        // Source B ingests the same upstream item → dedup to A's card.
-        let second = decide_and_add(&config, &src_b, &e, None).expect("second add");
+        let second = decide_and_add(&config, &src, &e).expect("second add");
         match second {
-            Decision::Deduped(existing) => assert_eq!(existing, card_a),
-            Decision::Created(_) => panic!("cross-source duplicate must not create a second card"),
+            Decision::Deduped(existing) => assert_eq!(existing, card1),
+            Decision::Created(_) => panic!("source must not re-extract an item it already has"),
         }
         assert_eq!(board_cards(&config).unwrap().len(), 1, "exactly one card");
     }
 
     #[test]
-    fn recreated_source_does_not_duplicate() {
-        // A source deleted and recreated gets a new id and an empty ledger
-        // (own_prior = None), but the old card is still on the board.
+    fn different_sources_keep_independent_cards() {
+        // Dedup is per-source: two sources both matching the same upstream item
+        // each keep their own card.
         let (_tmp, config) = temp_config();
-        let old = source_with_id("old-uuid");
-        let new = source_with_id("new-uuid");
+        let src_a = source_with_id("source-a");
+        let src_b = source_with_id("source-b");
         let e = enriched("7", Some("https://github.com/octo/repo/issues/7"), 0.4);
 
-        decide_and_add(&config, &old, &e, None).expect("old add");
-        let second = decide_and_add(&config, &new, &e, None).expect("new add");
-        assert!(matches!(second, Decision::Deduped(_)));
-        assert_eq!(board_cards(&config).unwrap().len(), 1);
+        assert!(matches!(
+            decide_and_add(&config, &src_a, &e).expect("a"),
+            Decision::Created(_)
+        ));
+        assert!(matches!(
+            decide_and_add(&config, &src_b, &e).expect("b"),
+            Decision::Created(_),
+        ));
+        assert_eq!(
+            board_cards(&config).unwrap().len(),
+            2,
+            "each source keeps its own card"
+        );
     }
 
     #[test]
-    fn same_source_edit_replaces_untouched_todo_card() {
+    fn same_source_replaces_untouched_todo_card() {
         let (_tmp, config) = temp_config();
         let src = source_with_id("source-a");
         let e = enriched("9", Some("https://github.com/octo/repo/issues/9"), 0.4);
 
-        let card1 = match decide_and_add(&config, &src, &e, None).expect("add") {
+        let card1 = match decide_and_add(&config, &src, &e).expect("add") {
             Decision::Created(id) => id,
             Decision::Deduped(_) => panic!("first add creates"),
         };
 
-        // Edited re-ingest with our own prior card id → replace (still Todo).
-        let card2 = match decide_and_add(&config, &src, &e, Some(&card1)).expect("edit") {
+        // Re-ingest while the card is still an untouched Todo → replace it.
+        let card2 = match decide_and_add(&config, &src, &e).expect("re-ingest") {
             Decision::Created(id) => id,
             Decision::Deduped(_) => panic!("untouched todo should be replaced"),
         };
@@ -729,19 +733,43 @@ mod tests {
     }
 
     #[test]
-    fn inflight_card_is_not_replaced_on_edit() {
+    fn same_source_sweeps_leaked_todo_duplicates() {
+        // Heals the observed bug: a source that leaked several Todo cards for
+        // one item collapses back to a single card on the next ingest.
+        let (_tmp, config) = temp_config();
+        let src = source_with_id("source-a");
+        let location = board_location(&config);
+        let e = enriched("8", Some("https://github.com/octo/repo/issues/8"), 0.4);
+
+        // Simulate three leaked Todo cards for the same item from this source.
+        for _ in 0..3 {
+            create_card(&config, &src, &e, &location).expect("seed");
+        }
+        assert_eq!(board_cards(&config).unwrap().len(), 3);
+
+        let outcome = decide_and_add(&config, &src, &e).expect("re-ingest");
+        assert!(matches!(outcome, Decision::Created(_)));
+        assert_eq!(
+            board_cards(&config).unwrap().len(),
+            1,
+            "leaked Todo duplicates collapse to one"
+        );
+    }
+
+    #[test]
+    fn inflight_card_is_not_replaced_on_reingest() {
         let (_tmp, config) = temp_config();
         let src = source_with_id("source-a");
         let e = enriched("11", Some("https://github.com/octo/repo/issues/11"), 0.4);
 
-        let card1 = match decide_and_add(&config, &src, &e, None).expect("add") {
+        let card1 = match decide_and_add(&config, &src, &e).expect("add") {
             Decision::Created(id) => id,
             Decision::Deduped(_) => panic!("first add creates"),
         };
         set_status(&config, &card1, TaskCardStatus::InProgress);
 
-        // Edited re-ingest must NOT yank the in-flight card.
-        let outcome = decide_and_add(&config, &src, &e, Some(&card1)).expect("edit");
+        // Re-ingest must NOT yank the in-flight card.
+        let outcome = decide_and_add(&config, &src, &e).expect("re-ingest");
         match outcome {
             Decision::Deduped(existing) => assert_eq!(existing, card1),
             Decision::Created(_) => panic!("must not replace an in-flight card"),
@@ -756,25 +784,25 @@ mod tests {
     }
 
     #[test]
-    fn cross_source_skip_does_not_remove_progressed_duplicate() {
-        // An existing progressed card from another source blocks a new card and
-        // is never removed.
+    fn rejected_card_does_not_resurface() {
         let (_tmp, config) = temp_config();
-        let src_a = source_with_id("source-a");
-        let src_b = source_with_id("source-b");
-        let e = enriched("13", Some("https://github.com/octo/repo/issues/13"), 0.5);
+        let src = source_with_id("source-a");
+        let e = enriched("12", Some("https://github.com/octo/repo/issues/12"), 0.4);
 
-        let card_a = match decide_and_add(&config, &src_a, &e, None).expect("add") {
+        let card1 = match decide_and_add(&config, &src, &e).expect("add") {
             Decision::Created(id) => id,
             Decision::Deduped(_) => unreachable!(),
         };
-        set_status(&config, &card_a, TaskCardStatus::AwaitingApproval);
+        set_status(&config, &card1, TaskCardStatus::Rejected);
 
-        let outcome = decide_and_add(&config, &src_b, &e, None).expect("add b");
-        assert!(matches!(outcome, Decision::Deduped(_)));
+        let outcome = decide_and_add(&config, &src, &e).expect("re-ingest");
+        assert!(
+            matches!(outcome, Decision::Deduped(_)),
+            "rejected stays suppressed"
+        );
         let cards = board_cards(&config).unwrap();
         assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].status, TaskCardStatus::AwaitingApproval);
+        assert_eq!(cards[0].status, TaskCardStatus::Rejected);
     }
 
     #[test]
@@ -783,7 +811,7 @@ mod tests {
         let src = source_with_id("source-a");
         let e = enriched("15", Some("https://github.com/octo/repo/issues/15"), 0.4);
 
-        let card1 = match decide_and_add(&config, &src, &e, None).expect("add") {
+        let card1 = match decide_and_add(&config, &src, &e).expect("add") {
             Decision::Created(id) => id,
             Decision::Deduped(_) => unreachable!(),
         };
@@ -791,7 +819,7 @@ mod tests {
         let location = board_location(&config);
         runs::create_run(&location, "run-1", &card1, "default").expect("create_run");
 
-        let outcome = decide_and_add(&config, &src, &e, Some(&card1)).expect("edit");
+        let outcome = decide_and_add(&config, &src, &e).expect("re-ingest");
         match outcome {
             Decision::Deduped(existing) => assert_eq!(existing, card1),
             Decision::Created(_) => panic!("claimed card must not be replaced"),
@@ -806,8 +834,8 @@ mod tests {
         let todo = enriched("20", Some("https://github.com/octo/repo/issues/20"), 0.4);
         let busy = enriched("21", Some("https://github.com/octo/repo/issues/21"), 0.4);
 
-        decide_and_add(&config, &src, &todo, None).expect("add todo");
-        let busy_id = match decide_and_add(&config, &src, &busy, None).expect("add busy") {
+        decide_and_add(&config, &src, &todo).expect("add todo");
+        let busy_id = match decide_and_add(&config, &src, &busy).expect("add busy") {
             Decision::Created(id) => id,
             Decision::Deduped(_) => unreachable!(),
         };
@@ -826,8 +854,8 @@ mod tests {
         let (_tmp, config) = temp_config();
         let a = source_with_id("source-a");
         let b = source_with_id("source-b");
-        decide_and_add(&config, &a, &enriched("30", None, 0.4), None).expect("a");
-        decide_and_add(&config, &b, &enriched("31", None, 0.4), None).expect("b");
+        decide_and_add(&config, &a, &enriched("30", None, 0.4)).expect("a");
+        decide_and_add(&config, &b, &enriched("31", None, 0.4)).expect("b");
 
         let (removed, _) = remove_source_cards(&config, "source-a").expect("cleanup");
         assert_eq!(removed, 1);
