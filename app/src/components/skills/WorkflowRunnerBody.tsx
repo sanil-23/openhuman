@@ -314,6 +314,27 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
   const [recentRuns, setRecentRuns] = useState<ScannedRun[]>([]);
   const [recentRunsLoading, setRecentRunsLoading] = useState(false);
   const [recentRunsRefreshNonce, setRecentRunsRefreshNonce] = useState(0);
+  // Timers for the post-run refresh burst (cleared on unmount). A just-started
+  // run's log header is written a beat after `workflows_run` returns, so a
+  // single immediate re-scan can miss it — we bump now and a couple more times.
+  const recentRunsTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(
+    () => () => {
+      recentRunsTimersRef.current.forEach(clearTimeout);
+      recentRunsTimersRef.current = [];
+    },
+    []
+  );
+  const scheduleRecentRunsRefresh = useCallback(() => {
+    setRecentRunsRefreshNonce((n) => n + 1);
+    recentRunsTimersRef.current.forEach(clearTimeout);
+    recentRunsTimersRef.current = [1500, 4000].map((ms) =>
+      setTimeout(() => setRecentRunsRefreshNonce((n) => n + 1), ms)
+    );
+  }, []);
+  // Guards against a fast double-click spawning two runs before the button's
+  // disabled state (driven by async React state) has applied.
+  const runSubmitGuardRef = useRef(false);
 
   // Inline log viewer: one row expanded at a time. The viewer state map
   // is keyed by run_id so we keep paginated state per run without
@@ -478,6 +499,12 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
 
   const handleRun = useCallback(async () => {
     if (!description) return;
+    // Re-entry guard: a second click before React applies the disabled state
+    // would otherwise fire `workflows_run` twice and spawn two real runs.
+    if (runSubmitGuardRef.current) {
+      log('runSkill: ignoring re-entrant click while a run is starting');
+      return;
+    }
     if (missingRequired.length > 0) {
       setRun({
         status: 'error',
@@ -485,18 +512,23 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
       });
       return;
     }
+    runSubmitGuardRef.current = true;
     setRun({ status: 'submitting' });
     try {
       const inputs = buildInputsPayload(description, formValues);
       log('runSkill %s inputs=%o', description.id, inputs);
       const result = await skillsApi.runSkill(description.id, inputs);
       setRun({ status: 'started', result });
+      // Surface the new run in "Recent runs" without a manual refresh.
+      scheduleRecentRunsRefresh();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       log('runSkill error: %s', msg);
       setRun({ status: 'error', message: msg });
+    } finally {
+      runSubmitGuardRef.current = false;
     }
-  }, [description, formValues, missingRequired, t]);
+  }, [description, formValues, missingRequired, scheduleRecentRunsRefresh, t]);
 
   // ── Recent runs: load on mount + on skill change + on demand ───────
   useEffect(() => {

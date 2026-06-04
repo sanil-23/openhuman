@@ -650,6 +650,34 @@ describe('WorkflowRunnerBody — Run Now flow', () => {
     );
   });
 
+  it('auto-refreshes the recent-runs list after a run starts (no manual refresh)', async () => {
+    // Regression: handleRun didn't re-scan recentRuns after starting a run, so
+    // the new run never appeared until the user hit refresh — which led them to
+    // click Run again and spawn a second run.
+    const Body = await importBody();
+    renderBody(Body);
+    await waitFor(() => expect(hoisted.listSkills).toHaveBeenCalled());
+
+    const select = screen.getByLabelText('settings.skillsRunner.skill') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'pr-review-shepherd' } });
+    await waitFor(() => expect(hoisted.describeSkill).toHaveBeenCalled());
+
+    const repoInput = await screen.findByTestId('repo-picker-stub');
+    fireEvent.change(repoInput, { target: { value: 'owner/myrepo' } });
+
+    const runBtn = await screen.findByText('settings.skillsRunner.runNow');
+    await waitFor(() => expect(runBtn.closest('button')).not.toBeDisabled());
+
+    const callsBefore = hoisted.recentRuns.mock.calls.length;
+    fireEvent.click(runBtn.closest('button')!);
+
+    await waitFor(() => expect(hoisted.runSkill).toHaveBeenCalledTimes(1));
+    // The post-run refresh burst re-scans recentRuns on its own.
+    await waitFor(() =>
+      expect(hoisted.recentRuns.mock.calls.length).toBeGreaterThan(callsBefore)
+    );
+  });
+
   it('surfaces error when runSkill rejects', async () => {
     hoisted.runSkill.mockRejectedValue(new Error('backend error'));
     const Body = await importBody();
