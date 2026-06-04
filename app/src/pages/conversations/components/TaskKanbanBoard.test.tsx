@@ -22,10 +22,11 @@ vi.mock('../../../utils/tauriCommands', () => ({
 }));
 
 // TaskSourceControls navigates to the settings page via useNavigate(); these
-// tests render the board without a <Router>, so stub navigation to a no-op.
+// tests render the board without a <Router>, so capture navigation via a spy.
+const navigateSpy = vi.hoisted(() => vi.fn());
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
-  return { ...actual, useNavigate: () => vi.fn() };
+  return { ...actual, useNavigate: () => navigateSpy };
 });
 
 function card(partial: Partial<TaskBoardCard>): TaskBoardCard {
@@ -189,5 +190,35 @@ describe('TaskKanbanBoard approval surface', () => {
     await waitFor(() =>
       expect(openhumanTaskSourcesUpdate).toHaveBeenCalledWith('src-1', { enabled: false })
     );
+
+    // "Manage sources" jumps to the settings page.
+    fireEvent.click(screen.getByText('conversations.taskKanban.sources.manage'));
+    expect(navigateSpy).toHaveBeenCalledWith('/settings/task-sources');
+  });
+
+  it('shows a "View work" button on a card with a session thread and calls onViewSession', () => {
+    const onViewSession = vi.fn();
+    render(
+      <TaskKanbanBoard
+        board={board([
+          card({ id: 'c1', title: 'Worked card', status: 'in_progress', sessionThreadId: 'task-xyz' }),
+        ])}
+        onViewSession={onViewSession}
+      />
+    );
+
+    fireEvent.click(screen.getByTitle('conversations.taskKanban.viewWork'));
+    expect(onViewSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'c1' }));
+  });
+
+  it('omits the "View work" button when the card has no session thread', () => {
+    render(
+      <TaskKanbanBoard
+        board={board([card({ id: 'c2', title: 'Unworked card', status: 'todo' })])}
+        onViewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTitle('conversations.taskKanban.viewWork')).toBeNull();
   });
 });

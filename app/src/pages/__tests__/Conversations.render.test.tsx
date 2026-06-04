@@ -1621,3 +1621,42 @@ describe('Conversations — thread title editing', () => {
     expect(threadApi.updateTitle).not.toHaveBeenCalled();
   });
 });
+
+describe('Conversations — open-session resume (View work)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetThreadMessages.mockResolvedValue({ messages: [], count: 0 });
+  });
+
+  it('honours location.state.openThreadId to open a task session on mount', async () => {
+    // A task-labelled session thread, reachable only via an explicit
+    // open-intent because it's hidden behind the default General tab.
+    const taskThread = makeThread({
+      id: 'task-open-1',
+      title: 'Autonomous run',
+      labels: ['tasks'],
+    });
+    mockGetThreads.mockResolvedValue({ threads: [taskThread], count: 1 });
+
+    const store = buildStore({ thread: emptyThreadState });
+    const { default: Conversations } = await import('../Conversations');
+
+    await act(async () => {
+      render(
+        <Provider store={store}>
+          <MemoryRouter
+            initialEntries={[
+              { pathname: '/conversations', state: { openThreadId: 'task-open-1' } },
+            ]}>
+            <Conversations />
+          </MemoryRouter>
+        </Provider>
+      );
+    });
+
+    // The open-intent selects the task session (bypassing the General-tab
+    // filter) and loads its messages.
+    await waitFor(() => expect(store.getState().thread.selectedThreadId).toBe('task-open-1'));
+    await waitFor(() => expect(mockGetThreadMessages).toHaveBeenCalled());
+  });
+});
