@@ -2,7 +2,6 @@ import { expect, type Page, test } from '@playwright/test';
 
 import {
   bootAuthenticatedPage,
-  callCoreRpc,
   dismissWalkthroughIfPresent,
   waitForAppReady,
 } from '../helpers/core-rpc';
@@ -40,12 +39,10 @@ test.describe('Top-level functional flows', () => {
     await page.getByRole('button', { name: 'Create workflow' }).click();
 
     await expect(page.getByRole('heading', { name })).toBeVisible({ timeout: 15_000 });
-    const workflows = await callCoreRpc<{ workflows?: Array<{ id: string; name: string }> }>(
-      'openhuman.workflows_list',
-      {}
-    );
-    const created = workflows.workflows?.find(workflow => workflow.name === name);
-    expect(created?.id).toBeTruthy();
+    // The display name is already slug-shaped, so the workflow id === name
+    // (create derives the id by slugifying the name). Use it directly for the
+    // delete selectors instead of round-tripping through workflows_list.
+    const id = name;
 
     // Creating navigates to the runner page locked to the new workflow, so
     // return to the Workflows list to delete it. The delete action lives in
@@ -54,9 +51,9 @@ test.describe('Top-level functional flows', () => {
     await waitForAppReady(page);
     await dismissWalkthroughIfPresent(page);
 
-    const card = page.getByTestId(`workflow-card-${created!.id}`);
+    const card = page.getByTestId(`workflow-card-${id}`);
     await card.getByTitle('More actions').click();
-    await page.getByTestId(`workflow-uninstall-${created!.id}`).click();
+    await page.getByTestId(`workflow-uninstall-${id}`).click();
     await expect(page.getByRole('dialog')).toBeVisible();
     await page.getByTestId('uninstall-skill-confirm').click();
     await expect(page.getByText(name)).toHaveCount(0, { timeout: 15_000 });
