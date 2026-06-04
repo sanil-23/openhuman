@@ -88,10 +88,15 @@ describe('UserTaskComposer', () => {
     const created = {
       id: 'card-1',
       title: 'Ship it',
-      status: 'todo',
+      status: 'todo' as const,
+      order: 0,
       updatedAt: '2099-01-01T00:00:00Z',
     };
-    mockAdd.mockResolvedValueOnce({ threadId: USER_TASKS_THREAD_ID, cards: [created], updatedAt: '' });
+    mockAdd.mockResolvedValueOnce({
+      threadId: USER_TASKS_THREAD_ID,
+      cards: [created],
+      updatedAt: '',
+    });
     mockEdit.mockResolvedValueOnce({
       threadId: USER_TASKS_THREAD_ID,
       cards: [{ ...created, assignedAgent: 'orchestrator' }],
