@@ -31,7 +31,14 @@ export default function WorkflowsRun() {
             <button
               type="button"
               onClick={() =>
-                window.history.length > 1 ? navigate(-1) : navigate('/intelligence?tab=workflows')
+                // Use the router history index, not `history.length`: length > 1
+                // is true even when the only prior entry is an external referrer,
+                // which would bounce the user out of the app. `state.idx > 0`
+                // means there's an in-app entry to go back to (matches
+                // useSettingsNavigation's guard).
+                (window.history.state?.idx ?? 0) > 0
+                  ? navigate(-1)
+                  : navigate('/intelligence?tab=workflows')
               }
               aria-label={t('common.back')}
               className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-stone-600 dark:text-neutral-300 hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors">
