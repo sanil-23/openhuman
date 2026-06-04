@@ -4369,7 +4369,7 @@ const en: TranslationMap = {
   'skills.detail.bundledResources': 'Bundled resources',
   'skills.detail.run': 'Run',
   'skills.detail.runAriaLabel': 'Run this workflow',
-  'skills.run.title': 'Run workflow',
+  'skills.run.title': 'Workflow',
   'skills.detail.closeAriaLabel': 'Close skill details',
   'skills.detail.location': 'Location',
   'skills.detail.noBundledResources': 'No bundled resources.',

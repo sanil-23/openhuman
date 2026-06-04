@@ -4789,7 +4789,7 @@ const messages: TranslationMap = {
   'skills.create.inputs.row.descriptionError': 'Для каждого ввода требуется описание.',
   'skills.detail.run': 'Запустить',
   'skills.detail.runAriaLabel': 'Запустить этот рабочий процесс',
-  'skills.run.title': 'Запустить рабочий процесс',
+  'skills.run.title': 'Рабочий процесс',
   'workflows.installFromUrl': 'Установить по URL',
 
   // Run queue

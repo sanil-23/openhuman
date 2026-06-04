@@ -1,9 +1,10 @@
 /**
  * /workflows/run — single-purpose workflow runner page.
  *
- * Reached from a workflow's detail drawer ("Run workflow" CTA) or any
- * `?workflow=<id>` deep link. Hosts the WorkflowRunnerBody picker + form +
- * run-now + save-schedule flow without the Connections-page tab chrome.
+ * Reached by clicking a workflow card (which locks the page to that
+ * workflow via `?workflow=<id>&lock=1`) or any `?workflow=<id>` deep link.
+ * Hosts the WorkflowRunnerBody picker + form + run-now + edit + schedule +
+ * recent-runs flow without the Connections-page tab chrome.
  *
  * Bookmark-friendly and shareable via `?workflow=<id>` (the body reads the
  * query param and pre-selects the workflow — see WorkflowRunnerBody.tsx).

@@ -4748,7 +4748,7 @@ const messages: TranslationMap = {
   'skills.create.inputs.row.descriptionError': 'प्रत्येक इनपुट के लिए विवरण आवश्यक है।',
   'skills.detail.run': 'चलाएँ',
   'skills.detail.runAriaLabel': 'यह वर्कफ़्लो चलाएँ',
-  'skills.run.title': 'वर्कफ़्लो चलाएँ',
+  'skills.run.title': 'वर्कफ़्लो',
   'workflows.installFromUrl': 'URL से इंस्टॉल करें',
 
   // Run queue

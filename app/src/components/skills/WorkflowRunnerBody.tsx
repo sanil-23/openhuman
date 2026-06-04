@@ -225,8 +225,8 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
 
   // Active skill + its full description (inputs declared).
   // Pre-seeded from the URL `?workflow=<id>` query so any surface that
-  // deep-links to a specific workflow (e.g. the workflow detail drawer's
-  // "Run workflow" CTA) can land the user with the picker already pointed
+  // deep-links to a specific workflow (e.g. clicking a workflow card, which
+  // locks the page to it) can land the user with the picker already pointed
   // at the right workflow.
   const [searchParams, setSearchParams] = useSearchParams();
   const initialSkillId = searchParams.get('workflow') ?? '';

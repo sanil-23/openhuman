@@ -4696,7 +4696,7 @@ const messages: TranslationMap = {
   'skills.create.inputs.row.descriptionError': '각 입력에는 설명이 필요합니다.',
   'skills.detail.run': '실행',
   'skills.detail.runAriaLabel': '이 워크플로 실행',
-  'skills.run.title': '워크플로 실행',
+  'skills.run.title': '워크플로',
   'workflows.installFromUrl': 'URL에서 설치',
 
   // Run queue

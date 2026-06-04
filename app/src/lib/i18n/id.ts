@@ -4760,7 +4760,7 @@ const messages: TranslationMap = {
   'skills.create.inputs.row.descriptionError': 'Deskripsi diperlukan untuk setiap input.',
   'skills.detail.run': 'Jalankan',
   'skills.detail.runAriaLabel': 'Jalankan alur kerja ini',
-  'skills.run.title': 'Jalankan alur kerja',
+  'skills.run.title': 'Alur kerja',
   'workflows.installFromUrl': 'Instal dari URL',
 
   // Run queue

@@ -4878,7 +4878,7 @@ const messages: TranslationMap = {
     'Für jede Eingabe ist eine Beschreibung erforderlich.',
   'skills.detail.run': 'Ausführen',
   'skills.detail.runAriaLabel': 'Diesen Workflow ausführen',
-  'skills.run.title': 'Workflow ausführen',
+  'skills.run.title': 'Workflow',
   'workflows.installFromUrl': 'Von URL installieren',
 
   // Run queue

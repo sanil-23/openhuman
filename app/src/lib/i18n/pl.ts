@@ -4825,7 +4825,7 @@ const messages: TranslationMap = {
   'skills.create.inputs.row.descriptionError': 'Każde pole wejściowe wymaga opisu.',
   'skills.detail.run': 'Uruchom',
   'skills.detail.runAriaLabel': 'Uruchom ten przepływ pracy',
-  'skills.run.title': 'Uruchom przepływ pracy',
+  'skills.run.title': 'Przepływ pracy',
   'workflows.installFromUrl': 'Zainstaluj z adresu URL',
 
   // Run queue

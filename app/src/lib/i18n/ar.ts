@@ -4652,7 +4652,7 @@ const messages: TranslationMap = {
   'skills.create.inputs.row.descriptionError': 'يلزم وصف لكل إدخال.',
   'skills.detail.run': 'تشغيل',
   'skills.detail.runAriaLabel': 'تشغيل سير العمل هذا',
-  'skills.run.title': 'تشغيل سير العمل',
+  'skills.run.title': 'سير العمل',
   'workflows.installFromUrl': 'التثبيت من رابط',
 
   // Run queue

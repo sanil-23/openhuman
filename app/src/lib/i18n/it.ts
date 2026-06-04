@@ -4834,7 +4834,7 @@ const messages: TranslationMap = {
   'skills.create.inputs.row.descriptionError': 'È richiesta una descrizione per ogni input.',
   'skills.detail.run': 'Esegui',
   'skills.detail.runAriaLabel': 'Esegui questo workflow',
-  'skills.run.title': 'Esegui workflow',
+  'skills.run.title': 'Workflow',
   'workflows.installFromUrl': 'Installa da URL',
 
   // Run queue
