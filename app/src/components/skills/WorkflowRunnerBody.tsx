@@ -354,6 +354,19 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  // Deep-link from the workflow detail's "Schedule" button (`&focus=schedule`):
+  // scroll the recurring-schedule section into view once the selected
+  // workflow's body has rendered. rAF defers past the render commit.
+  useEffect(() => {
+    if (searchParams.get('focus') !== 'schedule' || !selectedSkillId) return;
+    const timer = setTimeout(() => {
+      document
+        .getElementById('workflow-schedule')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [searchParams, selectedSkillId]);
+
   // ── Initial load: skills_list ──────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -1054,7 +1067,9 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                 </div>
 
                 {/* Schedule (cron-driven recurring) */}
-                <div className="pt-4 border-t border-stone-200 dark:border-stone-700">
+                <div
+                  id="workflow-schedule"
+                  className="pt-4 border-t border-stone-200 dark:border-stone-700">
                   <div>
                     <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-200">
                       {t('settings.skillsRunner.schedule.heading')}

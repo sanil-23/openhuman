@@ -57,6 +57,14 @@ export default function SkillDetailDrawer({ skill, onClose }: Props) {
     onClose();
     navigate(`/workflows/run?workflow=${encodeURIComponent(skill.id)}`);
   }, [navigate, onClose, skill.id]);
+  // "Schedule" → same focused runner page, but deep-linked to its recurring-
+  // schedule section (`&focus=schedule`) so cron scheduling is discoverable
+  // per workflow (it used to live on the now-removed Runners tab).
+  const handleSchedule = useCallback(() => {
+    log('schedule-workflow skillId=%s', skill.id);
+    onClose();
+    navigate(`/workflows/run?workflow=${encodeURIComponent(skill.id)}&focus=schedule`);
+  }, [navigate, onClose, skill.id]);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
@@ -154,6 +162,13 @@ export default function SkillDetailDrawer({ skill, onClose }: Props) {
               aria-label={t('skills.detail.runAriaLabel')}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary-500 px-3 py-1.5 text-xs font-semibold text-white shadow-soft transition-colors hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1">
               <span aria-hidden="true">▷</span> {t('skills.detail.run')}
+            </button>
+            <button
+              type="button"
+              data-testid="skill-detail-schedule"
+              onClick={handleSchedule}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-xs font-medium text-stone-700 dark:text-neutral-200 shadow-soft transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1">
+              <span aria-hidden="true">◷</span> {t('settings.cron.jobs.schedule')}
             </button>
             <button
               ref={closeBtnRef}
