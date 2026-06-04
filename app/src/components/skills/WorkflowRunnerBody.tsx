@@ -1109,10 +1109,14 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                   </div>
                 )}
 
-                {/* Run — the primary action, right after the input box. Shown
-                    on the locked workflow page too (the consolidated runner is
-                    the workflow's run surface, not schedule-only). */}
-                <div className="pt-2 flex flex-col gap-2">
+                {/* Run now + Schedule in one box — both act on the same
+                    inputs above. Run fires immediately; the schedule row saves
+                    a recurring cron with those inputs snapshotted. */}
+                <div
+                  id="workflow-schedule"
+                  className="space-y-4 rounded-2xl border border-stone-200/90 dark:border-stone-700/80 bg-gradient-to-br from-stone-50 via-white to-stone-100 dark:from-stone-900 dark:via-stone-900 dark:to-stone-800/80 px-4 py-4 shadow-soft"
+                >
+                  <div className="flex flex-col gap-2">
                   <button
                     type="button"
                     onClick={() => void handleRun()}
@@ -1173,20 +1177,11 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                   })()}
                 </div>
 
-                {/* Schedule (cron-driven recurring) */}
-                <div
-                  id="workflow-schedule"
-                  className="pt-4 border-t border-stone-200 dark:border-stone-700">
-                  <div>
-                    <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-200">
+                  {/* Same inputs, second action: run it on a schedule. */}
+                  <div className="border-t border-stone-200/70 dark:border-stone-700/70 pt-3">
+                    <h3 className="mb-2 text-sm font-semibold text-stone-800 dark:text-stone-200">
                       {t('settings.skillsRunner.schedule.heading')}
                     </h3>
-                    <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">
-                      {t('settings.skillsRunner.schedule.help')}
-                    </p>
-                  </div>
-
-                  <div className="mt-3 rounded-2xl border border-stone-200/90 dark:border-stone-700/80 bg-gradient-to-br from-stone-50 via-white to-stone-100 dark:from-stone-900 dark:via-stone-900 dark:to-stone-800/80 px-3 py-3 shadow-soft">
                     <div className="flex flex-col sm:flex-row sm:items-end gap-2">
                       <div className="flex-1">
                         <label
@@ -1219,7 +1214,6 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                           : t('settings.skillsRunner.schedule.save')}
                       </button>
                     </div>
-                  </div>
 
                   {scheduleSaved && (
                     <p className="mt-2 inline-flex items-center rounded-full border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/40 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
@@ -1231,6 +1225,7 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                       {t('settings.skillsRunner.schedule.error')} {scheduleError}
                     </p>
                   )}
+                  </div>
 
                   {/* Existing scheduled jobs for this skill */}
                   {scheduledJobsLoading ? (
