@@ -161,7 +161,6 @@ named = [
     # degenerate-response detector all apply).
     "list_workflows",
     "describe_workflow",
-    "read_workflow_resource",
     "list_workflow_runs",
     "read_workflow_run_log",
     "run_workflow",
