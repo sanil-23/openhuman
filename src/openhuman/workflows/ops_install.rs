@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ops_discover::{discover_workflows_inner, is_workspace_trusted};
 use super::ops_parse::parse_workflow_md_str;
-use super::ops_types::{WorkflowFrontmatter, WorkflowScope, MAX_NAME_LEN, SKILL_MD};
+use super::ops_types::{WorkflowFrontmatter, WorkflowScope, MAX_NAME_LEN, SKILL_MD, WORKFLOW_MD};
 
 /// Strip userinfo, query, and fragment from a URL for safe inclusion in
 /// observability tags. Returns `<scheme>://<host>[:<port>]<path>` on success,
@@ -405,31 +405,38 @@ pub fn uninstall_workflow(
         None => return Err("could not resolve user home directory".to_string()),
     };
 
-    let skills_root = home.join(".openhuman").join("skills");
-    if !skills_root.exists() {
-        return Err(format!(
-            "no user skills directory at {}",
-            skills_root.display()
-        ));
-    }
+    // Workflows created post-rename live under `~/.openhuman/workflows/`; older
+    // ones under `~/.openhuman/skills/`. Resolve whichever root actually holds
+    // this id so delete works regardless of when it was authored.
+    let openhuman_dir = home.join(".openhuman");
+    let root = [
+        openhuman_dir.join("workflows"),
+        openhuman_dir.join("skills"),
+    ]
+    .into_iter()
+    .find(|r| r.join(&trimmed).exists());
+    let root = match root {
+        Some(r) => r,
+        None => return Err(format!("workflow '{trimmed}' is not installed")),
+    };
 
-    let root_meta = std::fs::symlink_metadata(&skills_root)
-        .map_err(|e| format!("stat {} failed: {e}", skills_root.display()))?;
+    let root_meta = std::fs::symlink_metadata(&root)
+        .map_err(|e| format!("stat {} failed: {e}", root.display()))?;
     if root_meta.file_type().is_symlink() {
         log::warn!(
-            "[skills] uninstall_workflow: refused symlinked skills root path={}",
-            skills_root.display()
+            "[workflows] uninstall_workflow: refused symlinked root path={}",
+            root.display()
         );
         return Err(format!(
-            "skills root {} is a symlink — refusing to resolve",
-            skills_root.display()
+            "workflows root {} is a symlink — refusing to resolve",
+            root.display()
         ));
     }
 
-    let canonical_root = std::fs::canonicalize(&skills_root)
-        .map_err(|e| format!("canonicalize {} failed: {e}", skills_root.display()))?;
+    let canonical_root = std::fs::canonicalize(&root)
+        .map_err(|e| format!("canonicalize {} failed: {e}", root.display()))?;
 
-    let candidate = skills_root.join(&trimmed);
+    let candidate = root.join(&trimmed);
     match std::fs::symlink_metadata(&candidate) {
         Ok(m) if m.file_type().is_symlink() => {
             log::warn!(
@@ -478,10 +485,11 @@ pub fn uninstall_workflow(
         ));
     }
 
-    let skill_md = canonical_candidate.join(SKILL_MD);
-    if !skill_md.exists() {
+    if !canonical_candidate.join(WORKFLOW_MD).exists()
+        && !canonical_candidate.join(SKILL_MD).exists()
+    {
         return Err(format!(
-            "{} does not look like a SKILL.md skill (missing {SKILL_MD})",
+            "{} does not look like a workflow (missing {WORKFLOW_MD})",
             canonical_candidate.display()
         ));
     }

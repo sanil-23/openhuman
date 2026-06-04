@@ -1145,11 +1145,28 @@ fn uninstall_skill_refuses_dir_without_skill_md() {
         Some(home.path()),
     )
     .unwrap_err();
-    assert!(
-        err.contains("does not look like a SKILL.md skill"),
-        "got: {err}"
-    );
+    assert!(err.contains("does not look like a workflow"), "got: {err}");
     assert!(bogus.exists(), "non-skill dir should not be deleted");
+}
+
+/// Delete must work for workflows authored post-rename, i.e. under
+/// `~/.openhuman/workflows/<id>/WORKFLOW.md` (the regression that left delete
+/// looking only in the legacy `skills/` root).
+#[test]
+fn uninstall_workflow_removes_new_workflows_dir() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join(".openhuman").join("workflows").join("wf");
+    write(
+        &dir.join(WORKFLOW_MD),
+        "---\nname: wf\ndescription: d\n---\n\nbody\n",
+    );
+    let out = uninstall_workflow(
+        UninstallWorkflowParams { name: "wf".into() },
+        Some(home.path()),
+    )
+    .expect("delete should succeed for a workflows/ dir");
+    assert_eq!(out.name, "wf");
+    assert!(!dir.exists(), "workflow dir should be removed");
 }
 
 /// A symlink inside the skills root pointing outside the root must be
@@ -1245,8 +1262,8 @@ fn uninstall_skill_rejects_symlinked_skills_root() {
     )
     .unwrap_err();
     assert!(
-        err.contains("skills root") && err.contains("symlink"),
-        "symlinked skills root must be refused, got: {err}"
+        err.contains("symlink"),
+        "symlinked workflows root must be refused, got: {err}"
     );
     assert!(
         real_skills.join("real").join("SKILL.md").exists(),
