@@ -461,7 +461,7 @@ const CreateWorkflowForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProp
             role="alert"
             className="rounded-xl border border-coral-200 bg-coral-50 p-3 text-xs text-coral-900"
           >
-            <p className="font-semibold">{t('skills.create.createError')}</p>
+            <p className="font-semibold">{t('workflows.create.createError')}</p>
             <p className="mt-1 whitespace-pre-wrap font-mono">{error}</p>
           </div>
         ) : null}

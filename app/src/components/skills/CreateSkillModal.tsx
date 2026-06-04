@@ -100,10 +100,10 @@ export default function CreateSkillModal({ onClose, onCreated }: Props) {
               id="create-skill-title"
               className="text-base font-semibold text-stone-900 dark:text-neutral-100 font-sans"
             >
-              {t('skills.create.title')}
+              {t('workflows.create.title')}
             </h2>
             <p className="mt-0.5 text-xs text-stone-500 dark:text-neutral-400">
-              {t('skills.create.subtitle')}
+              {t('workflows.create.subtitle')}
             </p>
           </div>
           <button
@@ -155,7 +155,7 @@ export default function CreateSkillModal({ onClose, onCreated }: Props) {
             disabled={!formValid || submitting}
             className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {submitting ? t('skills.create.creating') : t('skills.create.createBtn')}
+            {submitting ? t('workflows.create.creating') : t('workflows.create.createBtn')}
           </button>
         </div>
       </div>
