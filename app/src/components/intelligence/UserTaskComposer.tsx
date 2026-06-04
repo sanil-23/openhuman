@@ -61,35 +61,21 @@ export function UserTaskComposer({ onCreated, onClose }: UserTaskComposerProps) 
     // Auto-pick only works on the personal board (the poller doesn't poll
     // attached conversation threads), so ignore the toggle when attaching.
     const assign = assignToAgent && !attachThreadId;
-    const createdAt = new Date().toISOString();
     setSubmitting(true);
     setError(null);
     log('submit threadId=%s status=%s assign=%s', threadId, status, assign);
     try {
-      let board = await todosApi.add({
+      // Assigning to the orchestrator + waiving the per-card approval gate so
+      // the dispatcher's poller picks it up and runs it — done atomically in
+      // the single `add` call (no create-then-edit race / partial failure).
+      const board = await todosApi.add({
         threadId,
         content: trimmedTitle,
         status,
         objective: objective.trim() || null,
         notes: notes.trim() || null,
+        ...(assign ? { assignedAgent: 'orchestrator', approvalMode: 'not_required' } : {}),
       });
-
-      // Assign to the orchestrator + waive the per-card approval gate so the
-      // dispatcher's poller picks it up and runs it (mirrors the source-plan
-      // approve flow). `add` can't set these, so edit the just-created card.
-      if (assign) {
-        const created =
-          board.cards.find(card => card.title === trimmedTitle && card.updatedAt >= createdAt) ??
-          board.cards[board.cards.length - 1];
-        if (created) {
-          board = await todosApi.edit({
-            threadId,
-            id: created.id,
-            assignedAgent: 'orchestrator',
-            approvalMode: 'not_required',
-          });
-        }
-      }
 
       onCreated(threadId, board);
       onClose();

@@ -84,24 +84,8 @@ describe('UserTaskComposer', () => {
     expect(mockAdd.mock.calls[0][0].threadId).toBe('t-1');
   });
 
-  it('assigns the new card to the orchestrator when "assign to agent" is on', async () => {
-    const created = {
-      id: 'card-1',
-      title: 'Ship it',
-      status: 'todo' as const,
-      order: 0,
-      updatedAt: '2099-01-01T00:00:00Z',
-    };
-    mockAdd.mockResolvedValueOnce({
-      threadId: USER_TASKS_THREAD_ID,
-      cards: [created],
-      updatedAt: '',
-    });
-    mockEdit.mockResolvedValueOnce({
-      threadId: USER_TASKS_THREAD_ID,
-      cards: [{ ...created, assignedAgent: 'orchestrator' }],
-      updatedAt: '',
-    });
+  it('assigns the new card to the orchestrator atomically when "assign to agent" is on', async () => {
+    mockAdd.mockResolvedValueOnce(emptyBoard(USER_TASKS_THREAD_ID));
     render(<UserTaskComposer onCreated={vi.fn()} onClose={vi.fn()} />);
 
     fireEvent.change(screen.getByPlaceholderText('What needs to be done?'), {
@@ -110,16 +94,17 @@ describe('UserTaskComposer', () => {
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(screen.getByRole('button', { name: 'Create task' }));
 
-    await waitFor(() => expect(mockEdit).toHaveBeenCalledTimes(1));
-    // Assigned to the orchestrator + approval waived so the poller auto-runs it.
-    expect(mockEdit).toHaveBeenCalledWith(
+    // Single atomic add carries the assignment — no separate edit (no race).
+    await waitFor(() => expect(mockAdd).toHaveBeenCalledTimes(1));
+    expect(mockAdd).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId: USER_TASKS_THREAD_ID,
-        id: 'card-1',
+        content: 'Ship it',
         assignedAgent: 'orchestrator',
         approvalMode: 'not_required',
       })
     );
+    expect(mockEdit).not.toHaveBeenCalled();
   });
 
   it('does not assign an agent when the toggle is left off', async () => {

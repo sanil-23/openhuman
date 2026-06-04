@@ -127,6 +127,25 @@ fn native_request_serializes_frequency_penalty_only_when_set() {
     );
 }
 
+#[test]
+fn detects_frequency_penalty_rejection_for_retry() {
+    use super::OpenAiCompatibleProvider as P;
+    // Strict providers that 400 on the field → retry without it.
+    assert!(P::err_indicates_frequency_penalty_unsupported(
+        "400 Bad Request: unknown parameter 'frequency_penalty'"
+    ));
+    assert!(P::err_indicates_frequency_penalty_unsupported(
+        "frequency_penalty is not supported by this model"
+    ));
+    // Unrelated errors, or the field merely mentioned, must NOT trigger a retry.
+    assert!(!P::err_indicates_frequency_penalty_unsupported(
+        "rate limit exceeded"
+    ));
+    assert!(!P::err_indicates_frequency_penalty_unsupported(
+        "applied frequency_penalty 0.3"
+    ));
+}
+
 /// Streaming responses arrive without `usage` unless the request asks
 /// for `stream_options.include_usage = true` (OpenAI spec). Without it
 /// the OpenHuman backend's `openhuman.billing` block also never lands,
