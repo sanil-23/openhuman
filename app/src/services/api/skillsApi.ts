@@ -393,6 +393,22 @@ export const skillsApi = {
   },
 
   /**
+   * Request cancellation of an in-flight run via `openhuman.workflows_cancel`.
+   * Returns `true` if a live run with this id was found and signalled; the run
+   * stops at its next await and lands a CANCELLED footer.
+   */
+  cancelRun: async (runId: string): Promise<boolean> => {
+    log('cancelRun: request runId=%s', runId);
+    const response = await callCoreRpc<Envelope<{ cancelled: boolean }> | { cancelled: boolean }>({
+      method: 'openhuman.workflows_cancel',
+      params: { run_id: runId },
+    });
+    const raw = unwrapEnvelope(response);
+    log('cancelRun: response cancelled=%s', raw.cancelled);
+    return raw.cancelled;
+  },
+
+  /**
    * Read a slice of a skill run's streaming log file by run_id. Pass
    * `offset` to tail forward — the returned `offset` is the cursor for
    * the next call. Stop polling once `complete: true` (footer landed).

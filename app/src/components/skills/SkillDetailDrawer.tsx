@@ -51,23 +51,72 @@ export default function SkillDetailDrawer({ skill, onClose, onEdit }: Props) {
   const { t } = useT();
   const navigate = useNavigate();
   const [selectedResource, setSelectedResource] = useState<string | null>(null);
-  // Run-now feedback: idle → running → started/error (transient).
-  const [runState, setRunState] = useState<'idle' | 'running' | 'started' | 'error'>('idle');
   const isEditable = skill.scope === 'user' && !skill.legacy;
+  // Live run: track the active run id, tail its streaming log, surface its
+  // terminal status, and offer Stop while it's RUNNING.
+  const [starting, setStarting] = useState(false);
+  const [runId, setRunId] = useState<string | null>(null);
+  const [runLog, setRunLog] = useState('');
+  const [runStatus, setRunStatus] = useState<string>('RUNNING');
+  const [runError, setRunError] = useState<string | null>(null);
 
   const handleRunNow = useCallback(() => {
-    setRunState('running');
+    setStarting(true);
+    setRunError(null);
+    setRunLog('');
+    setRunStatus('RUNNING');
+    setRunId(null);
     log('run-now skillId=%s', skill.id);
     void (async () => {
       try {
-        await skillsApi.runSkill(skill.id, {});
-        setRunState('started');
+        const started = await skillsApi.runSkill(skill.id, {});
+        setRunId(started.run_id);
       } catch (err) {
-        log('run-now error: %s', err instanceof Error ? err.message : String(err));
-        setRunState('error');
+        const msg = err instanceof Error ? err.message : String(err);
+        log('run-now error: %s', msg);
+        setRunError(msg);
+      } finally {
+        setStarting(false);
       }
     })();
   }, [skill.id]);
+
+  const handleStop = useCallback(() => {
+    if (!runId) return;
+    log('stop runId=%s', runId);
+    void skillsApi.cancelRun(runId).catch(() => {});
+  }, [runId]);
+
+  // Tail the active run's log on a 2s timer; on completion, resolve the
+  // terminal status (DONE / FAILED / CANCELLED / DEGENERATE) from recentRuns.
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    let offset = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      try {
+        const slice = await skillsApi.readRunLog(runId, offset);
+        if (cancelled) return;
+        offset = slice.offset;
+        if (slice.content) setRunLog(prev => prev + slice.content);
+        if (slice.complete) {
+          const runs = await skillsApi.recentRuns(skill.id, 20);
+          if (!cancelled) setRunStatus(runs.find(r => r.run_id === runId)?.status ?? 'DONE');
+          return;
+        }
+      } catch (err) {
+        if (!cancelled)
+          log('tail error: %s', err instanceof Error ? err.message : String(err));
+      }
+      if (!cancelled) timer = setTimeout(() => void tick(), 2000);
+    };
+    timer = setTimeout(() => void tick(), 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [runId, skill.id]);
 
   // "Schedule" → the focused runner page, deep-linked to its recurring-
   // schedule section (`&focus=schedule`) so cron scheduling is discoverable
@@ -171,11 +220,11 @@ export default function SkillDetailDrawer({ skill, onClose, onEdit }: Props) {
               type="button"
               data-testid="skill-detail-run"
               onClick={handleRunNow}
-              disabled={runState === 'running'}
+              disabled={starting || (!!runId && runStatus === 'RUNNING')}
               aria-label={t('skills.detail.runAriaLabel')}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary-500 px-3 py-1.5 text-xs font-semibold text-white shadow-soft transition-colors hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1 disabled:opacity-50">
               <span aria-hidden="true">▷</span>{' '}
-              {runState === 'running' ? `${t('skills.detail.run')}…` : t('skills.detail.run')}
+              {starting ? `${t('skills.detail.run')}…` : t('skills.detail.run')}
             </button>
             {isEditable && onEdit && (
               <button
@@ -214,18 +263,45 @@ export default function SkillDetailDrawer({ skill, onClose, onEdit }: Props) {
           </div>
         </div>
 
-        {/* Run-now feedback (transient) */}
-        {runState === 'started' && (
-          <p
-            className="px-5 pb-2 text-xs text-sage-600 dark:text-sage-300"
-            data-testid="skill-detail-run-started">
-            {t('common.success')}
-          </p>
-        )}
-        {runState === 'error' && (
-          <p className="px-5 pb-2 text-xs text-coral-600 dark:text-coral-300">
-            {t('common.error')}
-          </p>
+        {/* Live run: status pill + Stop + streaming log tail */}
+        {(runId || runError) && (
+          <div
+            className="border-t border-stone-100 dark:border-neutral-800 px-5 py-3"
+            data-testid="skill-detail-run-panel">
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-2 text-xs font-medium">
+                <span
+                  className={`inline-block h-2 w-2 rounded-full ${
+                    runStatus === 'RUNNING'
+                      ? 'animate-pulse bg-amber-500'
+                      : runStatus === 'DONE'
+                        ? 'bg-sage-500'
+                        : runStatus === 'CANCELLED'
+                          ? 'bg-stone-400'
+                          : 'bg-coral-500'
+                  }`}
+                />
+                <span className="text-stone-600 dark:text-neutral-300">{runStatus}</span>
+              </span>
+              {runId && runStatus === 'RUNNING' && (
+                <button
+                  type="button"
+                  data-testid="skill-detail-stop"
+                  onClick={handleStop}
+                  className="inline-flex items-center gap-1 rounded-lg border border-coral-300 bg-coral-50 px-2.5 py-1 text-xs font-medium text-coral-700 hover:bg-coral-100 focus:outline-none focus:ring-2 focus:ring-coral-400">
+                  <span aria-hidden="true">◼</span> {t('autocomplete.stop')}
+                </button>
+              )}
+            </div>
+            {runError && (
+              <p className="mt-1 text-xs text-coral-600 dark:text-coral-300">{runError}</p>
+            )}
+            {runLog && (
+              <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-stone-50 dark:bg-neutral-800/60 p-2 font-mono text-[11px] leading-snug text-stone-700 dark:text-neutral-300">
+                {runLog}
+              </pre>
+            )}
+          </div>
         )}
 
         {/* Body */}
