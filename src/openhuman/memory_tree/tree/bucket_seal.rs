@@ -1330,9 +1330,16 @@ async fn seal_explicit_children(
         )?;
         for child_id in &node_for_tx.child_ids {
             if level_for_tx == 0 {
+                // Unconditional re-point (no `IS NULL` guard): a byte-identical
+                // body chunk reused across doc versions upserts to the SAME row
+                // (content-addressed id), so its single `parent_summary_id` must
+                // follow the newest version. Doc subtrees seal newest-last, so
+                // last-write-wins leaves the backlink on the latest doc-root —
+                // the version retrieval surfaces — instead of stranding it on
+                // the first (now-superseded) version's summary.
                 tx.execute(
                     "UPDATE mem_tree_chunks SET parent_summary_id = ?1 \
-                       WHERE id = ?2 AND parent_summary_id IS NULL",
+                       WHERE id = ?2",
                     rusqlite::params![&summary_id_for_tx, child_id],
                 )
                 .context("backlink chunk to doc-subtree summary")?;

@@ -227,6 +227,88 @@ async fn seal_document_subtree_new_version_is_additive() {
     assert!(merge_buf.item_ids.contains(&v2_root));
 }
 
+/// A byte-identical body chunk reused across two versions of a multi-chunk doc
+/// upserts to the SAME row (content-addressed id). Its single
+/// `parent_summary_id` backlink must follow the NEWEST version's doc-root — the
+/// one drill_down surfaces — not stay stranded on the first (now-superseded)
+/// version. Guards the unconditional re-point in `seal_explicit_children`.
+#[tokio::test]
+async fn shared_chunk_backlink_repoints_to_latest_doc_version() {
+    use crate::openhuman::memory_store::chunks::store::with_connection;
+
+    let (_tmp, cfg) = test_config();
+    let tree = get_or_create_source_tree(&cfg, "notion:conn1").unwrap();
+    let provider: Arc<dyn ChatProvider> = Arc::new(StaticChatProvider::new("doc summary"));
+    let doc_id = "notion:conn1:pageA";
+
+    // seq 0 is byte-identical across versions → one shared row. seq 1 differs,
+    // so each version is a genuine 2-chunk doc (not the single-chunk passthrough).
+    let shared = seed_doc_chunk(&cfg, doc_id, 0, "shared body identical across versions");
+
+    let v1_other = seed_doc_chunk(&cfg, doc_id, 1, "v1 second chunk");
+    let v1_root = test_override::with_provider(Arc::clone(&provider), async {
+        seal_document_subtree(
+            &cfg,
+            &tree,
+            doc_id,
+            Some(100),
+            &[shared.id.clone(), v1_other.id.clone()],
+            &LabelStrategy::Empty,
+        )
+        .await
+        .unwrap()
+    })
+    .await;
+
+    // After v1, the shared chunk backlinks to v1's doc-root.
+    let p1: Option<String> = with_connection(&cfg, |conn| {
+        Ok(conn
+            .query_row(
+                "SELECT parent_summary_id FROM mem_tree_chunks WHERE id = ?1",
+                rusqlite::params![shared.id],
+                |r| r.get(0),
+            )
+            .unwrap())
+    })
+    .unwrap();
+    assert_eq!(p1.as_deref(), Some(v1_root.as_str()));
+
+    // Re-ingest the same shared chunk (idempotent upsert) and seal version 2.
+    let _shared_again = seed_doc_chunk(&cfg, doc_id, 0, "shared body identical across versions");
+    let v2_other = seed_doc_chunk(&cfg, doc_id, 1, "v2 second chunk edited");
+    let v2_root = test_override::with_provider(Arc::clone(&provider), async {
+        seal_document_subtree(
+            &cfg,
+            &tree,
+            doc_id,
+            Some(200),
+            &[shared.id.clone(), v2_other.id.clone()],
+            &LabelStrategy::Empty,
+        )
+        .await
+        .unwrap()
+    })
+    .await;
+    assert_ne!(v1_root, v2_root);
+
+    // The shared chunk's backlink now follows the LATEST version's doc-root.
+    let p2: Option<String> = with_connection(&cfg, |conn| {
+        Ok(conn
+            .query_row(
+                "SELECT parent_summary_id FROM mem_tree_chunks WHERE id = ?1",
+                rusqlite::params![shared.id],
+                |r| r.get(0),
+            )
+            .unwrap())
+    })
+    .unwrap();
+    assert_eq!(
+        p2.as_deref(),
+        Some(v2_root.as_str()),
+        "shared chunk must re-point to the latest doc-root, not stay on v1"
+    );
+}
+
 /// Single-chunk passthrough: a doc that rolls up from exactly one
 /// budget-fitting chunk must NOT invoke the summariser — the doc-root content
 /// is the chunk **verbatim**. Proven two ways: (1) no `ChatProvider` override
