@@ -5,20 +5,28 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub(crate) const TRUST_MARKER: &str = "trust";
+/// Primary workflow definition filename written by create/update.
+pub(crate) const WORKFLOW_MD: &str = "WORKFLOW.md";
+/// Primary sidecar manifest filename (inputs / when_to_use / [github]).
+pub(crate) const WORKFLOW_TOML: &str = "workflow.toml";
+/// Legacy definition filename still read for back-compat with workflows
+/// authored before the skills→workflows rename.
 pub(crate) const SKILL_MD: &str = "SKILL.md";
+/// Legacy sidecar manifest filename, read for back-compat.
+pub(crate) const SKILL_TOML: &str = "skill.toml";
 pub(crate) const SKILL_JSON: &str = "skill.json";
 pub(crate) const MAX_NAME_LEN: usize = 64;
 pub(crate) const MAX_DESCRIPTION_LEN: usize = 1024;
 pub(crate) const RESOURCE_DIRS: &[&str] = &["scripts", "references", "assets"];
 
 /// Upper bound on resource payload size (in bytes) returned by
-/// [`read_skill_resource`]. 128 KB is large enough for a typical SKILL-bundled
+/// [`read_workflow_resource`]. 128 KB is large enough for a typical SKILL-bundled
 /// script or reference doc but small enough to keep the JSON-RPC payload and
 /// UI memory footprint bounded even when a skill author bundles something
 /// unusually chonky (e.g. a minified binary fixture). Requests for files
 /// larger than this limit are rejected outright — callers must stream or
 /// download the file via another mechanism.
-pub const MAX_SKILL_RESOURCE_BYTES: u64 = 128 * 1024;
+pub const MAX_WORKFLOW_RESOURCE_BYTES: u64 = 128 * 1024;
 
 /// Where the skill was discovered. Determines precedence on name collision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,7 +80,7 @@ pub struct WorkflowFrontmatter {
     /// `"domain/event_slug"` (e.g. `"composio"`,
     /// `"composio/trigger_received"`, `"cron"`, `"channel/inbound_message"`).
     /// A bare domain (no slash) matches any event in that domain.
-    /// The host builds a [`TriggeredSkillIndex`] at startup and registers a
+    /// The host builds a [`TriggeredWorkflowIndex`] at startup and registers a
     /// subscriber that logs matching skills; the actual agent-session launch
     /// is handled by the integration layer (see `skills::bus`).
     #[serde(default)]
@@ -188,7 +196,7 @@ pub struct Workflow {
 
 /// Internal structure for parsing legacy `skill.json` manifests.
 #[derive(Debug, Deserialize)]
-pub(crate) struct LegacySkillManifest {
+pub(crate) struct LegacyWorkflowManifest {
     #[serde(default)]
     pub name: String,
     #[serde(default)]

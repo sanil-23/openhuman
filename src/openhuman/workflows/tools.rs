@@ -23,10 +23,11 @@ use serde_json::json;
 use crate::openhuman::config::Config;
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolResult};
 
-use super::ops_create::{create_skill, CreateSkillParams};
-use super::ops_discover::{discover_skills, is_workspace_trusted, read_skill_resource};
+use super::ops_create::{create_workflow, CreateWorkflowParams};
+use super::ops_discover::{discover_workflows, is_workspace_trusted, read_workflow_resource};
 use super::ops_install::{
-    install_skill_from_url, uninstall_skill, InstallSkillFromUrlParams, UninstallSkillParams,
+    install_workflow_from_url, uninstall_workflow, InstallWorkflowFromUrlParams,
+    UninstallWorkflowParams,
 };
 use super::registry::get_workflow;
 use super::run_log::{find_run_log_path, read_run_log_slice, scan_runs};
@@ -82,7 +83,7 @@ impl Tool for WorkflowListTool {
         log::debug!("[tool][workflows] list invoked");
         let home = dirs::home_dir();
         let trusted = is_workspace_trusted(&self.workspace_dir);
-        let workflows = discover_skills(home.as_deref(), Some(&self.workspace_dir), trusted);
+        let workflows = discover_workflows(home.as_deref(), Some(&self.workspace_dir), trusted);
         Ok(ToolResult::success(serde_json::to_string(&json!({
             "count": workflows.len(),
             "workflows": workflows,
@@ -187,7 +188,7 @@ impl Tool for WorkflowReadResourceTool {
         let skill_id = read_workflow_id(&args)?;
         let relative_path = read_required_str(&args, "relative_path")?;
         let content =
-            read_skill_resource(&self.workspace_dir, &skill_id, Path::new(&relative_path))
+            read_workflow_resource(&self.workspace_dir, &skill_id, Path::new(&relative_path))
                 .map_err(|e| anyhow::anyhow!("read_workflow_resource: {e}"))?;
         Ok(ToolResult::success(serde_json::to_string(&json!({
             "workflow_id": skill_id,
@@ -373,9 +374,9 @@ impl Tool for WorkflowCreateTool {
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         log::debug!("[tool][skills] create invoked");
-        let params: CreateSkillParams = serde_json::from_value(args)
+        let params: CreateWorkflowParams = serde_json::from_value(args)
             .map_err(|e| anyhow::anyhow!("create_workflow: invalid params: {e}"))?;
-        let skill = create_skill(&self.workspace_dir, params)
+        let skill = create_workflow(&self.workspace_dir, params)
             .map_err(|e| anyhow::anyhow!("create_workflow: {e}"))?;
         Ok(ToolResult::success(serde_json::to_string(&skill)?))
     }
@@ -429,9 +430,9 @@ impl Tool for WorkflowInstallFromUrlTool {
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         log::debug!("[tool][skills] install_from_url invoked");
-        let params: InstallSkillFromUrlParams = serde_json::from_value(args)
+        let params: InstallWorkflowFromUrlParams = serde_json::from_value(args)
             .map_err(|e| anyhow::anyhow!("install_workflow_from_url: invalid params: {e}"))?;
-        let outcome = install_skill_from_url(&self.workspace_dir, params)
+        let outcome = install_workflow_from_url(&self.workspace_dir, params)
             .await
             .map_err(|e| anyhow::anyhow!("install_workflow_from_url: {e}"))?;
         Ok(ToolResult::success(serde_json::to_string(&outcome)?))
@@ -469,7 +470,7 @@ impl Tool for WorkflowUninstallTool {
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         log::debug!("[tool][skills] uninstall invoked");
         let name = read_required_str(&args, "name")?;
-        let outcome = uninstall_skill(UninstallSkillParams { name }, None)
+        let outcome = uninstall_workflow(UninstallWorkflowParams { name }, None)
             .map_err(|e| anyhow::anyhow!("uninstall_workflow: {e}"))?;
         Ok(ToolResult::success(serde_json::to_string(&outcome)?))
     }

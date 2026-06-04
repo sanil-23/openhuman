@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use super::ops_types::{extract_author, extract_tags, extract_version};
 use super::ops_types::{
-    LegacySkillManifest, Workflow, WorkflowFrontmatter, WorkflowScope, MAX_DESCRIPTION_LEN,
+    LegacyWorkflowManifest, Workflow, WorkflowFrontmatter, WorkflowScope, MAX_DESCRIPTION_LEN,
     MAX_NAME_LEN, RESOURCE_DIRS,
 };
 
@@ -18,16 +18,16 @@ use super::ops_types::{
 /// malformed. Callers merge these into the skill's user-visible warnings so
 /// the catalog surfaces the real cause instead of a generic "could not parse"
 /// placeholder.
-pub fn parse_skill_md(path: &Path) -> Option<(WorkflowFrontmatter, String, Vec<String>)> {
+pub fn parse_workflow_md(path: &Path) -> Option<(WorkflowFrontmatter, String, Vec<String>)> {
     let content = std::fs::read_to_string(path).ok()?;
-    parse_skill_md_str(&content)
+    parse_workflow_md_str(&content)
 }
 
-/// Content-only variant of [`parse_skill_md`] used when the SKILL.md has been
-/// fetched over HTTPS (see [`install_skill_from_url`]) and has not yet landed
+/// Content-only variant of [`parse_workflow_md`] used when the SKILL.md has been
+/// fetched over HTTPS (see [`install_workflow_from_url`]) and has not yet landed
 /// on disk. Returns `None` when the frontmatter block is opened with `---` but
 /// never terminated — the same failure mode the file-based parser rejects.
-pub fn parse_skill_md_str(content: &str) -> Option<(WorkflowFrontmatter, String, Vec<String>)> {
+pub fn parse_workflow_md_str(content: &str) -> Option<(WorkflowFrontmatter, String, Vec<String>)> {
     let mut lines = content.lines();
     let first = lines.next()?;
     if first.trim() != "---" {
@@ -140,14 +140,14 @@ pub(crate) fn first_body_line(body: &str) -> Option<String> {
 }
 
 /// Load a skill from a `SKILL.md` file.
-pub(crate) fn load_from_skill_md(
+pub(crate) fn load_from_workflow_md(
     skill_md: &Path,
     dir: &Path,
     dir_name: &str,
     scope: WorkflowScope,
 ) -> Workflow {
     let mut warnings = Vec::new();
-    let (frontmatter, body) = match parse_skill_md(skill_md) {
+    let (frontmatter, body) = match parse_workflow_md(skill_md) {
         Some((fm, body, parse_warnings)) => {
             warnings.extend(parse_warnings);
             (fm, body)
@@ -231,14 +231,14 @@ pub(crate) fn load_from_legacy_manifest(
     )];
     let parsed = std::fs::read_to_string(manifest_path)
         .ok()
-        .and_then(|content| serde_json::from_str::<LegacySkillManifest>(&content).ok());
+        .and_then(|content| serde_json::from_str::<LegacyWorkflowManifest>(&content).ok());
 
     let manifest = parsed.unwrap_or_else(|| {
         warnings.push(format!(
             "could not parse {} as JSON; using directory name",
             manifest_path.display()
         ));
-        LegacySkillManifest {
+        LegacyWorkflowManifest {
             name: dir_name.to_string(),
             description: String::new(),
             version: String::new(),
@@ -297,7 +297,7 @@ impl Workflow {
             return None;
         }
         let path = self.location.as_ref()?;
-        match parse_skill_md(path) {
+        match parse_workflow_md(path) {
             Some((_, body, _)) => Some(body),
             None => {
                 log::warn!(

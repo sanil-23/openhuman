@@ -7,21 +7,21 @@ fn write(path: &Path, content: &str) {
     std::fs::write(path, content).unwrap();
 }
 
-/// Workspace-only variant of [`load_skills`] used by tests that care only
-/// about project-scope semantics. The production [`load_skills`] now
+/// Workspace-only variant of [`load_workflow_metadata`] used by tests that care only
+/// about project-scope semantics. The production [`load_workflow_metadata`] now
 /// consults `dirs::home_dir()`; in unit tests that would non-deterministically
 /// pick up whatever skills the developer has installed under their real
 /// home. Tests exercising user-scope delegation drive a tempdir through
-/// [`discover_skills`] explicitly (see `load_skills_surfaces_user_scope`).
+/// [`discover_workflows`] explicitly (see `load_skills_surfaces_user_scope`).
 fn load_skills_ws(workspace_dir: &Path) -> Vec<Workflow> {
     let trusted = is_workspace_trusted(workspace_dir);
-    discover_skills_inner(None, Some(workspace_dir), trusted)
+    discover_workflows_inner(None, Some(workspace_dir), trusted)
 }
 
 #[test]
 fn init_skills_dir_creates_dir_and_readme() {
     let dir = tempfile::tempdir().unwrap();
-    init_skills_dir(dir.path()).unwrap();
+    init_workflows_dir(dir.path()).unwrap();
     let skills_dir = dir.path().join("skills");
     assert!(skills_dir.is_dir());
     let readme = skills_dir.join("README.md");
@@ -31,7 +31,7 @@ fn init_skills_dir_creates_dir_and_readme() {
 #[test]
 fn load_skills_legacy_json_still_works() {
     let dir = tempfile::tempdir().unwrap();
-    init_skills_dir(dir.path()).unwrap();
+    init_workflows_dir(dir.path()).unwrap();
     let skill_dir = dir.path().join("skills").join("my-skill");
     std::fs::create_dir_all(&skill_dir).unwrap();
     write(
@@ -99,7 +99,7 @@ fn spec_compliant_fields_parse_into_metadata_map() {
         &path,
         "---\nname: s\ndescription: d\nlicense: MIT\ncompatibility: \"node>=18\"\nmetadata:\n  version: 1.0.0\n  author: Alice\n  tags: [a, b]\n---\n",
     );
-    let (fm, _body, _warnings) = parse_skill_md(&path).unwrap();
+    let (fm, _body, _warnings) = parse_workflow_md(&path).unwrap();
     assert_eq!(fm.license.as_deref(), Some("MIT"));
     assert_eq!(fm.compatibility.as_deref(), Some("node>=18"));
     assert_eq!(
@@ -205,7 +205,7 @@ fn project_scope_shadows_user_scope_on_collision() {
         "---\nname: greet\ndescription: PROJECT COPY\n---\n",
     );
 
-    let skills = discover_skills(Some(user_dir.path()), Some(ws_dir.path()), true);
+    let skills = discover_workflows(Some(user_dir.path()), Some(ws_dir.path()), true);
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].description, "PROJECT COPY");
     assert!(skills[0].warnings.iter().any(|w| w.contains("shadowed")));
@@ -238,7 +238,7 @@ fn parse_skill_md_without_frontmatter_returns_body() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("SKILL.md");
     write(&path, "just a markdown body\n");
-    let (fm, body, _warnings) = parse_skill_md(&path).unwrap();
+    let (fm, body, _warnings) = parse_workflow_md(&path).unwrap();
     assert!(fm.name.is_empty());
     assert!(body.contains("markdown body"));
 }
@@ -248,7 +248,7 @@ fn parse_skill_md_unterminated_frontmatter_returns_none() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("SKILL.md");
     write(&path, "---\nname: bad\n\nbody without closing marker\n");
-    assert!(parse_skill_md(&path).is_none());
+    assert!(parse_workflow_md(&path).is_none());
 }
 
 #[cfg(unix)]
@@ -309,10 +309,10 @@ fn symlinked_resource_roots_are_rejected() {
 
 #[test]
 fn load_skills_surfaces_user_scope() {
-    // load_skills now delegates to discover_skills with dirs::home_dir(),
+    // load_workflow_metadata now delegates to discover_workflows with dirs::home_dir(),
     // so user-scope skills reach production callers that still hit the
     // backwards-compat shim. Simulate this with an explicit tempdir home
-    // via discover_skills — we can't safely override the process HOME in
+    // via discover_workflows — we can't safely override the process HOME in
     // unit tests.
     let user_dir = tempfile::tempdir().unwrap();
     let ws_dir = tempfile::tempdir().unwrap();
@@ -327,7 +327,7 @@ fn load_skills_surfaces_user_scope() {
         "---\nname: user-only\ndescription: from user home\n---\n",
     );
 
-    let skills = discover_skills(
+    let skills = discover_workflows(
         Some(user_dir.path()),
         Some(ws_dir.path()),
         is_workspace_trusted(ws_dir.path()),
@@ -351,7 +351,7 @@ fn hidden_dirs_are_skipped() {
     assert!(skills.is_empty());
 }
 
-// -- read_skill_resource -------------------------------------------------
+// -- read_workflow_resource -------------------------------------------------
 //
 // These tests exercise the resource-read path via legacy-scope skills
 // (`<ws>/skills/<name>/`) because that scope doesn't require the trust
@@ -379,7 +379,7 @@ fn read_skill_resource_happy_path() {
         "#!/bin/sh\necho hi\n",
     );
 
-    let got = read_skill_resource(ws, "demo", Path::new("scripts/hello.sh"))
+    let got = read_workflow_resource(ws, "demo", Path::new("scripts/hello.sh"))
         .expect("read should succeed");
     assert_eq!(got, "#!/bin/sh\necho hi\n");
 }
@@ -395,7 +395,7 @@ fn read_skill_resource_rejects_parent_dir_traversal() {
     // asset (makes the test realistic).
     write(&skill_dir.join("scripts").join("ok.sh"), "ok");
 
-    let err = read_skill_resource(ws, "demo", Path::new("../../secret.txt"))
+    let err = read_workflow_resource(ws, "demo", Path::new("../../secret.txt"))
         .expect_err("parent-dir traversal must be rejected");
     assert!(
         err.contains("..") || err.to_lowercase().contains("escape"),
@@ -415,7 +415,7 @@ fn read_skill_resource_rejects_absolute_paths() {
         Path::new("/etc/passwd")
     };
     let err =
-        read_skill_resource(ws, "demo", absolute).expect_err("absolute path must be rejected");
+        read_workflow_resource(ws, "demo", absolute).expect_err("absolute path must be rejected");
     assert!(
         err.to_lowercase().contains("absolute"),
         "unexpected error: {err}"
@@ -443,7 +443,7 @@ fn read_skill_resource_rejects_symlinked_leaf() {
     )
     .unwrap();
 
-    let err = read_skill_resource(ws, "demo", Path::new("scripts/leak.txt"))
+    let err = read_workflow_resource(ws, "demo", Path::new("scripts/leak.txt"))
         .expect_err("symlinked leaf must be rejected");
     assert!(
         err.to_lowercase().contains("symlink") || err.to_lowercase().contains("escape"),
@@ -457,12 +457,12 @@ fn read_skill_resource_rejects_oversized_file() {
     let ws = dir.path();
     let skill_dir = make_legacy_skill(ws, "demo");
     // Write MAX + 1 bytes.
-    let oversize = vec![b'a'; (MAX_SKILL_RESOURCE_BYTES as usize) + 1];
+    let oversize = vec![b'a'; (MAX_WORKFLOW_RESOURCE_BYTES as usize) + 1];
     let target = skill_dir.join("references").join("big.txt");
     std::fs::create_dir_all(target.parent().unwrap()).unwrap();
     std::fs::write(&target, &oversize).unwrap();
 
-    let err = read_skill_resource(ws, "demo", Path::new("references/big.txt"))
+    let err = read_workflow_resource(ws, "demo", Path::new("references/big.txt"))
         .expect_err("oversized file must be rejected");
     assert!(
         err.to_lowercase().contains("exceeds") || err.to_lowercase().contains("limit"),
@@ -481,7 +481,7 @@ fn read_skill_resource_rejects_non_utf8_bytes() {
     std::fs::create_dir_all(target.parent().unwrap()).unwrap();
     std::fs::write(&target, [0xFFu8, 0xFE, 0xFD, 0xFC]).unwrap();
 
-    let err = read_skill_resource(ws, "demo", Path::new("assets/binary.bin"))
+    let err = read_workflow_resource(ws, "demo", Path::new("assets/binary.bin"))
         .expect_err("non-UTF-8 content must be rejected");
     assert!(
         err.to_lowercase().contains("utf-8"),
@@ -494,7 +494,7 @@ fn read_skill_resource_rejects_unknown_skill() {
     let dir = tempfile::tempdir().unwrap();
     let ws = dir.path();
 
-    let err = read_skill_resource(ws, "does-not-exist", Path::new("scripts/x.sh"))
+    let err = read_workflow_resource(ws, "does-not-exist", Path::new("scripts/x.sh"))
         .expect_err("unknown skill must be rejected");
     assert!(
         err.to_lowercase().contains("not found"),
@@ -509,7 +509,7 @@ fn read_skill_resource_rejects_directory_target() {
     let skill_dir = make_legacy_skill(ws, "demo");
     std::fs::create_dir_all(skill_dir.join("scripts").join("nested")).unwrap();
 
-    let err = read_skill_resource(ws, "demo", Path::new("scripts/nested"))
+    let err = read_workflow_resource(ws, "demo", Path::new("scripts/nested"))
         .expect_err("directory target must be rejected");
     assert!(
         err.to_lowercase().contains("not a regular file"),
@@ -523,11 +523,11 @@ fn read_skill_resource_rejects_empty_inputs() {
     let ws = dir.path();
     make_legacy_skill(ws, "demo");
 
-    let err = read_skill_resource(ws, "", Path::new("scripts/x.sh"))
+    let err = read_workflow_resource(ws, "", Path::new("scripts/x.sh"))
         .expect_err("empty skill_id must be rejected");
     assert!(err.to_lowercase().contains("skill_id"), "unexpected: {err}");
 
-    let err = read_skill_resource(ws, "demo", Path::new(""))
+    let err = read_workflow_resource(ws, "demo", Path::new(""))
         .expect_err("empty relative_path must be rejected");
     assert!(
         err.to_lowercase().contains("relative_path"),
@@ -535,14 +535,14 @@ fn read_skill_resource_rejects_empty_inputs() {
     );
 }
 
-// -- create_skill --------------------------------------------------------
+// -- create_workflow --------------------------------------------------------
 
 #[test]
 fn create_skill_user_scope_scaffolds_skill_md_and_resource_dirs() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
 
-    let params = CreateSkillParams {
+    let params = CreateWorkflowParams {
         name: "My Demo Workflow".to_string(),
         description: "Send a friendly greeting to the user.".to_string(),
         when_to_use: None,
@@ -552,10 +552,11 @@ fn create_skill_user_scope_scaffolds_skill_md_and_resource_dirs() {
         tags: vec!["demo".to_string(), "greeting".to_string()],
         allowed_tools: vec!["shell".to_string()],
         inputs: Vec::new(),
+        overwrite: false,
     };
 
-    let created = create_skill_inner(Some(home.path()), ws.path(), params)
-        .expect("create_skill should succeed");
+    let created = create_workflow_inner(Some(home.path()), ws.path(), params)
+        .expect("create_workflow should succeed");
 
     assert_eq!(created.name, "my-demo-workflow");
     assert_eq!(created.scope, WorkflowScope::User);
@@ -572,13 +573,13 @@ fn create_skill_user_scope_scaffolds_skill_md_and_resource_dirs() {
         .join(".openhuman")
         .join("workflows")
         .join("my-demo-workflow");
-    assert!(skill_root.join(SKILL_MD).is_file());
+    assert!(skill_root.join(WORKFLOW_MD).is_file());
     for sub in RESOURCE_DIRS {
         assert!(skill_root.join(sub).is_dir(), "missing scaffold dir: {sub}");
     }
 
     // Frontmatter round-trips through the parser.
-    let on_disk = std::fs::read_to_string(skill_root.join(SKILL_MD)).unwrap();
+    let on_disk = std::fs::read_to_string(skill_root.join(WORKFLOW_MD)).unwrap();
     assert!(on_disk.contains("name: my-demo-workflow"));
     assert!(on_disk.contains("license: MIT"));
     assert!(on_disk.contains("author: Jane Dev"));
@@ -589,16 +590,16 @@ fn create_skill_rejects_slug_collision() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
 
-    let params = CreateSkillParams {
+    let params = CreateWorkflowParams {
         name: "collider".to_string(),
         description: "first".to_string(),
         when_to_use: None,
         scope: WorkflowScope::User,
         ..Default::default()
     };
-    create_skill_inner(Some(home.path()), ws.path(), params.clone()).unwrap();
+    create_workflow_inner(Some(home.path()), ws.path(), params.clone()).unwrap();
 
-    let err = create_skill_inner(Some(home.path()), ws.path(), params)
+    let err = create_workflow_inner(Some(home.path()), ws.path(), params)
         .expect_err("second create with same name must fail");
     assert!(
         err.to_lowercase().contains("already exists"),
@@ -615,26 +616,26 @@ fn create_skill_writes_distinct_when_to_use_to_skill_toml_without_inputs() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
 
-    let params = CreateSkillParams {
+    let params = CreateWorkflowParams {
         name: "Triggered Workflow".to_string(),
         description: "Summarise the inbox.".to_string(),
         when_to_use: Some("when the user asks to triage email".to_string()),
         scope: WorkflowScope::User,
         ..Default::default()
     };
-    let created = create_skill_inner(Some(home.path()), ws.path(), params)
-        .expect("create_skill should succeed");
+    let created = create_workflow_inner(Some(home.path()), ws.path(), params)
+        .expect("create_workflow should succeed");
 
-    let skill_md = created.location.expect("created workflow has a location");
-    let skill_toml = skill_md
+    let workflow_md = created.location.expect("created workflow has a location");
+    let workflow_toml = workflow_md
         .parent()
-        .expect("SKILL.md has a parent dir")
-        .join("skill.toml");
+        .expect("WORKFLOW.md has a parent dir")
+        .join(WORKFLOW_TOML);
     assert!(
-        skill_toml.exists(),
-        "skill.toml must be written when when_to_use is provided, even with no inputs"
+        workflow_toml.exists(),
+        "workflow.toml must be written when when_to_use is provided, even with no inputs"
     );
-    let toml = std::fs::read_to_string(&skill_toml).unwrap();
+    let toml = std::fs::read_to_string(&workflow_toml).unwrap();
     assert!(
         toml.contains("when_to_use = \"when the user asks to triage email\""),
         "skill.toml must carry the distinct trigger, not the description; got:\n{toml}"
@@ -650,14 +651,14 @@ fn create_skill_rejects_non_alphanumeric_name() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
 
-    let params = CreateSkillParams {
+    let params = CreateWorkflowParams {
         name: "   ///   ".to_string(),
         description: "nothing useful".to_string(),
         when_to_use: None,
         scope: WorkflowScope::User,
         ..Default::default()
     };
-    let err = create_skill_inner(Some(home.path()), ws.path(), params)
+    let err = create_workflow_inner(Some(home.path()), ws.path(), params)
         .expect_err("non-alphanumeric name must be rejected");
     // Either the empty-name guard or the slugify guard catches this.
     assert!(
@@ -672,14 +673,14 @@ fn create_skill_rejects_project_scope_without_trust_marker() {
     let ws = tempfile::tempdir().unwrap();
     // Intentionally no trust marker.
 
-    let params = CreateSkillParams {
+    let params = CreateWorkflowParams {
         name: "project-skill".to_string(),
         description: "scoped to ws".to_string(),
         when_to_use: None,
         scope: WorkflowScope::Project,
         ..Default::default()
     };
-    let err = create_skill_inner(Some(home.path()), ws.path(), params)
+    let err = create_workflow_inner(Some(home.path()), ws.path(), params)
         .expect_err("untrusted workspace must reject project scope");
     assert!(
         err.to_lowercase().contains("trust"),
@@ -701,14 +702,14 @@ fn create_skill_project_scope_writes_under_workspace_when_trusted() {
     let ws = tempfile::tempdir().unwrap();
     write(&ws.path().join(".openhuman").join(TRUST_MARKER), "");
 
-    let params = CreateSkillParams {
+    let params = CreateWorkflowParams {
         name: "ws-skill".to_string(),
         description: "project-scoped".to_string(),
         when_to_use: None,
         scope: WorkflowScope::Project,
         ..Default::default()
     };
-    let created = create_skill_inner(Some(home.path()), ws.path(), params)
+    let created = create_workflow_inner(Some(home.path()), ws.path(), params)
         .expect("trusted project-scope create should succeed");
 
     assert_eq!(created.name, "ws-skill");
@@ -718,7 +719,7 @@ fn create_skill_project_scope_writes_under_workspace_when_trusted() {
         .join(".openhuman")
         .join("workflows")
         .join("ws-skill")
-        .join(SKILL_MD)
+        .join(WORKFLOW_MD)
         .is_file());
 }
 
@@ -727,14 +728,14 @@ fn create_skill_rejects_legacy_scope() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
 
-    let params = CreateSkillParams {
+    let params = CreateWorkflowParams {
         name: "legacy-skill".to_string(),
         description: "no".to_string(),
         when_to_use: None,
         scope: WorkflowScope::Legacy,
         ..Default::default()
     };
-    let err = create_skill_inner(Some(home.path()), ws.path(), params)
+    let err = create_workflow_inner(Some(home.path()), ws.path(), params)
         .expect_err("legacy scope must be rejected");
     assert!(
         err.to_lowercase().contains("legacy"),
@@ -747,14 +748,14 @@ fn create_skill_rejects_empty_description() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
 
-    let params = CreateSkillParams {
+    let params = CreateWorkflowParams {
         name: "ok-name".to_string(),
         description: "   ".to_string(),
         when_to_use: None,
         scope: WorkflowScope::User,
         ..Default::default()
     };
-    let err = create_skill_inner(Some(home.path()), ws.path(), params)
+    let err = create_workflow_inner(Some(home.path()), ws.path(), params)
         .expect_err("empty description must be rejected");
     assert!(
         err.to_lowercase().contains("description"),
@@ -764,14 +765,17 @@ fn create_skill_rejects_empty_description() {
 
 #[test]
 fn slugify_collapses_separators_and_trims() {
-    assert_eq!(slugify_skill_name("Hello  World").unwrap(), "hello-world");
-    assert_eq!(slugify_skill_name("--foo__bar--").unwrap(), "foo-bar");
     assert_eq!(
-        slugify_skill_name("ALL CAPS skill!").unwrap(),
+        slugify_workflow_name("Hello  World").unwrap(),
+        "hello-world"
+    );
+    assert_eq!(slugify_workflow_name("--foo__bar--").unwrap(), "foo-bar");
+    assert_eq!(
+        slugify_workflow_name("ALL CAPS skill!").unwrap(),
         "all-caps-skill"
     );
-    assert!(slugify_skill_name("   ").is_err());
-    assert!(slugify_skill_name("!!!").is_err());
+    assert!(slugify_workflow_name("   ").is_err());
+    assert!(slugify_workflow_name("!!!").is_err());
 }
 
 #[test]
@@ -981,7 +985,7 @@ fn derive_install_slug_sanitizes_path_escape_attempts() {
 #[test]
 fn parse_skill_md_str_happy_path() {
     let content = "---\nname: demo\ndescription: a demo skill\n---\n\n# Body\n";
-    let (fm, body, warnings) = parse_skill_md_str(content).unwrap();
+    let (fm, body, warnings) = parse_workflow_md_str(content).unwrap();
     assert_eq!(fm.name, "demo");
     assert_eq!(fm.description, "a demo skill");
     assert!(body.contains("# Body"));
@@ -991,13 +995,13 @@ fn parse_skill_md_str_happy_path() {
 #[test]
 fn parse_skill_md_str_unterminated_frontmatter_returns_none() {
     let content = "---\nname: demo\ndescription: missing close\n# Body\n";
-    assert!(parse_skill_md_str(content).is_none());
+    assert!(parse_workflow_md_str(content).is_none());
 }
 
 #[test]
 fn parse_skill_md_str_no_frontmatter_treats_whole_as_body() {
     let content = "# Just a body\nno frontmatter here\n";
-    let (fm, body, warnings) = parse_skill_md_str(content).unwrap();
+    let (fm, body, warnings) = parse_workflow_md_str(content).unwrap();
     assert!(fm.name.is_empty());
     assert_eq!(body, content);
     assert!(warnings.is_empty());
@@ -1006,7 +1010,7 @@ fn parse_skill_md_str_no_frontmatter_treats_whole_as_body() {
 #[test]
 fn parse_skill_md_str_bad_yaml_returns_empty_frontmatter_with_warning() {
     let content = "---\nname: [unterminated\ndescription: also bad\n---\n";
-    let (fm, _body, warnings) = parse_skill_md_str(content).unwrap();
+    let (fm, _body, warnings) = parse_workflow_md_str(content).unwrap();
     assert!(fm.name.is_empty());
     assert!(
         warnings
@@ -1031,11 +1035,11 @@ fn uninstall_skill_removes_user_scope_dir() {
         &skill_dir.join("SKILL.md"),
         "---\nname: weather-helper\ndescription: forecasts\n---\n\nbody\n",
     );
-    let before = discover_skills(Some(home.path()), None, false);
+    let before = discover_workflows(Some(home.path()), None, false);
     assert_eq!(before.len(), 1, "setup: skill should be discoverable");
 
-    let outcome = uninstall_skill(
-        UninstallSkillParams {
+    let outcome = uninstall_workflow(
+        UninstallWorkflowParams {
             name: "weather-helper".into(),
         },
         Some(home.path()),
@@ -1045,7 +1049,7 @@ fn uninstall_skill_removes_user_scope_dir() {
     assert_eq!(outcome.scope, WorkflowScope::User);
     assert!(!skill_dir.exists(), "uninstall should remove the dir");
 
-    let after = discover_skills(Some(home.path()), None, false);
+    let after = discover_workflows(Some(home.path()), None, false);
     assert!(after.is_empty(), "discovery should no longer see it");
 }
 
@@ -1064,7 +1068,7 @@ fn discover_reads_user_scope_workflows_dir() {
             .join("SKILL.md"),
         "---\nname: inbox-triage\ndescription: triage the inbox\n---\n\nbody\n",
     );
-    let found = discover_skills(Some(home.path()), None, false);
+    let found = discover_workflows(Some(home.path()), None, false);
     assert_eq!(
         found.len(),
         1,
@@ -1082,8 +1086,11 @@ fn uninstall_skill_rejects_path_traversal_names() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join(".openhuman").join("skills")).unwrap();
     for bad in ["../etc", "foo/bar", "foo\\bar", "..", "foo/../bar"] {
-        let err = uninstall_skill(UninstallSkillParams { name: bad.into() }, Some(home.path()))
-            .unwrap_err();
+        let err = uninstall_workflow(
+            UninstallWorkflowParams { name: bad.into() },
+            Some(home.path()),
+        )
+        .unwrap_err();
         assert!(
             err.contains("path separators") || err.contains("is not installed"),
             "name {bad:?} should be rejected before fs access, got: {err}"
@@ -1097,8 +1104,11 @@ fn uninstall_skill_rejects_empty_name() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join(".openhuman").join("skills")).unwrap();
     for bad in ["", "   ", "\t"] {
-        let err = uninstall_skill(UninstallSkillParams { name: bad.into() }, Some(home.path()))
-            .unwrap_err();
+        let err = uninstall_workflow(
+            UninstallWorkflowParams { name: bad.into() },
+            Some(home.path()),
+        )
+        .unwrap_err();
         assert!(err.contains("name is required"), "{bad:?} => {err}");
     }
 }
@@ -1109,8 +1119,8 @@ fn uninstall_skill_rejects_empty_name() {
 fn uninstall_skill_missing_skill_errors_cleanly() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join(".openhuman").join("skills")).unwrap();
-    let err = uninstall_skill(
-        UninstallSkillParams {
+    let err = uninstall_workflow(
+        UninstallWorkflowParams {
             name: "ghost".into(),
         },
         Some(home.path()),
@@ -1128,8 +1138,8 @@ fn uninstall_skill_refuses_dir_without_skill_md() {
     let bogus = home.path().join(".openhuman").join("skills").join("bogus");
     std::fs::create_dir_all(&bogus).unwrap();
     std::fs::write(bogus.join("random.txt"), "not a skill").unwrap();
-    let err = uninstall_skill(
-        UninstallSkillParams {
+    let err = uninstall_workflow(
+        UninstallWorkflowParams {
             name: "bogus".into(),
         },
         Some(home.path()),
@@ -1160,8 +1170,8 @@ fn uninstall_skill_rejects_symlink_escape() {
         "---\nname: real\ndescription: out of tree\n---\n",
     );
     std::os::unix::fs::symlink(&target, skills_root.join("real")).unwrap();
-    let err = uninstall_skill(
-        UninstallSkillParams {
+    let err = uninstall_workflow(
+        UninstallWorkflowParams {
             name: "real".into(),
         },
         Some(home.path()),
@@ -1192,8 +1202,8 @@ fn uninstall_skill_rejects_symlinked_alias_in_tree() {
         "---\nname: real\ndescription: in tree\n---\n",
     );
     std::os::unix::fs::symlink(&real_dir, skills_root.join("alias")).unwrap();
-    let err = uninstall_skill(
-        UninstallSkillParams {
+    let err = uninstall_workflow(
+        UninstallWorkflowParams {
             name: "alias".into(),
         },
         Some(home.path()),
@@ -1227,8 +1237,8 @@ fn uninstall_skill_rejects_symlinked_skills_root() {
     std::fs::create_dir_all(home.path().join(".openhuman")).unwrap();
     std::os::unix::fs::symlink(&real_skills, home.path().join(".openhuman").join("skills"))
         .unwrap();
-    let err = uninstall_skill(
-        UninstallSkillParams {
+    let err = uninstall_workflow(
+        UninstallWorkflowParams {
             name: "real".into(),
         },
         Some(home.path()),
@@ -1249,7 +1259,7 @@ fn uninstall_skill_rejects_symlinked_skills_root() {
 //
 // The Create-a-Workflow form lets the user declare zero-or-more skill inputs at
 // create time. These tests pin the wire shape and the params round-trip so the
-// payload from `skillsApi.createSkill` lands intact in `CreateSkillParams.inputs`
+// payload from `skillsApi.createSkill` lands intact in `CreateWorkflowParams.inputs`
 // and is identical after TOML emission + re-parse via the registry's
 // `WorkflowInput` (see Phase 2 for the actual on-disk emit; Phase 1 is JSON only).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1291,19 +1301,19 @@ fn create_skill_params_defaults_inputs_to_empty_vec() {
     // Old clients that don't know about `inputs` keep working — the
     // field defaults to an empty vec at deserialise time and `Default`
     // produces an empty vec too.
-    let params: CreateSkillParams = serde_json::from_value(serde_json::json!({
+    let params: CreateWorkflowParams = serde_json::from_value(serde_json::json!({
         "name": "Hello",
         "description": "Says hi",
         "scope": "user",
     }))
     .unwrap();
     assert!(params.inputs.is_empty());
-    assert!(CreateSkillParams::default().inputs.is_empty());
+    assert!(CreateWorkflowParams::default().inputs.is_empty());
 }
 
 #[test]
 fn create_skill_params_carries_inputs_through_deserialise() {
-    let params: CreateSkillParams = serde_json::from_value(serde_json::json!({
+    let params: CreateWorkflowParams = serde_json::from_value(serde_json::json!({
         "name": "Issue Crusher",
         "description": "Fix one issue end to end.",
         "scope": "user",

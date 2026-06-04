@@ -4,9 +4,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::ops_parse::{load_from_legacy_manifest, load_from_skill_md};
+use super::ops_parse::{load_from_legacy_manifest, load_from_workflow_md};
 use super::ops_types::{
-    Workflow, WorkflowScope, MAX_SKILL_RESOURCE_BYTES, SKILL_JSON, SKILL_MD, TRUST_MARKER,
+    Workflow, WorkflowScope, MAX_WORKFLOW_RESOURCE_BYTES, SKILL_JSON, SKILL_MD, TRUST_MARKER,
+    WORKFLOW_MD,
 };
 
 /// Initialize the legacy skills directory in the specified workspace.
@@ -15,7 +16,7 @@ use super::ops_types::{
 /// is visible to the user. New-style skills should live under
 /// `<workspace>/.openhuman/skills/` instead, but this directory is kept for
 /// backward compatibility.
-pub fn init_skills_dir(workspace_dir: &Path) -> Result<(), String> {
+pub fn init_workflows_dir(workspace_dir: &Path) -> Result<(), String> {
     let skills_dir = workspace_dir.join("skills");
     std::fs::create_dir_all(&skills_dir).map_err(|e| {
         format!(
@@ -36,7 +37,7 @@ pub fn init_skills_dir(workspace_dir: &Path) -> Result<(), String> {
 
 /// Backwards-compatible shim for callers that only have a workspace path.
 ///
-/// Delegates to [`discover_skills`] with the current user's home directory
+/// Delegates to [`discover_workflows`] with the current user's home directory
 /// so user-scope skills (`~/.openhuman/skills/`, `~/.agents/skills/`) are
 /// surfaced for existing production callers (`agent::harness::session::builder`,
 /// `channels::runtime::startup`). Previously this shim passed `None` for the
@@ -45,10 +46,10 @@ pub fn init_skills_dir(workspace_dir: &Path) -> Result<(), String> {
 ///
 /// Project-scope (workspace) skills still take precedence over user-scope
 /// on name collisions.
-pub fn load_skills(workspace_dir: &Path) -> Vec<Workflow> {
+pub fn load_workflow_metadata(workspace_dir: &Path) -> Vec<Workflow> {
     let trusted = is_workspace_trusted(workspace_dir);
     let home = dirs::home_dir();
-    discover_skills_inner(home.as_deref(), Some(workspace_dir), trusted)
+    discover_workflows_inner(home.as_deref(), Some(workspace_dir), trusted)
 }
 
 /// Discover skills from every supported location.
@@ -61,12 +62,12 @@ pub fn load_skills(workspace_dir: &Path) -> Vec<Workflow> {
 ///
 /// On name collisions, project-scope wins over user-scope and a warning is
 /// attached to the retained skill.
-pub fn discover_skills(
+pub fn discover_workflows(
     home_dir: Option<&Path>,
     workspace_dir: Option<&Path>,
     trusted: bool,
 ) -> Vec<Workflow> {
-    discover_skills_inner(home_dir, workspace_dir, trusted)
+    discover_workflows_inner(home_dir, workspace_dir, trusted)
 }
 
 /// Whether the workspace has opted into loading project-scope skills.
@@ -77,7 +78,7 @@ pub fn is_workspace_trusted(workspace_dir: &Path) -> bool {
     workspace_dir.join(".openhuman").join(TRUST_MARKER).exists()
 }
 
-pub(crate) fn discover_skills_inner(
+pub(crate) fn discover_workflows_inner(
     home_dir: Option<&Path>,
     workspace_dir: Option<&Path>,
     trusted: bool,
@@ -219,11 +220,17 @@ fn scan_root(root: &Path, scope: WorkflowScope) -> Vec<Workflow> {
 }
 
 fn load_skill_dir(dir: &Path, dir_name: &str, scope: WorkflowScope) -> Option<Workflow> {
-    let skill_md = dir.join(SKILL_MD);
+    // WORKFLOW.md is the current filename; SKILL.md is read for back-compat
+    // with workflows authored before the rename.
+    let workflow_md = dir.join(WORKFLOW_MD);
+    let legacy_md = dir.join(SKILL_MD);
     let legacy_manifest = dir.join(SKILL_JSON);
 
-    if skill_md.exists() {
-        return Some(load_from_skill_md(&skill_md, dir, dir_name, scope));
+    if workflow_md.exists() {
+        return Some(load_from_workflow_md(&workflow_md, dir, dir_name, scope));
+    }
+    if legacy_md.exists() {
+        return Some(load_from_workflow_md(&legacy_md, dir, dir_name, scope));
     }
     if legacy_manifest.exists() {
         return Some(load_from_legacy_manifest(
@@ -254,12 +261,12 @@ fn load_skill_dir(dir: &Path, dir_name: &str, scope: WorkflowScope) -> Option<Wo
 /// * paths whose final component or any intermediate component is a symlink
 ///   (link-follow escape),
 /// * non-file targets (directories, sockets, fifos),
-/// * files larger than [`MAX_SKILL_RESOURCE_BYTES`],
+/// * files larger than [`MAX_WORKFLOW_RESOURCE_BYTES`],
 /// * non-UTF-8 byte contents (binary files must be surfaced some other way —
 ///   no lossy replacement).
 ///
 /// On success returns the file's contents as an owned `String`.
-pub fn read_skill_resource(
+pub fn read_workflow_resource(
     workspace_dir: &Path,
     skill_id: &str,
     relative_path: &Path,
@@ -268,7 +275,7 @@ pub fn read_skill_resource(
         skill_id = %skill_id,
         relative_path = %relative_path.display(),
         workspace = %workspace_dir.display(),
-        "[skills] read_skill_resource: entry"
+        "[skills] read_workflow_resource: entry"
     );
 
     if skill_id.trim().is_empty() {
@@ -299,10 +306,10 @@ pub fn read_skill_resource(
     }
 
     // Resolve the skill by running the standard discovery pipeline. We reuse
-    // `load_skills` (which honors both user and workspace roots plus the
+    // `load_workflow_metadata` (which honors both user and workspace roots plus the
     // trust marker) so the resource read is scoped to the exact same set of
     // skills the UI would already have shown the user.
-    let skills = load_skills(workspace_dir);
+    let skills = load_workflow_metadata(workspace_dir);
     let skill = skills
         .into_iter()
         .find(|s| s.name == skill_id)
@@ -339,9 +346,9 @@ pub fn read_skill_resource(
     // Size gate — check via metadata before reading so we never allocate the
     // buffer for an oversized file.
     let size = leaf_meta.len();
-    if size > MAX_SKILL_RESOURCE_BYTES {
+    if size > MAX_WORKFLOW_RESOURCE_BYTES {
         return Err(format!(
-            "resource file is {size} bytes, exceeds limit of {MAX_SKILL_RESOURCE_BYTES}"
+            "resource file is {size} bytes, exceeds limit of {MAX_WORKFLOW_RESOURCE_BYTES}"
         ));
     }
 
@@ -377,7 +384,7 @@ pub fn read_skill_resource(
     tracing::debug!(
         skill_id = %skill_id,
         bytes = bytes.len(),
-        "[skills] read_skill_resource: success"
+        "[skills] read_workflow_resource: success"
     );
 
     Ok(content)

@@ -3,9 +3,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use super::ops_discover::{discover_skills_inner, is_workspace_trusted};
+use super::ops_discover::{discover_workflows_inner, is_workspace_trusted};
 use super::ops_types::{
     Workflow, WorkflowScope, MAX_DESCRIPTION_LEN, MAX_NAME_LEN, RESOURCE_DIRS, SKILL_MD,
+    SKILL_TOML, WORKFLOW_MD, WORKFLOW_TOML,
 };
 
 /// One declared `[[inputs]]` entry as supplied at create time by the
@@ -43,9 +44,9 @@ fn default_required() -> bool {
     true
 }
 
-/// Input for [`create_skill`]. Mirrors the `skills.create` JSON-RPC payload.
+/// Input for [`create_workflow`]. Mirrors the `skills.create` JSON-RPC payload.
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct CreateSkillParams {
+pub struct CreateWorkflowParams {
     /// Human-readable name — slugified into the on-disk folder.
     pub name: String,
     /// One-line description of the procedure — what the workflow does
@@ -74,11 +75,17 @@ pub struct CreateSkillParams {
     #[serde(default, rename = "allowed-tools", alias = "allowed_tools")]
     pub allowed_tools: Vec<String>,
     /// Declared `[[inputs]]` for the skill. When non-empty,
-    /// `create_skill_inner` writes a sibling `skill.toml` next to the
+    /// `create_workflow_inner` writes a sibling `skill.toml` next to the
     /// generated `SKILL.md` so the Skills Runner can render dynamic
     /// form controls for the inputs at run time.
     #[serde(default)]
     pub inputs: Vec<WorkflowCreateInputDef>,
+    /// Edit mode: when `true`, an existing workflow at the resolved slug is
+    /// overwritten (frontmatter + `skill.toml` rewritten) instead of rejected,
+    /// and the existing `SKILL.md` body (hand-authored instructions) is
+    /// preserved. Set by the `workflows_update` path; `false` for create.
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 /// Scaffold a new SKILL.md-based skill on disk.
@@ -103,27 +110,30 @@ pub struct CreateSkillParams {
 /// * Slug is length-bounded by [`MAX_NAME_LEN`].
 /// * The resolved `<scope-root>/<slug>` path is canonicalized and verified
 ///   to stay inside the canonical scope root (same `starts_with` guard used
-///   by [`read_skill_resource`]) to defeat `..` or absolute-path inputs.
+///   by [`read_workflow_resource`]) to defeat `..` or absolute-path inputs.
 /// * Collisions with an existing directory are rejected outright — this
 ///   function never overwrites.
 ///
 /// On success the freshly created skill is re-discovered through the standard
 /// pipeline and returned so callers can drop it straight into the UI list.
-pub fn create_skill(workspace_dir: &Path, params: CreateSkillParams) -> Result<Workflow, String> {
+pub fn create_workflow(
+    workspace_dir: &Path,
+    params: CreateWorkflowParams,
+) -> Result<Workflow, String> {
     let home = dirs::home_dir();
-    create_skill_inner(home.as_deref(), workspace_dir, params)
+    create_workflow_inner(home.as_deref(), workspace_dir, params)
 }
 
-pub(crate) fn create_skill_inner(
+pub(crate) fn create_workflow_inner(
     home_dir: Option<&Path>,
     workspace_dir: &Path,
-    mut params: CreateSkillParams,
+    mut params: CreateWorkflowParams,
 ) -> Result<Workflow, String> {
     tracing::debug!(
         name = %params.name,
         scope = ?params.scope,
         workspace = %workspace_dir.display(),
-        "[skills] create_skill: entry"
+        "[skills] create_workflow: entry"
     );
 
     validate_inputs(&mut params.inputs)?;
@@ -146,7 +156,7 @@ pub(crate) fn create_skill_inner(
         ));
     }
 
-    let slug = slugify_skill_name(display_name)?;
+    let slug = slugify_workflow_name(display_name)?;
 
     let scope_root = match params.scope {
         WorkflowScope::User => {
@@ -190,9 +200,16 @@ pub(crate) fn create_skill_inner(
         ));
     }
 
-    if skill_dir.exists() {
+    let dir_exists = skill_dir.exists();
+    if dir_exists && !params.overwrite {
         return Err(format!(
             "skill '{slug}' already exists at {}",
+            skill_dir.display()
+        ));
+    }
+    if !dir_exists && params.overwrite {
+        return Err(format!(
+            "cannot update workflow '{slug}': it does not exist at {}",
             skill_dir.display()
         ));
     }
@@ -200,17 +217,52 @@ pub(crate) fn create_skill_inner(
     std::fs::create_dir_all(&skill_dir)
         .map_err(|e| format!("failed to create skill dir {}: {e}", skill_dir.display()))?;
 
-    let skill_md_path = skill_dir.join(SKILL_MD);
-    let skill_md = render_skill_md(
-        &slug,
-        description,
-        params.license.as_deref(),
-        params.author.as_deref(),
-        &params.tags,
-        &params.allowed_tools,
-    );
-    std::fs::write(&skill_md_path, skill_md)
-        .map_err(|e| format!("failed to write {}: {e}", skill_md_path.display()))?;
+    let workflow_md_path = skill_dir.join(WORKFLOW_MD);
+    let legacy_md_path = skill_dir.join(SKILL_MD);
+    // On edit, preserve the hand-authored body (everything after the
+    // frontmatter) and rewrite only the frontmatter from the form fields. Read
+    // the body from the current WORKFLOW.md, falling back to a legacy SKILL.md.
+    // On create — or if neither parses — emit the full template body.
+    let preserved_body = if params.overwrite {
+        super::ops_parse::parse_workflow_md(&workflow_md_path)
+            .or_else(|| super::ops_parse::parse_workflow_md(&legacy_md_path))
+            .map(|(_, body, _)| body)
+    } else {
+        None
+    };
+    let workflow_md = match preserved_body {
+        Some(body) => {
+            let mut out = render_workflow_frontmatter(
+                &slug,
+                description,
+                params.license.as_deref(),
+                params.author.as_deref(),
+                &params.tags,
+                &params.allowed_tools,
+            );
+            out.push('\n');
+            out.push_str(body.trim_start_matches('\n'));
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out
+        }
+        None => render_workflow_md(
+            &slug,
+            description,
+            params.license.as_deref(),
+            params.author.as_deref(),
+            &params.tags,
+            &params.allowed_tools,
+        ),
+    };
+    std::fs::write(&workflow_md_path, workflow_md)
+        .map_err(|e| format!("failed to write {}: {e}", workflow_md_path.display()))?;
+    // Edit migration: if this workflow still had a legacy SKILL.md alongside the
+    // new WORKFLOW.md, drop it so discovery doesn't surface a duplicate.
+    if params.overwrite && legacy_md_path != workflow_md_path && legacy_md_path.exists() {
+        let _ = std::fs::remove_file(&legacy_md_path);
+    }
 
     // Emit a sibling skill.toml when the user declared `[[inputs]]` OR gave a
     // distinct `when_to_use` trigger at create time. The registry reads this
@@ -223,14 +275,26 @@ pub(crate) fn create_skill_inner(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    let workflow_toml_path = skill_dir.join(WORKFLOW_TOML);
     if !params.inputs.is_empty() || when_to_use.is_some() {
-        let skill_toml_path = skill_dir.join("skill.toml");
         // Distinct trigger when provided, else reuse the description so the
         // field is never empty (matches the prior behaviour).
-        let skill_toml =
-            render_skill_toml(&slug, when_to_use.unwrap_or(description), &params.inputs);
-        std::fs::write(&skill_toml_path, skill_toml)
-            .map_err(|e| format!("failed to write {}: {e}", skill_toml_path.display()))?;
+        let workflow_toml =
+            render_workflow_toml(&slug, when_to_use.unwrap_or(description), &params.inputs);
+        std::fs::write(&workflow_toml_path, workflow_toml)
+            .map_err(|e| format!("failed to write {}: {e}", workflow_toml_path.display()))?;
+    } else if params.overwrite {
+        // Edit removed all inputs + when_to_use → no manifest needed; drop any
+        // stale one so the workflow reverts to a bare definition.
+        let _ = std::fs::remove_file(&workflow_toml_path);
+    }
+    // Edit migration: retire any legacy skill.toml now that workflow.toml is
+    // authoritative (avoids two manifests in the same dir).
+    if params.overwrite {
+        let legacy_toml = skill_dir.join(SKILL_TOML);
+        if legacy_toml != workflow_toml_path && legacy_toml.exists() {
+            let _ = std::fs::remove_file(&legacy_toml);
+        }
     }
 
     for sub in RESOURCE_DIRS {
@@ -242,12 +306,12 @@ pub(crate) fn create_skill_inner(
     tracing::info!(
         slug = %slug,
         scope = ?params.scope,
-        location = %skill_md_path.display(),
-        "[skills] create_skill: wrote SKILL.md"
+        location = %workflow_md_path.display(),
+        "[skills] create_workflow: wrote SKILL.md"
     );
 
     let trusted = is_workspace_trusted(workspace_dir);
-    let created = discover_skills_inner(home_dir, Some(workspace_dir), trusted)
+    let created = discover_workflows_inner(home_dir, Some(workspace_dir), trusted)
         .into_iter()
         .find(|s| s.name == slug)
         .ok_or_else(|| format!("created skill '{slug}' but failed to re-discover"))?;
@@ -260,7 +324,7 @@ pub(crate) fn create_skill_inner(
 /// whitespace-only names, and enforces case-insensitive uniqueness across
 /// all input names so the emitted `skill.toml` never carries a blank or
 /// duplicate `[[inputs]]` key. Names are trimmed in place so every later
-/// consumer (e.g. [`render_skill_toml`]) sees the validated value.
+/// consumer (e.g. [`render_workflow_toml`]) sees the validated value.
 fn validate_inputs(inputs: &mut [WorkflowCreateInputDef]) -> Result<(), String> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for input in inputs.iter_mut() {
@@ -285,7 +349,7 @@ fn validate_inputs(inputs: &mut [WorkflowCreateInputDef]) -> Result<(), String> 
 /// * Any other character is dropped.
 /// * Leading / trailing `-` are trimmed.
 /// * The empty slug (i.e. the name had no `[a-z0-9]` characters) is rejected.
-pub(crate) fn slugify_skill_name(name: &str) -> Result<String, String> {
+pub(crate) fn slugify_workflow_name(name: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut prev_hyphen = true;
     for ch in name.chars() {
@@ -312,7 +376,10 @@ pub(crate) fn slugify_skill_name(name: &str) -> Result<String, String> {
 }
 
 /// Render a minimal SKILL.md body for a freshly scaffolded skill.
-pub(crate) fn render_skill_md(
+/// Render just the YAML frontmatter block (`---\n…\n---\n`) from the form
+/// fields. Split out from [`render_workflow_md`] so the update/edit path can
+/// rewrite frontmatter in place while preserving the hand-authored body.
+pub(crate) fn render_workflow_frontmatter(
     slug: &str,
     description: &str,
     license: Option<&str>,
@@ -346,7 +413,21 @@ pub(crate) fn render_skill_md(
             out.push_str(&format!("  - {}\n", yaml_scalar(t)));
         }
     }
-    out.push_str("---\n\n");
+    out.push_str("---\n");
+    out
+}
+
+pub(crate) fn render_workflow_md(
+    slug: &str,
+    description: &str,
+    license: Option<&str>,
+    author: Option<&str>,
+    tags: &[String],
+    allowed_tools: &[String],
+) -> String {
+    let mut out =
+        render_workflow_frontmatter(slug, description, license, author, tags, allowed_tools);
+    out.push('\n');
     out.push_str(&format!("# {slug}\n\n"));
     out.push_str(description);
     if !description.ends_with('\n') {
@@ -405,8 +486,8 @@ pub(crate) fn yaml_scalar(s: &str) -> String {
 /// inputs at run time: `id`, `when_to_use`, plus one `[[inputs]]` entry
 /// per declared input. Field shape mirrors the existing bundled skills
 /// (e.g. `src/openhuman/skills/defaults/github-issue-crusher/skill.toml`)
-/// so `discover_skills_inner` parses the new file identically.
-pub(crate) fn render_skill_toml(
+/// so `discover_workflows_inner` parses the new file identically.
+pub(crate) fn render_workflow_toml(
     slug: &str,
     when_to_use: &str,
     inputs: &[WorkflowCreateInputDef],
@@ -457,7 +538,7 @@ mod render_skill_toml_tests {
 
     #[test]
     fn no_inputs_returns_header_only() {
-        let out = render_skill_toml("my-skill", "Does the thing.", &[]);
+        let out = render_workflow_toml("my-skill", "Does the thing.", &[]);
         assert!(out.contains("id = \"my-skill\""));
         assert!(out.contains("when_to_use = \"Does the thing.\""));
         assert!(!out.contains("[[inputs]]"));
@@ -471,7 +552,7 @@ mod render_skill_toml_tests {
             required: true,
             type_: Some("string".into()),
         }];
-        let out = render_skill_toml("my-skill", "Does the thing.", &inputs);
+        let out = render_workflow_toml("my-skill", "Does the thing.", &inputs);
         // Parse it back through the actual TOML parser to prove the
         // output is well-formed — the registry uses `toml::from_str` so
         // any round-trip failure here would surface at skill discovery.
@@ -493,7 +574,7 @@ mod render_skill_toml_tests {
             required: false,
             type_: None,
         }];
-        let out = render_skill_toml("my-skill", "x", &inputs);
+        let out = render_workflow_toml("my-skill", "x", &inputs);
         let parsed: toml::Value = toml::from_str(&out).expect("parse");
         let entry = &parsed["inputs"].as_array().unwrap()[0];
         assert_eq!(entry["name"].as_str(), Some("n"));
@@ -510,7 +591,7 @@ mod render_skill_toml_tests {
             required: true,
             type_: None,
         }];
-        let out = render_skill_toml("my-skill", "x", &inputs);
+        let out = render_workflow_toml("my-skill", "x", &inputs);
         // Must still parse cleanly — the escape logic is what we're
         // exercising here; the round-trip assertion below is the contract.
         let parsed: toml::Value = toml::from_str(&out).expect("escaped strings must parse");

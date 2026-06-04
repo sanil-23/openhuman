@@ -35,7 +35,7 @@ use crate::openhuman::inference::provider::{ChatRequest, ChatResponse, Provider,
 use crate::openhuman::tools::policy::DefaultToolPolicy;
 use crate::openhuman::tools::traits::Tool;
 use crate::openhuman::workflows::ops_create::{
-    create_skill_inner, CreateSkillParams, WorkflowCreateInputDef,
+    create_workflow_inner, CreateWorkflowParams, WorkflowCreateInputDef,
 };
 use crate::openhuman::workflows::ops_types::WorkflowScope;
 use crate::openhuman::workflows::registry::get_workflow;
@@ -119,9 +119,9 @@ fn seed_project_workflow(ws: &std::path::Path, slug: &str, description: &str) {
 // ── A. create → registry round-trip (the combo persists + is RUNNABLE) ───
 
 // Regression guard for the create→run unification: a workflow authored via the
-// create path (`create_skill_inner` → `.openhuman/skills`) must be found by the
+// create path (`create_workflow_inner` → `.openhuman/skills`) must be found by the
 // RUN path's `get_workflow` (→ `load_workflows`, now reading the same roots as
-// `discover_skills`), with its `when_to_use` trigger + declared inputs intact.
+// `discover_workflows`), with its `when_to_use` trigger + declared inputs intact.
 // Before the loader unification this failed ("unknown workflow") because the
 // run path scanned only `<ws>/skills`. Hermetic (project scope + temp dir).
 #[test]
@@ -131,7 +131,7 @@ fn create_then_registry_roundtrip_preserves_when_to_use_and_inputs() {
     std::fs::create_dir_all(ws.path().join(".openhuman")).unwrap();
     std::fs::write(ws.path().join(".openhuman").join("trust"), "").unwrap();
 
-    let params = CreateSkillParams {
+    let params = CreateWorkflowParams {
         name: "Triage Inbox".to_string(),
         description: "Summarise and label the inbox.".to_string(),
         when_to_use: Some("when the user asks to triage email".to_string()),
@@ -145,7 +145,7 @@ fn create_then_registry_roundtrip_preserves_when_to_use_and_inputs() {
         ..Default::default()
     };
     let created =
-        create_skill_inner(None, ws.path(), params).expect("create workflow should succeed");
+        create_workflow_inner(None, ws.path(), params).expect("create workflow should succeed");
 
     // The registry (what the orchestrator's discovery reads) must surface BOTH
     // halves of the unified form.

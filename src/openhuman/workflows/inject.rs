@@ -265,7 +265,7 @@ fn contains_whole_word(haystack_lower: &str, needle_lower: &str) -> bool {
 
 /// Match installed skills against a user message per the heuristic
 /// documented at the top of this module.
-pub fn match_skills<'a>(skills: &'a [Workflow], user_message: &str) -> Vec<WorkflowMatch<'a>> {
+pub fn match_workflows<'a>(skills: &'a [Workflow], user_message: &str) -> Vec<WorkflowMatch<'a>> {
     let mentions = extract_mentions(user_message);
     let mention_set: HashSet<String> = mentions.iter().map(|(n, _)| n.clone()).collect();
     let mention_index = |skill_norm: &str| -> Option<usize> {
@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn matches_skill_by_description_substring() {
         let skills = vec![skill("email", "send email via gmail")];
-        let m = match_skills(&skills, "Please send email via gmail to alice.");
+        let m = match_workflows(&skills, "Please send email via gmail to alice.");
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].reason, MatchReason::DescriptionSubstring);
     }
@@ -546,7 +546,7 @@ mod tests {
     #[test]
     fn matches_skill_by_tag_whole_word() {
         let skills = vec![skill_with_tags("tp", "do things", &["pdf"])];
-        let m = match_skills(&skills, "Convert this pdf please.");
+        let m = match_workflows(&skills, "Convert this pdf please.");
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].reason, MatchReason::TagMatch);
     }
@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn tag_partial_word_does_not_match() {
         let skills = vec![skill_with_tags("sk", "x", &["crypt"])];
-        let m = match_skills(&skills, "I like cryptography.");
+        let m = match_workflows(&skills, "I like cryptography.");
         // `crypt` is not a standalone word in `cryptography`.
         assert!(m.is_empty(), "got: {:?}", m);
     }
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn matches_skill_by_name_whole_word() {
         let skills = vec![skill("pdf-crunch", "unrelated")];
-        let m = match_skills(&skills, "Run the pdf-crunch skill now");
+        let m = match_workflows(&skills, "Run the pdf-crunch skill now");
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].reason, MatchReason::NameMatch);
     }
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn explicit_at_mention_force_injects() {
         let skills = vec![skill("notes", "completely unrelated description")];
-        let m = match_skills(&skills, "Hey can you @notes me the summary?");
+        let m = match_workflows(&skills, "Hey can you @notes me the summary?");
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].reason, MatchReason::AtMention);
     }
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn at_mention_case_insensitive_and_handles_dashes() {
         let skills = vec![skill("pdf-crunch", "foo")];
-        let m = match_skills(&skills, "Use @Pdf-Crunch please");
+        let m = match_workflows(&skills, "Use @Pdf-Crunch please");
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].reason, MatchReason::AtMention);
     }
@@ -586,7 +586,7 @@ mod tests {
     #[test]
     fn email_address_at_does_not_trigger_mention() {
         let skills = vec![skill("alice", "nothing relevant")];
-        let m = match_skills(&skills, "Send email to foo@alice.example.com please");
+        let m = match_workflows(&skills, "Send email to foo@alice.example.com please");
         // `foo@alice` should not count because `o` precedes `@`.
         assert!(m.is_empty(), "got: {:?}", m);
     }
@@ -601,11 +601,11 @@ mod tests {
             "user-invocable",
             false,
         )];
-        let m = match_skills(&skills, "Please summarize text for me.");
+        let m = match_workflows(&skills, "Please summarize text for me.");
         assert!(m.is_empty(), "auto-match should be suppressed: {:?}", m);
 
         // But an explicit @ mention still force-injects.
-        let m2 = match_skills(&skills, "Hey @summary for me");
+        let m2 = match_workflows(&skills, "Hey @summary for me");
         assert_eq!(m2.len(), 1);
         assert_eq!(m2[0].reason, MatchReason::AtMention);
     }
@@ -613,14 +613,14 @@ mod tests {
     #[test]
     fn user_invocable_deprecated_underscore_alias() {
         let skills = vec![skill_with_flag("x", "xx yy", "user_invocable", false)];
-        let m = match_skills(&skills, "xx yy please");
+        let m = match_workflows(&skills, "xx yy please");
         assert!(m.is_empty());
     }
 
     #[test]
     fn at_mention_overrides_non_match() {
         let skills = vec![skill("bar", "zzz unrelated")];
-        let m = match_skills(&skills, "@bar do it");
+        let m = match_workflows(&skills, "@bar do it");
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].reason, MatchReason::AtMention);
     }
@@ -637,7 +637,7 @@ mod tests {
         let mut b = b;
         b.tags.push("description".into());
         let skills = [a, b];
-        let m = match_skills(&skills, msg);
+        let m = match_workflows(&skills, msg);
         assert_eq!(m.len(), 2);
         // Longer description first.
         assert_eq!(m[0].skill.name, "bb");
@@ -650,7 +650,7 @@ mod tests {
         let b = skill("bar", "XXX YYY");
         // `foo` auto-matches on description; `bar` is explicit via @.
         let skills = [a, b];
-        let m = match_skills(&skills, "XXX YYY and @bar");
+        let m = match_workflows(&skills, "XXX YYY and @bar");
         assert_eq!(m.len(), 2);
         assert_eq!(m[0].skill.name, "bar");
         assert_eq!(m[0].reason, MatchReason::AtMention);
@@ -660,7 +660,7 @@ mod tests {
     fn render_injection_emits_full_block_when_under_budget() {
         let s = skill("hello", "say hi");
         let skills = [s];
-        let matches = match_skills(&skills, "@hello please");
+        let matches = match_workflows(&skills, "@hello please");
         let inj = render_injection(&matches, 1024, |sk| {
             assert_eq!(sk.name, "hello");
             Some("instructions body".to_string())
@@ -677,7 +677,7 @@ mod tests {
     fn size_cap_truncates_with_marker() {
         let s = skill("big", "huge body");
         let skills = [s];
-        let matches = match_skills(&skills, "@big do it");
+        let matches = match_workflows(&skills, "@big do it");
         // Force truncation by setting a tight cap.
         let big_body = "X".repeat(4000);
         let inj = render_injection(&matches, 200, |_| Some(big_body.clone()));
@@ -692,7 +692,7 @@ mod tests {
     fn test_render_injection_utf8_boundary() {
         let s = skill("utf8", "d");
         let skills = [s];
-        let matches = match_skills(&skills, "@utf8");
+        let matches = match_workflows(&skills, "@utf8");
         // Header: [SKILL:utf8]\n (13 bytes)
         // Footer (full): \n[/SKILL]\n (10 bytes)
         // Footer (trunc): \n[/SKILL:truncated]\n (20 bytes)
@@ -726,7 +726,7 @@ mod tests {
         let a = skill("first", "x");
         let b = skill("second", "x");
         let skills = [a, b];
-        let matches = match_skills(&skills, "@first @second");
+        let matches = match_workflows(&skills, "@first @second");
         let body = "X".repeat(200);
         // Cap just big enough for one block.
         let inj = render_injection(&matches, 250, |_| Some(body.clone()));
@@ -745,7 +745,7 @@ mod tests {
     fn body_unavailable_logs_skip() {
         let s = skill("ghost", "not on disk");
         let skills = [s];
-        let matches = match_skills(&skills, "@ghost");
+        let matches = match_workflows(&skills, "@ghost");
         let inj = render_injection(&matches, 1024, |_| None);
         assert!(inj.rendered.is_empty());
         assert_eq!(inj.decisions.len(), 1);

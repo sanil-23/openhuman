@@ -26,9 +26,9 @@ use crate::core::all::{ControllerFuture, RegisteredController};
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
 use crate::openhuman::config::Config;
 use crate::openhuman::workflows::ops::{
-    create_skill, discover_skills, install_skill_from_url, is_workspace_trusted,
-    read_skill_resource, uninstall_skill, CreateSkillParams, InstallSkillFromUrlParams,
-    UninstallSkillParams, Workflow, WorkflowCreateInputDef, WorkflowScope,
+    create_workflow, discover_workflows, install_workflow_from_url, is_workspace_trusted,
+    read_workflow_resource, uninstall_workflow, CreateWorkflowParams, InstallWorkflowFromUrlParams,
+    UninstallWorkflowParams, Workflow, WorkflowCreateInputDef, WorkflowScope,
 };
 use crate::rpc::RpcOutcome;
 
@@ -82,9 +82,9 @@ struct WorkflowsCreateParams {
     inputs: Vec<WorkflowCreateInputDef>,
 }
 
-impl From<WorkflowsCreateParams> for CreateSkillParams {
+impl From<WorkflowsCreateParams> for CreateWorkflowParams {
     fn from(p: WorkflowsCreateParams) -> Self {
-        CreateSkillParams {
+        CreateWorkflowParams {
             name: p.name,
             description: p.description,
             when_to_use: p.when_to_use,
@@ -94,6 +94,7 @@ impl From<WorkflowsCreateParams> for CreateSkillParams {
             tags: p.tags,
             allowed_tools: p.allowed_tools,
             inputs: p.inputs,
+            overwrite: false,
         }
     }
 }
@@ -177,9 +178,9 @@ struct WorkflowsInstallFromUrlParamsWire {
     timeout_secs: Option<u64>,
 }
 
-impl From<WorkflowsInstallFromUrlParamsWire> for InstallSkillFromUrlParams {
+impl From<WorkflowsInstallFromUrlParamsWire> for InstallWorkflowFromUrlParams {
     fn from(p: WorkflowsInstallFromUrlParamsWire) -> Self {
-        InstallSkillFromUrlParams {
+        InstallWorkflowFromUrlParams {
             url: p.url,
             timeout_secs: p.timeout_secs,
         }
@@ -649,7 +650,7 @@ fn handle_workflows_list(params: Map<String, Value>) -> ControllerFuture {
         let workspace = resolve_workspace_dir().await;
         let trusted = is_workspace_trusted(&workspace);
         let home = dirs::home_dir();
-        let skills = discover_skills(home.as_deref(), Some(workspace.as_path()), trusted);
+        let skills = discover_workflows(home.as_deref(), Some(workspace.as_path()), trusted);
         tracing::debug!(
             count = skills.len(),
             workspace = %workspace.display(),
@@ -1113,7 +1114,7 @@ fn handle_workflows_read_resource(params: Map<String, Value>) -> ControllerFutur
         );
         let workspace = resolve_workspace_dir().await;
         let relative = Path::new(&payload.relative_path);
-        match read_skill_resource(workspace.as_path(), &payload.workflow_id, relative) {
+        match read_workflow_resource(workspace.as_path(), &payload.workflow_id, relative) {
             Ok(content) => {
                 let bytes = content.len();
                 to_json(RpcOutcome::new(
@@ -1146,7 +1147,7 @@ fn handle_workflows_create(params: Map<String, Value>) -> ControllerFuture {
             "[skills][rpc] create"
         );
         let workspace = resolve_workspace_dir().await;
-        match create_skill(workspace.as_path(), payload.into()) {
+        match create_workflow(workspace.as_path(), payload.into()) {
             Ok(skill) => {
                 tracing::debug!(
                     skill = %skill.name,
@@ -1178,8 +1179,8 @@ fn handle_workflows_install_from_url(params: Map<String, Value>) -> ControllerFu
         );
         let config = resolve_config().await;
         let workspace = config.workspace_dir.clone();
-        let payload: InstallSkillFromUrlParams = wire.into();
-        match install_skill_from_url(workspace.as_path(), payload).await {
+        let payload: InstallWorkflowFromUrlParams = wire.into();
+        match install_workflow_from_url(workspace.as_path(), payload).await {
             Ok(outcome) => {
                 tracing::debug!(
                     url = %outcome.url,
@@ -1206,9 +1207,9 @@ fn handle_workflows_install_from_url(params: Map<String, Value>) -> ControllerFu
 
 fn handle_workflows_uninstall(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
-        let payload = deserialize_params::<UninstallSkillParams>(params)?;
+        let payload = deserialize_params::<UninstallWorkflowParams>(params)?;
         tracing::debug!(name = %payload.name, "[skills][rpc] uninstall");
-        match uninstall_skill(payload, None) {
+        match uninstall_workflow(payload, None) {
             Ok(outcome) => {
                 tracing::debug!(
                     name = %outcome.name,

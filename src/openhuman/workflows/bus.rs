@@ -1,7 +1,7 @@
 //! Event bus subscriber for event-triggered skills.
 //!
 //! Skills that declare a `triggers:` list in their `SKILL.md` frontmatter are
-//! indexed at startup by [`TriggeredSkillIndex`]. A [`TriggeredSkillSubscriber`]
+//! indexed at startup by [`TriggeredWorkflowIndex`]. A [`TriggeredSkillSubscriber`]
 //! is then registered on the global event bus; when a matching [`DomainEvent`]
 //! arrives it logs which skill(s) should be activated.
 //!
@@ -85,15 +85,15 @@ impl TriggerPattern {
 
 /// Index of skills that declare event triggers, built from discovered skills.
 ///
-/// Call [`TriggeredSkillIndex::build`] after the skill discovery pass, then
-/// pass the result to [`register_triggered_skill_subscriber`].
+/// Call [`TriggeredWorkflowIndex::build`] after the skill discovery pass, then
+/// pass the result to [`register_triggered_workflow_subscriber`].
 #[derive(Debug, Default)]
-pub struct TriggeredSkillIndex {
+pub struct TriggeredWorkflowIndex {
     /// Sorted `(skill_name, patterns)` pairs. Sorted for deterministic logging.
     entries: Vec<(String, Vec<TriggerPattern>)>,
 }
 
-impl TriggeredSkillIndex {
+impl TriggeredWorkflowIndex {
     /// Build an index from a slice of discovered skills.
     ///
     /// Skills with an empty `triggers:` list are skipped.
@@ -150,7 +150,7 @@ impl TriggeredSkillIndex {
     }
 
     /// Returns the names of skills whose trigger patterns match `event`.
-    pub fn matching_skills<'a>(&'a self, event: &DomainEvent) -> Vec<&'a str> {
+    pub fn matching_workflows<'a>(&'a self, event: &DomainEvent) -> Vec<&'a str> {
         self.entries
             .iter()
             .filter(|(_, patterns)| patterns.iter().any(|p| p.matches(event)))
@@ -162,7 +162,7 @@ impl TriggeredSkillIndex {
 // ── Subscriber ────────────────────────────────────────────────────────────────
 
 struct TriggeredSkillSubscriber {
-    index: Arc<TriggeredSkillIndex>,
+    index: Arc<TriggeredWorkflowIndex>,
 }
 
 #[async_trait]
@@ -177,7 +177,7 @@ impl EventHandler for TriggeredSkillSubscriber {
     // is equivalent and avoids an unsafe lifetime trick.
 
     async fn handle(&self, event: &DomainEvent) {
-        let matched = self.index.matching_skills(event);
+        let matched = self.index.matching_workflows(event);
         if matched.is_empty() {
             return;
         }
@@ -201,14 +201,14 @@ impl EventHandler for TriggeredSkillSubscriber {
 /// must be kept alive for the duration of the process.
 ///
 /// ```text
-/// // In channel runtime startup, after load_skills():
+/// // In channel runtime startup, after load_workflow_metadata():
 /// static SKILL_TRIGGER_HANDLE: OnceLock<Option<SubscriptionHandle>> = OnceLock::new();
 /// SKILL_TRIGGER_HANDLE.get_or_init(|| {
-///     skills::bus::register_triggered_skill_subscriber(&discovered_skills)
+///     skills::bus::register_triggered_workflow_subscriber(&discovered_skills)
 /// });
 /// ```
-pub fn register_triggered_skill_subscriber(skills: &[Workflow]) -> Option<SubscriptionHandle> {
-    let index = TriggeredSkillIndex::build(skills);
+pub fn register_triggered_workflow_subscriber(skills: &[Workflow]) -> Option<SubscriptionHandle> {
+    let index = TriggeredWorkflowIndex::build(skills);
     if index.is_empty() {
         return None;
     }
@@ -223,8 +223,8 @@ pub fn register_triggered_skill_subscriber(skills: &[Workflow]) -> Option<Subscr
 }
 
 /// Legacy no-op retained while call-sites migrate to
-/// [`register_triggered_skill_subscriber`]. Safe to call multiple times.
-pub fn register_skill_cleanup_subscriber() {}
+/// [`register_triggered_workflow_subscriber`]. Safe to call multiple times.
+pub fn register_workflow_cleanup_subscriber() {}
 
 #[cfg(test)]
 mod tests {
@@ -323,7 +323,7 @@ mod tests {
         );
     }
 
-    // ── TriggeredSkillIndex ──────────────────────────────────────────────────
+    // ── TriggeredWorkflowIndex ──────────────────────────────────────────────────
 
     #[test]
     fn build_ignores_skills_without_triggers() {
@@ -331,14 +331,14 @@ mod tests {
             skill_with_triggers("no_triggers", vec![]),
             skill_with_triggers("with_trigger", vec!["cron"]),
         ];
-        let idx = TriggeredSkillIndex::build(&skills);
+        let idx = TriggeredWorkflowIndex::build(&skills);
         assert_eq!(idx.len(), 1);
         assert!(!idx.is_empty());
     }
 
     #[test]
     fn build_empty_skills_list_is_empty() {
-        let idx = TriggeredSkillIndex::build(&[]);
+        let idx = TriggeredWorkflowIndex::build(&[]);
         assert!(idx.is_empty());
     }
 
@@ -348,7 +348,7 @@ mod tests {
             skill_with_triggers("zzz_skill", vec!["cron"]),
             skill_with_triggers("aaa_skill", vec!["channel"]),
         ];
-        let idx = TriggeredSkillIndex::build(&skills);
+        let idx = TriggeredWorkflowIndex::build(&skills);
         assert_eq!(idx.entries[0].0, "aaa_skill");
         assert_eq!(idx.entries[1].0, "zzz_skill");
     }
@@ -359,7 +359,7 @@ mod tests {
             skill_with_triggers("a", vec!["composio", "cron"]),
             skill_with_triggers("b", vec!["composio", "channel"]),
         ];
-        let idx = TriggeredSkillIndex::build(&skills);
+        let idx = TriggeredWorkflowIndex::build(&skills);
         let domains = idx.domains();
         assert_eq!(domains, vec!["channel", "composio", "cron"]);
     }
@@ -371,13 +371,13 @@ mod tests {
             skill_with_triggers("composio_watcher", vec!["composio"]),
             skill_with_triggers("multi_watcher", vec!["cron", "composio"]),
         ];
-        let idx = TriggeredSkillIndex::build(&skills);
+        let idx = TriggeredWorkflowIndex::build(&skills);
         let event = DomainEvent::CronJobTriggered {
             job_id: "j1".into(),
             job_name: "test".into(),
             job_type: "shell".into(),
         };
-        let mut matched = idx.matching_skills(&event);
+        let mut matched = idx.matching_workflows(&event);
         matched.sort_unstable();
         assert_eq!(matched, vec!["cron_watcher", "multi_watcher"]);
     }
@@ -385,16 +385,16 @@ mod tests {
     #[test]
     fn matching_skills_returns_empty_when_no_match() {
         let skills = vec![skill_with_triggers("composio_watcher", vec!["composio"])];
-        let idx = TriggeredSkillIndex::build(&skills);
+        let idx = TriggeredWorkflowIndex::build(&skills);
         let event = DomainEvent::SystemStartup {
             component: "core".into(),
         };
-        assert!(idx.matching_skills(&event).is_empty());
+        assert!(idx.matching_workflows(&event).is_empty());
     }
 
     #[test]
     fn register_skill_cleanup_subscriber_is_a_safe_noop() {
-        register_skill_cleanup_subscriber();
-        register_skill_cleanup_subscriber();
+        register_workflow_cleanup_subscriber();
+        register_workflow_cleanup_subscriber();
     }
 }

@@ -5,8 +5,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::ops_discover::{discover_skills_inner, is_workspace_trusted};
-use super::ops_parse::parse_skill_md_str;
+use super::ops_discover::{discover_workflows_inner, is_workspace_trusted};
+use super::ops_parse::parse_workflow_md_str;
 use super::ops_types::{WorkflowFrontmatter, WorkflowScope, MAX_NAME_LEN, SKILL_MD};
 
 /// Strip userinfo, query, and fragment from a URL for safe inclusion in
@@ -36,12 +36,12 @@ pub const MAX_INSTALL_URL_LEN: usize = 2048;
 /// Upper bound on the fetched SKILL.md body. Single-file skills rarely exceed
 /// a few KB; the 1 MiB cap here is a defensive limit against a hostile or
 /// misconfigured host streaming an unbounded response into memory.
-pub const MAX_SKILL_MD_BYTES: usize = 1024 * 1024;
+pub const MAX_WORKFLOW_MD_BYTES: usize = 1024 * 1024;
 
-/// Input for [`install_skill_from_url`]. Mirrors the `skills.install_from_url`
+/// Input for [`install_workflow_from_url`]. Mirrors the `skills.install_from_url`
 /// JSON-RPC payload.
 #[derive(Debug, Clone, Deserialize)]
-pub struct InstallSkillFromUrlParams {
+pub struct InstallWorkflowFromUrlParams {
     /// Remote SKILL.md URL. Must be `https://`, resolve to a non-private host
     /// (see [`validate_install_url`]), and point at a `.md` file after
     /// github.com `/blob/` normalization.
@@ -57,7 +57,7 @@ pub struct InstallSkillFromUrlParams {
 /// that appeared in the catalog since the start of the call (post-discovery
 /// minus pre-discovery).
 #[derive(Debug, Clone, Serialize)]
-pub struct InstallSkillFromUrlOutcome {
+pub struct InstallWorkflowFromUrlOutcome {
     /// The URL the caller submitted, trimmed.
     pub url: String,
     /// Human-readable install log — typically `Fetched N bytes from <url>\n
@@ -97,7 +97,7 @@ pub struct InstallSkillFromUrlOutcome {
 /// * `timeout_secs` is clamped to [`MAX_INSTALL_TIMEOUT_SECS`].
 ///
 /// Runtime:
-/// * Body size is capped by [`MAX_SKILL_MD_BYTES`] (1 MiB). The advertised
+/// * Body size is capped by [`MAX_WORKFLOW_MD_BYTES`] (1 MiB). The advertised
 ///   `Content-Length` is checked up front; the buffered body length is
 ///   checked again after the download as defense against a lying header.
 /// * Frontmatter is validated — `name` and `description` are required per
@@ -111,10 +111,10 @@ pub struct InstallSkillFromUrlOutcome {
 /// On success the full post-install skills catalog is re-discovered and the
 /// outcome includes the list of skill slugs that appeared since the start of
 /// the call.
-pub async fn install_skill_from_url(
+pub async fn install_workflow_from_url(
     workspace_dir: &Path,
-    params: InstallSkillFromUrlParams,
-) -> Result<InstallSkillFromUrlOutcome, String> {
+    params: InstallWorkflowFromUrlParams,
+) -> Result<InstallWorkflowFromUrlOutcome, String> {
     let raw_url = params.url.trim().to_string();
     validate_install_url(&raw_url)?;
 
@@ -142,13 +142,13 @@ pub async fn install_skill_from_url(
         fetch_url = %redacted_fetch_url,
         workspace = %workspace_dir.display(),
         timeout_secs = timeout_secs,
-        "[skills] install_skill_from_url: entry"
+        "[skills] install_workflow_from_url: entry"
     );
 
     let home = dirs::home_dir();
     let trusted_before = is_workspace_trusted(workspace_dir);
     let before: std::collections::HashSet<String> =
-        discover_skills_inner(home.as_deref(), Some(workspace_dir), trusted_before)
+        discover_workflows_inner(home.as_deref(), Some(workspace_dir), trusted_before)
             .into_iter()
             .map(|s| s.name)
             .collect();
@@ -160,7 +160,7 @@ pub async fn install_skill_from_url(
 
     tracing::info!(
         fetch_url = %redacted_fetch_url,
-        "[skills] install_skill_from_url: fetching SKILL.md"
+        "[skills] install_workflow_from_url: fetching SKILL.md"
     );
 
     let response = match client.get(&fetch_url).send().await {
@@ -206,9 +206,9 @@ pub async fn install_skill_from_url(
     }
 
     if let Some(len) = response.content_length() {
-        if len > MAX_SKILL_MD_BYTES as u64 {
+        if len > MAX_WORKFLOW_MD_BYTES as u64 {
             return Err(format!(
-                "fetch too large: {} bytes exceeds {MAX_SKILL_MD_BYTES} limit",
+                "fetch too large: {} bytes exceeds {MAX_WORKFLOW_MD_BYTES} limit",
                 len
             ));
         }
@@ -224,9 +224,9 @@ pub async fn install_skill_from_url(
         }
     };
 
-    if bytes.len() > MAX_SKILL_MD_BYTES {
+    if bytes.len() > MAX_WORKFLOW_MD_BYTES {
         return Err(format!(
-            "fetch too large: {} bytes exceeds {MAX_SKILL_MD_BYTES} limit",
+            "fetch too large: {} bytes exceeds {MAX_WORKFLOW_MD_BYTES} limit",
             bytes.len()
         ));
     }
@@ -234,9 +234,10 @@ pub async fn install_skill_from_url(
     let content = String::from_utf8(bytes.to_vec())
         .map_err(|e| format!("invalid SKILL.md: body is not valid utf-8: {e}"))?;
 
-    let (frontmatter, _body, parse_warnings) = parse_skill_md_str(&content).ok_or_else(|| {
-        "invalid SKILL.md: frontmatter block opened with `---` but never terminated".to_string()
-    })?;
+    let (frontmatter, _body, parse_warnings) =
+        parse_workflow_md_str(&content).ok_or_else(|| {
+            "invalid SKILL.md: frontmatter block opened with `---` but never terminated".to_string()
+        })?;
 
     if frontmatter.name.trim().is_empty() {
         return Err("invalid SKILL.md: missing required field 'name'".to_string());
@@ -247,7 +248,7 @@ pub async fn install_skill_from_url(
 
     let slug = derive_install_slug(&frontmatter)?;
 
-    // Install to user scope (`~/.openhuman/skills/<slug>`), which `discover_skills`
+    // Install to user scope (`~/.openhuman/skills/<slug>`), which `discover_workflows`
     // scans unconditionally. Project scope (`<ws>/.openhuman/skills/`) is gated on
     // a `<ws>/.openhuman/trust` marker and would render the install invisible to the
     // skills list until the user opts the workspace into trust.
@@ -290,12 +291,12 @@ pub async fn install_skill_from_url(
             tracing::warn!(
                 target_dir = %target_dir.display(),
                 error = %rm_err,
-                "[skills] install_skill_from_url: rollback remove_dir failed (non-fatal)"
+                "[skills] install_workflow_from_url: rollback remove_dir failed (non-fatal)"
             );
         } else {
             tracing::warn!(
                 target_dir = %target_dir.display(),
-                "[skills] install_skill_from_url: rolled back partial install after write failure"
+                "[skills] install_workflow_from_url: rolled back partial install after write failure"
             );
         }
         return Err(e);
@@ -309,13 +310,13 @@ pub async fn install_skill_from_url(
             tracing::warn!(
                 target = %target_file.display(),
                 error = %e,
-                "[skills] install_skill_from_url: chmod 0644 failed (non-fatal)"
+                "[skills] install_workflow_from_url: chmod 0644 failed (non-fatal)"
             );
         }
     }
 
     let trusted_after = is_workspace_trusted(workspace_dir);
-    let after = discover_skills_inner(home.as_deref(), Some(workspace_dir), trusted_after);
+    let after = discover_workflows_inner(home.as_deref(), Some(workspace_dir), trusted_after);
     let new_skills: Vec<String> = after
         .into_iter()
         .map(|s| s.name)
@@ -328,7 +329,7 @@ pub async fn install_skill_from_url(
         slug = %slug,
         bytes = content.len(),
         new_count = new_skills.len(),
-        "[skills] install_skill_from_url: completed"
+        "[skills] install_workflow_from_url: completed"
     );
 
     let stdout = format!(
@@ -338,7 +339,7 @@ pub async fn install_skill_from_url(
     );
     let stderr = parse_warnings.join("\n");
 
-    Ok(InstallSkillFromUrlOutcome {
+    Ok(InstallWorkflowFromUrlOutcome {
         url: raw_url,
         stdout,
         stderr,
@@ -346,9 +347,9 @@ pub async fn install_skill_from_url(
     })
 }
 
-/// Input for [`uninstall_skill`]. Mirrors the `skills.uninstall` JSON-RPC payload.
+/// Input for [`uninstall_workflow`]. Mirrors the `skills.uninstall` JSON-RPC payload.
 #[derive(Debug, Clone, Deserialize)]
-pub struct UninstallSkillParams {
+pub struct UninstallWorkflowParams {
     /// On-disk slug of the installed skill — the directory name under
     /// `~/.openhuman/skills/<slug>/`. Retained as `name` for wire-format
     /// back-compat with pre-existing clients; semantics are slug-only.
@@ -357,7 +358,7 @@ pub struct UninstallSkillParams {
 
 /// Outcome of a successful uninstall.
 #[derive(Debug, Clone, Serialize)]
-pub struct UninstallSkillOutcome {
+pub struct UninstallWorkflowOutcome {
     /// The normalised slug that was removed.
     pub name: String,
     /// Absolute on-disk path that was deleted (post-canonicalisation).
@@ -372,17 +373,17 @@ pub struct UninstallSkillOutcome {
 /// canonicalises paths, refuses symlinks, requires SKILL.md to be present.
 ///
 /// `home_dir_override` is for tests; production callers pass `None`.
-pub fn uninstall_skill(
-    params: UninstallSkillParams,
+pub fn uninstall_workflow(
+    params: UninstallWorkflowParams,
     home_dir_override: Option<&Path>,
-) -> Result<UninstallSkillOutcome, String> {
+) -> Result<UninstallWorkflowOutcome, String> {
     let trimmed = params.name.trim().to_string();
     if trimmed.is_empty() {
         return Err("skill name is required".to_string());
     }
     if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") {
         log::warn!(
-            "[skills] uninstall_skill: rejected name with path separators name={:?}",
+            "[skills] uninstall_workflow: rejected name with path separators name={:?}",
             trimmed
         );
         return Err(format!(
@@ -416,7 +417,7 @@ pub fn uninstall_skill(
         .map_err(|e| format!("stat {} failed: {e}", skills_root.display()))?;
     if root_meta.file_type().is_symlink() {
         log::warn!(
-            "[skills] uninstall_skill: refused symlinked skills root path={}",
+            "[skills] uninstall_workflow: refused symlinked skills root path={}",
             skills_root.display()
         );
         return Err(format!(
@@ -432,7 +433,7 @@ pub fn uninstall_skill(
     match std::fs::symlink_metadata(&candidate) {
         Ok(m) if m.file_type().is_symlink() => {
             log::warn!(
-                "[skills] uninstall_skill: refused symlinked alias name={trimmed} path={}",
+                "[skills] uninstall_workflow: refused symlinked alias name={trimmed} path={}",
                 candidate.display()
             );
             return Err(format!(
@@ -458,7 +459,7 @@ pub fn uninstall_skill(
 
     if !canonical_candidate.starts_with(&canonical_root) {
         log::warn!(
-            "[skills] uninstall_skill: path escape rejected candidate={} root={}",
+            "[skills] uninstall_workflow: path escape rejected candidate={} root={}",
             canonical_candidate.display(),
             canonical_root.display()
         );
@@ -486,13 +487,13 @@ pub fn uninstall_skill(
     }
 
     log::info!(
-        "[skills] uninstall_skill: removing name={trimmed} path={}",
+        "[skills] uninstall_workflow: removing name={trimmed} path={}",
         canonical_candidate.display()
     );
     std::fs::remove_dir_all(&canonical_candidate)
         .map_err(|e| format!("remove {} failed: {e}", canonical_candidate.display()))?;
 
-    Ok(UninstallSkillOutcome {
+    Ok(UninstallWorkflowOutcome {
         name: trimmed,
         removed_path: canonical_candidate.display().to_string(),
         scope: WorkflowScope::User,
