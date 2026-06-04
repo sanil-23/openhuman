@@ -4832,7 +4832,7 @@ const messages: TranslationMap = {
   'skills.create.whenToUseHelp':
     "L'attivatore che un agente riconosce per decidere di eseguire questo workflow. Lascia vuoto per riutilizzare la descrizione.",
   'skills.create.inputs.row.descriptionError': 'È richiesta una descrizione per ogni input.',
-  'skills.detail.run': 'Esegui workflow',
+  'skills.detail.run': 'Esegui',
   'skills.detail.runAriaLabel': 'Esegui questo workflow',
   'skills.run.title': 'Esegui workflow',
   'workflows.installFromUrl': 'Installa da URL',

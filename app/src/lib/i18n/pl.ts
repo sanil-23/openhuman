@@ -4823,7 +4823,7 @@ const messages: TranslationMap = {
   'skills.create.whenToUseHelp':
     'Wyzwalacz, na podstawie którego agent decyduje o uruchomieniu tego przepływu pracy. Pozostaw puste, aby użyć opisu.',
   'skills.create.inputs.row.descriptionError': 'Każde pole wejściowe wymaga opisu.',
-  'skills.detail.run': 'Uruchom przepływ pracy',
+  'skills.detail.run': 'Uruchom',
   'skills.detail.runAriaLabel': 'Uruchom ten przepływ pracy',
   'skills.run.title': 'Uruchom przepływ pracy',
   'workflows.installFromUrl': 'Zainstaluj z adresu URL',

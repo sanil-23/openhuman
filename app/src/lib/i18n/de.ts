@@ -4876,7 +4876,7 @@ const messages: TranslationMap = {
     'Der Auslöser, anhand dessen ein Agent entscheidet, diesen Workflow auszuführen. Leer lassen, um die Beschreibung zu verwenden.',
   'skills.create.inputs.row.descriptionError':
     'Für jede Eingabe ist eine Beschreibung erforderlich.',
-  'skills.detail.run': 'Workflow ausführen',
+  'skills.detail.run': 'Ausführen',
   'skills.detail.runAriaLabel': 'Diesen Workflow ausführen',
   'skills.run.title': 'Workflow ausführen',
   'workflows.installFromUrl': 'Von URL installieren',

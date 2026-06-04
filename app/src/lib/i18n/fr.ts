@@ -4857,7 +4857,7 @@ const messages: TranslationMap = {
   'skills.create.whenToUseHelp':
     "Le déclencheur sur lequel un agent se base pour décider d'exécuter ce workflow. Laissez vide pour réutiliser la description.",
   'skills.create.inputs.row.descriptionError': 'Une description est requise pour chaque entrée.',
-  'skills.detail.run': 'Exécuter le workflow',
+  'skills.detail.run': 'Exécuter',
   'skills.detail.runAriaLabel': 'Exécuter ce workflow',
   'skills.run.title': 'Exécuter le workflow',
   'workflows.installFromUrl': 'Installer depuis une URL',

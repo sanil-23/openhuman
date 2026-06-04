@@ -4746,7 +4746,7 @@ const messages: TranslationMap = {
   'skills.create.whenToUseHelp':
     'वह ट्रिगर जिसके आधार पर एजेंट इस वर्कफ़्लो को चलाने का निर्णय लेता है। विवरण का पुनः उपयोग करने के लिए खाली छोड़ें।',
   'skills.create.inputs.row.descriptionError': 'प्रत्येक इनपुट के लिए विवरण आवश्यक है।',
-  'skills.detail.run': 'वर्कफ़्लो चलाएँ',
+  'skills.detail.run': 'चलाएँ',
   'skills.detail.runAriaLabel': 'यह वर्कफ़्लो चलाएँ',
   'skills.run.title': 'वर्कफ़्लो चलाएँ',
   'workflows.installFromUrl': 'URL से इंस्टॉल करें',

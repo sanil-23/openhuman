@@ -4367,7 +4367,7 @@ const en: TranslationMap = {
   'skills.detail.allowedTools': 'Allowed tools',
   'skills.detail.author': 'Author',
   'skills.detail.bundledResources': 'Bundled resources',
-  'skills.detail.run': 'Run workflow',
+  'skills.detail.run': 'Run',
   'skills.detail.runAriaLabel': 'Run this workflow',
   'skills.run.title': 'Run workflow',
   'skills.detail.closeAriaLabel': 'Close skill details',

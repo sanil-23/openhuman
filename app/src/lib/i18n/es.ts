@@ -4842,7 +4842,7 @@ const messages: TranslationMap = {
   'skills.create.whenToUseHelp':
     'El desencadenante que un agente reconoce para decidir ejecutar este flujo de trabajo. Déjalo en blanco para reutilizar la descripción.',
   'skills.create.inputs.row.descriptionError': 'Se requiere una descripción para cada entrada.',
-  'skills.detail.run': 'Ejecutar flujo de trabajo',
+  'skills.detail.run': 'Ejecutar',
   'skills.detail.runAriaLabel': 'Ejecutar este flujo de trabajo',
   'skills.run.title': 'Ejecutar flujo de trabajo',
   'workflows.installFromUrl': 'Instalar desde URL',

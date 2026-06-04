@@ -4758,7 +4758,7 @@ const messages: TranslationMap = {
   'skills.create.whenToUseHelp':
     'Pemicu yang dikenali agen untuk memutuskan menjalankan alur kerja ini. Biarkan kosong untuk memakai deskripsi.',
   'skills.create.inputs.row.descriptionError': 'Deskripsi diperlukan untuk setiap input.',
-  'skills.detail.run': 'Jalankan alur kerja',
+  'skills.detail.run': 'Jalankan',
   'skills.detail.runAriaLabel': 'Jalankan alur kerja ini',
   'skills.run.title': 'Jalankan alur kerja',
   'workflows.installFromUrl': 'Instal dari URL',

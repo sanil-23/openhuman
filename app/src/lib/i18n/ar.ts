@@ -4650,7 +4650,7 @@ const messages: TranslationMap = {
   'skills.create.whenToUseHelp':
     'المُحفِّز الذي يعتمد عليه الوكيل لتقرير تشغيل سير العمل هذا. اتركه فارغًا لإعادة استخدام الوصف.',
   'skills.create.inputs.row.descriptionError': 'يلزم وصف لكل إدخال.',
-  'skills.detail.run': 'تشغيل سير العمل',
+  'skills.detail.run': 'تشغيل',
   'skills.detail.runAriaLabel': 'تشغيل سير العمل هذا',
   'skills.run.title': 'تشغيل سير العمل',
   'workflows.installFromUrl': 'التثبيت من رابط',

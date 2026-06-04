@@ -4787,7 +4787,7 @@ const messages: TranslationMap = {
   'skills.create.whenToUseHelp':
     'Триггер, по которому агент решает запустить этот рабочий процесс. Оставьте пустым, чтобы использовать описание.',
   'skills.create.inputs.row.descriptionError': 'Для каждого ввода требуется описание.',
-  'skills.detail.run': 'Запустить рабочий процесс',
+  'skills.detail.run': 'Запустить',
   'skills.detail.runAriaLabel': 'Запустить этот рабочий процесс',
   'skills.run.title': 'Запустить рабочий процесс',
   'workflows.installFromUrl': 'Установить по URL',

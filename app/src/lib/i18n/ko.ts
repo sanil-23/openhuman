@@ -4694,7 +4694,7 @@ const messages: TranslationMap = {
   'skills.create.whenToUseHelp':
     '에이전트가 이 워크플로 실행을 결정하는 트리거입니다. 비워 두면 설명을 사용합니다.',
   'skills.create.inputs.row.descriptionError': '각 입력에는 설명이 필요합니다.',
-  'skills.detail.run': '워크플로 실행',
+  'skills.detail.run': '실행',
   'skills.detail.runAriaLabel': '이 워크플로 실행',
   'skills.run.title': '워크플로 실행',
   'workflows.installFromUrl': 'URL에서 설치',
