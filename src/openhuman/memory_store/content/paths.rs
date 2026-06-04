@@ -145,12 +145,13 @@ pub fn summary_rel_path_with_layout(
             },
         ) => {
             let filename = summary_filename(summary_id);
+            let safe_slug = slugify_source_id(doc_slug);
             let vfolder = match version_ms {
                 Some(v) => format!("v-{v}"),
                 None => "v-unversioned".to_string(),
             };
             format!(
-                "{WIKI_PREFIX}/summaries/source-{scope_slug}/docs/{doc_slug}/{vfolder}/L{level}/{filename}.md"
+                "{WIKI_PREFIX}/summaries/source-{scope_slug}/docs/{safe_slug}/{vfolder}/L{level}/{filename}.md"
             )
         }
         (SummaryTreeKind::Source, SummaryDiskLayout::Merge) => {
