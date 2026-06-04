@@ -25,7 +25,10 @@ async function setMockBehavior(behavior: Record<string, unknown>): Promise<void>
 
 test.describe('Top-level functional flows', () => {
   test('workflows create and delete round-trip through the top-level page', async ({ page }) => {
-    const name = `Playwright Workflow ${Date.now()}`;
+    // Use a slug-safe name: create stores `name: <slug>` (the display string is
+    // slugified), and the runner heading / workflows_list both surface that
+    // slug — so keep the typed name already slug-shaped to assert against it.
+    const name = `pw-workflow-${Date.now()}`;
     await bootAuthenticatedPage(page, 'pw-workflows-create-delete', '/workflows');
     await dismissWalkthroughIfPresent(page);
 
