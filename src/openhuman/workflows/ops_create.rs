@@ -248,8 +248,7 @@ pub(crate) fn create_workflow_inner(
     // roots and update it in place; the SKILL.md→WORKFLOW.md migration below
     // converts the on-disk naming. A fresh create always writes to `workflows/`.
     if params.overwrite && !skill_dir.exists() {
-        if let Some(legacy_dir) =
-            legacy_workflow_dir(home_dir, workspace_dir, params.scope, &slug)
+        if let Some(legacy_dir) = legacy_workflow_dir(home_dir, workspace_dir, params.scope, &slug)
         {
             tracing::debug!(
                 slug = %slug,
