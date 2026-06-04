@@ -21,10 +21,16 @@ vi.mock('../../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: stableT }) }
 
 const hoisted = vi.hoisted(() => ({
   createSkill: vi.fn(),
+  updateSkill: vi.fn(),
+  describeSkill: vi.fn(),
 }));
 
 vi.mock('../../../services/api/skillsApi', () => ({
-  skillsApi: { createSkill: hoisted.createSkill },
+  skillsApi: {
+    createSkill: hoisted.createSkill,
+    updateSkill: hoisted.updateSkill,
+    describeSkill: hoisted.describeSkill,
+  },
 }));
 
 import CreateWorkflowForm, { previewSlug } from '../CreateWorkflowForm';
@@ -349,5 +355,67 @@ describe('CreateWorkflowForm', () => {
         })
       );
     });
+  });
+});
+
+describe('CreateWorkflowForm — edit mode', () => {
+  beforeEach(() => {
+    hoisted.createSkill.mockReset();
+    hoisted.updateSkill.mockReset();
+    hoisted.describeSkill.mockReset();
+  });
+
+  const editingSummary = {
+    id: 'wf-edit',
+    name: 'wf-edit',
+    description: 'old desc',
+    version: '',
+    author: 'me',
+    tags: ['t1'],
+    tools: ['shell'],
+    prompts: [],
+    location: null,
+    resources: [],
+    scope: 'user' as const,
+    legacy: false,
+    warnings: [],
+  };
+
+  it('prefills from the summary + describe, then submits via updateSkill', async () => {
+    hoisted.describeSkill.mockResolvedValue({
+      id: 'wf-edit',
+      name: 'wf-edit',
+      when_to_use: 'edit trigger',
+      inputs: [{ name: 'repo', type: 'string', required: true, description: 'r' }],
+    });
+    hoisted.updateSkill.mockResolvedValue({
+      id: 'wf-edit',
+      name: 'wf-edit',
+      scope: 'user',
+      legacy: false,
+    });
+
+    const onCreated = vi.fn();
+    render(<CreateWorkflowForm formId={FORM_ID} editing={editingSummary} onCreated={onCreated} />);
+
+    // Prefill: describe is fetched and name is populated from the summary.
+    await waitFor(() => expect(hoisted.describeSkill).toHaveBeenCalledWith('wf-edit'));
+    const nameInput = screen.getByLabelText(/skills.create.name/i) as HTMLInputElement;
+    await waitFor(() => expect(nameInput.value).toBe('wf-edit'));
+
+    fireEvent.submit(document.getElementById(FORM_ID)!);
+    await waitFor(() =>
+      expect(hoisted.updateSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'wf-edit',
+          whenToUse: 'edit trigger',
+          tags: ['t1'],
+          author: 'me',
+          allowedTools: ['shell'],
+        })
+      )
+    );
+    expect(hoisted.createSkill).not.toHaveBeenCalled();
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
   });
 });

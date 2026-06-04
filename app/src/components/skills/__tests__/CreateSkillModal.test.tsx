@@ -20,6 +20,8 @@ import CreateSkillModal from '../CreateSkillModal';
 vi.mock('../../../services/api/skillsApi', () => ({
   skillsApi: {
     createSkill: vi.fn(),
+    updateSkill: vi.fn(),
+    describeSkill: vi.fn().mockResolvedValue({ id: 'e', name: 'e', when_to_use: '', inputs: [] }),
   },
 }));
 
@@ -143,5 +145,14 @@ describe('CreateSkillModal', () => {
     render(<CreateSkillModal onClose={onClose} onCreated={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /close/i }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders Edit/Save labels in edit mode', () => {
+    render(<CreateSkillModal editing={builtSkill()} onClose={vi.fn()} onCreated={vi.fn()} />);
+    // Title + submit switch to the edit ontology (common.edit / common.save).
+    expect(screen.getByRole('heading', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Save$/ })).toBeInTheDocument();
+    // ...and not the create labels.
+    expect(screen.queryByText('New Workflow')).not.toBeInTheDocument();
   });
 });

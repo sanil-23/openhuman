@@ -37,6 +37,8 @@ const hoisted = vi.hoisted(() => ({
   runSkill: vi.fn(),
   recentRuns: vi.fn(),
   readRunLog: vi.fn(),
+  cancelRun: vi.fn(),
+  describeSkillList: vi.fn(),
 }));
 
 vi.mock('../../../utils/tauriCommands/cron', () => ({
@@ -55,7 +57,18 @@ vi.mock('../../../services/api/skillsApi', () => ({
     runSkill: hoisted.runSkill,
     recentRuns: hoisted.recentRuns,
     readRunLog: hoisted.readRunLog,
+    cancelRun: hoisted.cancelRun,
   },
+}));
+
+// Stub the edit modal so opening Edit doesn't pull in the real create form.
+vi.mock('../CreateSkillModal', () => ({
+  default: ({ editing, onClose }: { editing?: { id: string }; onClose: () => void }) => (
+    <div data-testid="edit-modal-stub">
+      editing:{editing?.id ?? 'none'}
+      <button data-testid="edit-modal-close" onClick={onClose} />
+    </div>
+  ),
 }));
 
 // Composio-backed pickers fetch on mount — stub them so they don't
@@ -738,3 +751,76 @@ describe('parseScheduledInputs', () => {
   });
 });
 
+
+// ── Stop / Edit / scheduled run-now ──────────────────────────────────
+//
+// Covers the consolidated runner's locked-mode surface: the Stop button on
+// a RUNNING recent run (handleStopRun → cancelRun), the Edit modal opened
+// from the locked header, and "Run" on a saved schedule running the workflow
+// directly with that schedule's snapshotted inputs (handleRunJobNow).
+
+describe('WorkflowRunnerBody — Stop / Edit / scheduled run-now', () => {
+  beforeEach(() => {
+    Object.values(hoisted).forEach((fn) => fn.mockReset());
+    hoisted.listSkills.mockResolvedValue([
+      { id: SKILL_ID, name: 'GitHub Issue Crusher', scope: 'user', legacy: false },
+    ]);
+    hoisted.describeSkill.mockResolvedValue(skillDescription);
+    hoisted.recentRuns.mockResolvedValue([]);
+    hoisted.cronList.mockResolvedValue({ result: [] });
+    hoisted.cronRuns.mockResolvedValue({ result: { runs: [] } });
+    hoisted.runSkill.mockResolvedValue({ run_id: 'r-new', workflow_id: SKILL_ID, log: '/tmp/l' });
+    hoisted.cancelRun.mockResolvedValue(true);
+  });
+
+  it('shows a Stop button on a RUNNING recent run and cancels it', async () => {
+    hoisted.recentRuns.mockResolvedValue([
+      {
+        run_id: 'run-live',
+        workflow_id: SKILL_ID,
+        status: 'RUNNING',
+        started: '2026-05-29T10:00:00Z',
+        duration_ms: null,
+        finished: null,
+        log_path: '/tmp/run-live.log',
+      },
+    ]);
+    const Body = await importBody();
+    renderBody(Body, `/workflows/run?workflow=${SKILL_ID}&lock=1`);
+    const stop = await screen.findByTestId('run-stop-run-live');
+    fireEvent.click(stop);
+    await waitFor(() => expect(hoisted.cancelRun).toHaveBeenCalledWith('run-live'));
+  });
+
+  it('opens the edit modal from the locked workflow header', async () => {
+    const Body = await importBody();
+    renderBody(Body, `/workflows/run?workflow=${SKILL_ID}&lock=1`);
+    const edit = await screen.findByTestId('skills-runner-edit');
+    fireEvent.click(edit);
+    const modal = await screen.findByTestId('edit-modal-stub');
+    expect(modal).toHaveTextContent(`editing:${SKILL_ID}`);
+  });
+
+  it('runs a saved schedule directly with its snapshotted inputs', async () => {
+    const prompt = [
+      `Run the ${SKILL_ID} workflow via the run_workflow tool (workflow_id: "${SKILL_ID}") with these inputs:`,
+      '- channel: team-product',
+      '',
+      'Do NOT do the work yourself.',
+    ].join('\n');
+    hoisted.cronList.mockResolvedValue({ result: [makeJob({ prompt })] });
+    const Body = await importBody();
+    renderBody(Body, `/workflows/run?workflow=${SKILL_ID}&lock=1`);
+    await waitFor(() => expect(hoisted.cronList).toHaveBeenCalled());
+
+    // Inputs parsed from the job prompt render as chips on the card.
+    const inputs = await screen.findByTestId('scheduled-job-job-1-inputs');
+    expect(inputs).toHaveTextContent('channel');
+
+    // The card's "Run" runs the workflow directly with those inputs.
+    fireEvent.click(screen.getByText('settings.skillsRunner.schedule.runNow'));
+    await waitFor(() =>
+      expect(hoisted.runSkill).toHaveBeenCalledWith(SKILL_ID, { channel: 'team-product' })
+    );
+  });
+});

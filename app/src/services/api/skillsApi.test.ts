@@ -120,4 +120,97 @@ describe('skillsApi', () => {
       );
     });
   });
+
+  describe('createSkill (optional fields)', () => {
+    it('forwards when_to_use, scope, license, author, tags, allowed-tools', async () => {
+      mockCallCoreRpc.mockResolvedValue({
+        skill: { id: 's', name: 'S', description: '', scope: 'user' as const },
+      });
+      await skillsApi.createSkill({
+        name: 'S',
+        description: 'desc',
+        whenToUse: 'when asked',
+        scope: 'user',
+        license: 'MIT',
+        author: 'me',
+        tags: ['a'],
+        allowedTools: ['shell'],
+      });
+      expect(mockCallCoreRpc).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'openhuman.workflows_create',
+          params: expect.objectContaining({
+            when_to_use: 'when asked',
+            scope: 'user',
+            license: 'MIT',
+            author: 'me',
+            tags: ['a'],
+            'allowed-tools': ['shell'],
+          }),
+        })
+      );
+    });
+
+    it('omits when_to_use when blank', async () => {
+      mockCallCoreRpc.mockResolvedValue({
+        skill: { id: 's', name: 'S', description: '', scope: 'user' as const },
+      });
+      await skillsApi.createSkill({ name: 'S', description: 'd', whenToUse: '   ' });
+      const params = mockCallCoreRpc.mock.calls[0][0].params;
+      expect(params).not.toHaveProperty('when_to_use');
+    });
+  });
+
+  describe('updateSkill', () => {
+    it('calls openhuman.workflows_update and returns the skill', async () => {
+      mockCallCoreRpc.mockResolvedValue({
+        skill: { id: 'wf', name: 'WF', description: 'd', scope: 'user' as const },
+      });
+      const result = await skillsApi.updateSkill({
+        name: 'WF',
+        description: 'd',
+        whenToUse: 'edit trigger',
+        inputs: [{ name: 'x', type: 'string' as const, description: 'x', required: false }],
+      });
+      expect(mockCallCoreRpc).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'openhuman.workflows_update',
+          params: expect.objectContaining({
+            name: 'WF',
+            when_to_use: 'edit trigger',
+            inputs: expect.any(Array),
+          }),
+        })
+      );
+      expect(result.id).toBe('wf');
+    });
+
+    it('unwraps the data-envelope shape', async () => {
+      mockCallCoreRpc.mockResolvedValue({
+        data: { skill: { id: 'wf2', name: 'WF2', description: '', scope: 'user' as const } },
+      });
+      const result = await skillsApi.updateSkill({ name: 'WF2', description: 'd' });
+      expect(result.id).toBe('wf2');
+    });
+  });
+
+  describe('cancelRun', () => {
+    it('calls openhuman.workflows_cancel with run_id and returns cancelled', async () => {
+      mockCallCoreRpc.mockResolvedValue({ cancelled: true });
+      const result = await skillsApi.cancelRun('run-9');
+      expect(mockCallCoreRpc).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'openhuman.workflows_cancel',
+          params: { run_id: 'run-9' },
+        })
+      );
+      expect(result).toBe(true);
+    });
+
+    it('returns false when the run was not live (envelope shape)', async () => {
+      mockCallCoreRpc.mockResolvedValue({ data: { cancelled: false } });
+      const result = await skillsApi.cancelRun('gone');
+      expect(result).toBe(false);
+    });
+  });
 });
