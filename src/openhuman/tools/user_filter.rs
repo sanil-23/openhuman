@@ -304,10 +304,17 @@ fn family_for_rust_name(name: &str) -> Option<&'static ToolFamily> {
 /// - UI toggle IDs (legacy / partial-rollout format)
 ///
 /// Unknown entries are ignored.
+const LEGACY_ALIASES: &[(&str, &str)] = &[("skill_manage", "workflow_manage")];
+
 fn expand_enabled_tool_names(enabled_tool_names: &[String]) -> HashSet<String> {
     let mut expanded = HashSet::new();
     for entry in enabled_tool_names {
-        if let Some(fam) = TOOL_FAMILIES.iter().find(|fam| fam.id == entry) {
+        let resolved = LEGACY_ALIASES
+            .iter()
+            .find(|(old, _)| *old == entry.as_str())
+            .map(|(_, new)| *new)
+            .unwrap_or(entry.as_str());
+        if let Some(fam) = TOOL_FAMILIES.iter().find(|fam| fam.id == resolved) {
             for name in fam.rust_names {
                 expanded.insert((*name).to_string());
             }
