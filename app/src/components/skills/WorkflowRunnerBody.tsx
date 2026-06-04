@@ -980,23 +980,12 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
             beside it — not a disabled-looking form field. */}
         <div>
           {locked ? (
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
               <h2
                 data-testid="skills-runner-skill-locked"
                 className="min-w-0 truncate text-lg font-semibold text-stone-900 dark:text-stone-100">
                 {selectedWorkflow?.name || selectedSkillId}
               </h2>
-              {selectedWorkflow &&
-                selectedWorkflow.scope === 'user' &&
-                !selectedWorkflow.legacy && (
-                  <button
-                    type="button"
-                    data-testid="skills-runner-edit"
-                    onClick={() => setEditOpen(true)}
-                    className="inline-flex flex-shrink-0 items-center gap-1 rounded border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 px-3 py-2 text-sm font-medium text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-700">
-                    <span aria-hidden="true">✎</span> {t('common.edit')}
-                  </button>
-                )}
             </div>
           ) : (
             <>
@@ -1116,18 +1105,32 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                   </div>
                 )}
 
-                {/* Run now — fires immediately with the inputs above. */}
+                {/* Run now + Edit — act on this workflow with the inputs above. */}
                 <div className="flex flex-col gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleRun()}
-                    disabled={run.status === 'submitting' || missingRequired.length > 0}
-                    className="self-start rounded bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 text-sm font-medium text-white"
-                  >
-                    {run.status === 'submitting'
-                      ? t('settings.skillsRunner.starting')
-                      : t('settings.skillsRunner.runNow')}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleRun()}
+                      disabled={run.status === 'submitting' || missingRequired.length > 0}
+                      className="rounded bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 text-sm font-medium text-white"
+                    >
+                      {run.status === 'submitting'
+                        ? t('settings.skillsRunner.starting')
+                        : t('settings.skillsRunner.runNow')}
+                    </button>
+                    {selectedWorkflow &&
+                      selectedWorkflow.scope === 'user' &&
+                      !selectedWorkflow.legacy && (
+                        <button
+                          type="button"
+                          data-testid="skills-runner-edit"
+                          onClick={() => setEditOpen(true)}
+                          className="inline-flex items-center gap-1 rounded border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 px-3 py-2 text-sm font-medium text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-700"
+                        >
+                          <span aria-hidden="true">✎</span> {t('common.edit')}
+                        </button>
+                      )}
+                  </div>
 
                   {run.status === 'started' && run.result && (
                     <div className="rounded border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950 p-3 text-sm">
@@ -1227,7 +1230,10 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                     </p>
                   )}
                   </div>
+                </div>
 
+                {/* Second box — saved schedules for this workflow. */}
+                <div className="space-y-2 rounded-2xl border border-stone-200/90 dark:border-stone-700/80 bg-white dark:bg-stone-900 px-4 py-4 shadow-soft">
                   {/* Existing scheduled jobs for this skill */}
                   {scheduledJobsLoading ? (
                     <p className="mt-3 text-xs text-stone-500 dark:text-stone-400">
