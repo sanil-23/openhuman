@@ -158,6 +158,7 @@ const messages: TranslationMap = {
   'clearData.failed': '清除数据失败，请重试。',
   'clearData.failedLogout': '退出登录失败，请重试。',
   'clearData.failedPersist': '清除持久化应用状态失败，请重试。',
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': '欢迎使用 OpenHuman',
   'welcome.subtitle': '你的私人 AI 超级智能。私密、简单、强大。',
   'welcome.connectPrompt': '输入 Core RPC 地址以开始使用',
@@ -3536,6 +3537,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.actionSandbox': '操作沙箱',
   'settings.agentAccess.readWriteAccess': '读取 + 写入',
   'settings.agentAccess.actionSandboxDesc': 'Shell、文件和 git 工具的默认工作目录。',
+  'settings.agentAccess.actionDir.edit': '编辑',
+  'settings.agentAccess.actionDir.save': '保存',
+  'settings.agentAccess.actionDir.cancel': '取消',
+  'settings.agentAccess.actionDir.placeholder': '绝对路径，例如 /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    '由 OPENHUMAN_ACTION_DIR 设置。请更改环境变量以覆盖。',
+  'settings.agentAccess.actionDir.saved': '操作目录已更新。',
   'settings.agentAccess.internalState': '内部状态',
   'settings.agentAccess.agentBlocked': '代理已阻止',
   'settings.agentAccess.internalStateDesc':
@@ -4515,6 +4523,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': '运行此工作流',
   'skills.run.title': '工作流',
   'workflows.installFromUrl': '从 URL 安装',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': '审批门已禁用',
+  'security.approvalGateDisabled.body':
+    '您的环境中设置了 OPENHUMAN_APPROVAL_GATE=0。具有外部影响的工具将在不请求确认的情况下运行。',
+  'security.approvalGateOverrideIgnored.title': '覆盖已阻止',
+  'security.approvalGateOverrideIgnored.body':
+    '检测到 OPENHUMAN_APPROVAL_GATE=0 覆盖，但已忽略：桌面应用始终保持审批门开启。',
 
   // Run queue
   'runQueue.mode.interrupt': '中断',

@@ -165,6 +165,7 @@ const messages: TranslationMap = {
   'clearData.failedLogout': 'Nie udało się wylogować. Spróbuj ponownie.',
   'clearData.failedPersist':
     'Nie udało się wyczyścić utrwalonego stanu aplikacji. Spróbuj ponownie.',
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'Witaj w OpenHuman',
   'welcome.subtitle': 'Twoja osobista superinteligencja AI. Prywatna, prosta i niezwykle potężna.',
   'welcome.connectPrompt': 'Skonfiguruj URL RPC (zaawansowane)',
@@ -3783,6 +3784,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.readWriteAccess': 'odczyt + zapis',
   'settings.agentAccess.actionSandboxDesc':
     'Domyślny katalog roboczy dla narzędzi shell, plików i git.',
+  'settings.agentAccess.actionDir.edit': 'Edytuj',
+  'settings.agentAccess.actionDir.save': 'Zapisz',
+  'settings.agentAccess.actionDir.cancel': 'Anuluj',
+  'settings.agentAccess.actionDir.placeholder': 'Ścieżka bezwzględna, np. /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'Ustawione przez OPENHUMAN_ACTION_DIR. Zmień zmienną środowiskową, aby zastąpić.',
+  'settings.agentAccess.actionDir.saved': 'Zaktualizowano katalog akcji.',
   'settings.agentAccess.internalState': 'Stan wewnętrzny',
   'settings.agentAccess.agentBlocked': 'zablokowane dla agenta',
   'settings.agentAccess.internalStateDesc':
@@ -4829,6 +4837,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Uruchom ten przepływ pracy',
   'skills.run.title': 'Przepływ pracy',
   'workflows.installFromUrl': 'Zainstaluj z adresu URL',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'Bramka zatwierdzania wyłączona',
+  'security.approvalGateDisabled.body':
+    'W twoim środowisku ustawiono OPENHUMAN_APPROVAL_GATE=0. Narzędzia o zewnętrznym wpływie będą działać bez pytania o potwierdzenie.',
+  'security.approvalGateOverrideIgnored.title': 'Nadpisanie zablokowane',
+  'security.approvalGateOverrideIgnored.body':
+    'Wykryto nadpisanie OPENHUMAN_APPROVAL_GATE=0, ale je zignorowano: aplikacja desktopowa zawsze utrzymuje bramkę zatwierdzania włączoną.',
 
   // Run queue
   'runQueue.mode.interrupt': 'Przerwij',

@@ -164,6 +164,7 @@ const messages: TranslationMap = {
   'clearData.failed': 'Не удалось очистить данные и выйти. Попробуй ещё раз.',
   'clearData.failedLogout': 'Не удалось выйти. Попробуй ещё раз.',
   'clearData.failedPersist': 'Не удалось сбросить состояние приложения. Попробуй ещё раз.',
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'Добро пожаловать в OpenHuman',
   'welcome.subtitle': 'Твой персональный суперинтеллект. Приватный, простой и невероятно мощный.',
   'welcome.connectPrompt': 'Настроить RPC URL (дополнительно)',
@@ -3750,6 +3751,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.readWriteAccess': 'чтение + запись',
   'settings.agentAccess.actionSandboxDesc':
     'Рабочий каталог по умолчанию для инструментов оболочки, файлов и git.',
+  'settings.agentAccess.actionDir.edit': 'Изменить',
+  'settings.agentAccess.actionDir.save': 'Сохранить',
+  'settings.agentAccess.actionDir.cancel': 'Отмена',
+  'settings.agentAccess.actionDir.placeholder': 'Абсолютный путь, напр. /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'Задано переменной OPENHUMAN_ACTION_DIR. Измените переменную окружения, чтобы переопределить.',
+  'settings.agentAccess.actionDir.saved': 'Каталог действий обновлён.',
   'settings.agentAccess.internalState': 'Внутреннее состояние',
   'settings.agentAccess.agentBlocked': 'заблокировано для агента',
   'settings.agentAccess.internalStateDesc':
@@ -4793,6 +4801,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Запустить этот рабочий процесс',
   'skills.run.title': 'Рабочий процесс',
   'workflows.installFromUrl': 'Установить по URL',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'Шлюз одобрения отключён',
+  'security.approvalGateDisabled.body':
+    'В вашей среде установлено OPENHUMAN_APPROVAL_GATE=0. Инструменты с внешним эффектом будут запускаться без запроса подтверждения.',
+  'security.approvalGateOverrideIgnored.title': 'Переопределение заблокировано',
+  'security.approvalGateOverrideIgnored.body':
+    'Обнаружено переопределение OPENHUMAN_APPROVAL_GATE=0, но оно проигнорировано: настольное приложение всегда держит шлюз одобрения включённым.',
 
   // Run queue
   'runQueue.mode.interrupt': 'Прервать',

@@ -162,6 +162,7 @@ const messages: TranslationMap = {
   'clearData.failed': 'डेटा क्लियर करने और लॉगआउट में दिक्कत आई। दोबारा कोशिश करें।',
   'clearData.failedLogout': 'लॉग आउट नहीं हो पाया। दोबारा कोशिश करें।',
   'clearData.failedPersist': 'सेव्ड ऐप स्टेट क्लियर नहीं हो पाई। दोबारा कोशिश करें।',
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'OpenHuman में आपका स्वागत है',
   'welcome.subtitle': 'आपकी पर्सनल AI सुपर इंटेलिजेंस। प्राइवेट, सिंपल और बेहद पावरफुल।',
   'welcome.connectPrompt': 'RPC URL कॉन्फिगर करें (एडवांस्ड)',
@@ -3726,6 +3727,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.readWriteAccess': 'पढ़ना + लिखना',
   'settings.agentAccess.actionSandboxDesc':
     'शेल, फ़ाइल और git टूल के लिए डिफ़ॉल्ट कार्य निर्देशिका।',
+  'settings.agentAccess.actionDir.edit': 'संपादित करें',
+  'settings.agentAccess.actionDir.save': 'सहेजें',
+  'settings.agentAccess.actionDir.cancel': 'रद्द करें',
+  'settings.agentAccess.actionDir.placeholder': 'पूर्ण पथ, उदा. /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'OPENHUMAN_ACTION_DIR द्वारा सेट किया गया। ओवरराइड करने के लिए एनवायरनमेंट वेरिएबल बदलें।',
+  'settings.agentAccess.actionDir.saved': 'एक्शन डायरेक्टरी अपडेट हो गई।',
   'settings.agentAccess.internalState': 'आंतरिक स्थिति',
   'settings.agentAccess.agentBlocked': 'एजेंट-अवरुद्ध',
   'settings.agentAccess.internalStateDesc':
@@ -4752,6 +4760,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'यह वर्कफ़्लो चलाएँ',
   'skills.run.title': 'वर्कफ़्लो',
   'workflows.installFromUrl': 'URL से इंस्टॉल करें',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'अनुमोदन गेट अक्षम',
+  'security.approvalGateDisabled.body':
+    'आपके परिवेश में OPENHUMAN_APPROVAL_GATE=0 सेट है। बाहरी प्रभाव वाले टूल पुष्टि माँगे बिना चलेंगे।',
+  'security.approvalGateOverrideIgnored.title': 'ओवरराइड अवरुद्ध',
+  'security.approvalGateOverrideIgnored.body':
+    'एक OPENHUMAN_APPROVAL_GATE=0 ओवरराइड का पता चला लेकिन अनदेखा कर दिया गया: डेस्कटॉप ऐप अनुमोदन गेट को हमेशा चालू रखता है।',
 
   // Run queue
   'runQueue.mode.interrupt': 'बाधित करें',

@@ -790,6 +790,30 @@ pub enum DomainEvent {
         reason: String,
     },
 
+    /// An `OPENHUMAN_APPROVAL_GATE=0` env override was observed but
+    /// IGNORED because the host is the Tauri desktop shell. The gate is
+    /// always installed under the desktop host; this event lets the UI
+    /// surface a one-shot info banner so the user sees the override was
+    /// rejected. Audit-only; carries no payload content.
+    ApprovalGateOverrideIgnored {
+        /// Host tag (currently always `"tauri-shell"` — added for forward
+        /// compatibility when more desktop hosts land).
+        host: String,
+    },
+    /// The approval gate was NOT installed because an
+    /// `OPENHUMAN_APPROVAL_GATE=0` env override was honored on a
+    /// standalone host (CLI / Docker). Surfaces the elevated-privilege
+    /// state so any connected dashboard can flag it; the desktop UI
+    /// banner subscribes to this variant.
+    ApprovalGateDisabled {
+        /// Host tag (`"cli"` or `"docker"`).
+        host: String,
+        /// Short reason code so downstream consumers can switch on the
+        /// cause without parsing free-text logs. Currently always
+        /// `"env-override"`.
+        reason: String,
+    },
+
     // ── System lifecycle ────────────────────────────────────────────────
     /// A system component started up.
     SystemStartup { component: String },
@@ -805,6 +829,11 @@ pub enum DomainEvent {
     /// changed at runtime. Live sessions should rebuild their `SecurityPolicy`
     /// from the persisted config before the next turn.
     AutonomyConfigChanged,
+    /// The agent's filesystem roots (currently the `action_dir` sandbox) were
+    /// changed at runtime via `config.update_agent_paths`. The live
+    /// `SecurityPolicy` is hot-swapped in-band; this broadcast lets other
+    /// listeners observe the change.
+    AgentPathsChanged,
     /// A component's health status changed.
     HealthChanged {
         component: String,
@@ -1005,6 +1034,7 @@ impl DomainEvent {
             | Self::SystemRestartRequested { .. }
             | Self::SystemShutdownRequested { .. }
             | Self::AutonomyConfigChanged
+            | Self::AgentPathsChanged
             | Self::HealthChanged { .. }
             | Self::HealthRestarted { .. } => "system",
 
@@ -1018,7 +1048,10 @@ impl DomainEvent {
 
             Self::TaskPlanAwaitingApproval { .. } | Self::TaskRunReclaimed { .. } => "agent",
 
-            Self::ApprovalRequested { .. } | Self::ApprovalDecided { .. } => "approval",
+            Self::ApprovalRequested { .. }
+            | Self::ApprovalDecided { .. }
+            | Self::ApprovalGateOverrideIgnored { .. }
+            | Self::ApprovalGateDisabled { .. } => "approval",
 
             Self::ArtifactReady { .. }
             | Self::ArtifactFailed { .. }
@@ -1117,6 +1150,7 @@ impl DomainEvent {
             Self::SystemRestartRequested { .. } => "SystemRestartRequested",
             Self::SystemShutdownRequested { .. } => "SystemShutdownRequested",
             Self::AutonomyConfigChanged => "AutonomyConfigChanged",
+            Self::AgentPathsChanged => "AgentPathsChanged",
             Self::HealthChanged { .. } => "HealthChanged",
             Self::HealthRestarted { .. } => "HealthRestarted",
             Self::KeyringConsentRequired => "KeyringConsentRequired",
@@ -1124,6 +1158,8 @@ impl DomainEvent {
             Self::SessionExpired { .. } => "SessionExpired",
             Self::ApprovalRequested { .. } => "ApprovalRequested",
             Self::ApprovalDecided { .. } => "ApprovalDecided",
+            Self::ApprovalGateOverrideIgnored { .. } => "ApprovalGateOverrideIgnored",
+            Self::ApprovalGateDisabled { .. } => "ApprovalGateDisabled",
             Self::ArtifactReady { .. } => "ArtifactReady",
             Self::ArtifactFailed { .. } => "ArtifactFailed",
             Self::ArtifactPending { .. } => "ArtifactPending",
@@ -1169,6 +1205,10 @@ impl DomainEvent {
             | Self::ChannelDisconnected { channel, .. } => Some(channel.as_str()),
             Self::ToolExecutionStarted { tool_name, .. }
             | Self::ToolExecutionCompleted { tool_name, .. } => Some(tool_name.as_str()),
+            Self::RunQueueMessageQueued { thread_id, .. }
+            | Self::RunQueueMessageDelivered { thread_id, .. }
+            | Self::RunQueueFollowupDispatched { thread_id, .. }
+            | Self::RunQueueInterrupted { thread_id, .. } => Some(thread_id.as_str()),
             _ => None,
         }
     }

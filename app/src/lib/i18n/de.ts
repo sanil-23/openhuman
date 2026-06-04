@@ -169,6 +169,7 @@ const messages: TranslationMap = {
   'clearData.failedLogout': 'Abmelden fehlgeschlagen. Bitte versuche es erneut.',
   'clearData.failedPersist':
     'Der persistente App-Status konnte nicht gelöscht werden. Bitte versuche es erneut.',
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'Willkommen bei OpenHuman',
   'welcome.subtitle':
     'Deine persönliche KI-Superintelligenz. Privat, einfach und äußerst leistungsstark.',
@@ -3816,6 +3817,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.readWriteAccess': 'Lesen + Schreiben',
   'settings.agentAccess.actionSandboxDesc':
     'Standard-Arbeitsverzeichnis für Shell-, Datei- und Git-Tools.',
+  'settings.agentAccess.actionDir.edit': 'Bearbeiten',
+  'settings.agentAccess.actionDir.save': 'Speichern',
+  'settings.agentAccess.actionDir.cancel': 'Abbrechen',
+  'settings.agentAccess.actionDir.placeholder': 'Absoluter Pfad, z. B. /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'Durch OPENHUMAN_ACTION_DIR festgelegt. Ändere die Umgebungsvariable zum Überschreiben.',
+  'settings.agentAccess.actionDir.saved': 'Aktionsverzeichnis aktualisiert.',
   'settings.agentAccess.internalState': 'Interner Zustand',
   'settings.agentAccess.agentBlocked': 'Agent-gesperrt',
   'settings.agentAccess.internalStateDesc':
@@ -4882,6 +4890,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Diesen Workflow ausführen',
   'skills.run.title': 'Workflow',
   'workflows.installFromUrl': 'Von URL installieren',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'Genehmigungstor deaktiviert',
+  'security.approvalGateDisabled.body':
+    'OPENHUMAN_APPROVAL_GATE=0 ist in deiner Umgebung gesetzt. Tools mit externer Wirkung werden ohne Bestätigungsabfrage ausgeführt.',
+  'security.approvalGateOverrideIgnored.title': 'Override blockiert',
+  'security.approvalGateOverrideIgnored.body':
+    'Ein OPENHUMAN_APPROVAL_GATE=0-Override wurde erkannt, aber ignoriert: Die Desktop-App lässt das Genehmigungstor immer eingeschaltet.',
 
   // Run queue
   'runQueue.mode.interrupt': 'Unterbrechen',

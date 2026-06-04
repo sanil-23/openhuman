@@ -161,6 +161,7 @@ const messages: TranslationMap = {
   'clearData.failed': '데이터 삭제 및 로그아웃에 실패했습니다. 다시 시도해 주세요.',
   'clearData.failedLogout': '로그아웃에 실패했습니다. 다시 시도해 주세요.',
   'clearData.failedPersist': '저장된 앱 상태를 삭제하지 못했습니다. 다시 시도해 주세요.',
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'OpenHuman에 오신 것을 환영합니다',
   'welcome.subtitle': '개인용 AI 슈퍼 인텔리전스입니다. 비공개이며, 간단하고, 매우 강력합니다.',
   'welcome.connectPrompt': 'RPC URL 구성(고급)',
@@ -3679,6 +3680,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.actionSandbox': '액션 샌드박스',
   'settings.agentAccess.readWriteAccess': '읽기 + 쓰기',
   'settings.agentAccess.actionSandboxDesc': '셸, 파일 및 git 도구의 기본 작업 디렉터리.',
+  'settings.agentAccess.actionDir.edit': '편집',
+  'settings.agentAccess.actionDir.save': '저장',
+  'settings.agentAccess.actionDir.cancel': '취소',
+  'settings.agentAccess.actionDir.placeholder': '절대 경로, 예: /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'OPENHUMAN_ACTION_DIR로 설정됨. 재정의하려면 환경 변수를 변경하세요.',
+  'settings.agentAccess.actionDir.saved': '작업 디렉터리가 업데이트되었습니다.',
   'settings.agentAccess.internalState': '내부 상태',
   'settings.agentAccess.agentBlocked': '에이전트 차단됨',
   'settings.agentAccess.internalStateDesc':
@@ -4700,6 +4708,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': '이 워크플로 실행',
   'skills.run.title': '워크플로',
   'workflows.installFromUrl': 'URL에서 설치',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': '승인 게이트 비활성화됨',
+  'security.approvalGateDisabled.body':
+    '환경에 OPENHUMAN_APPROVAL_GATE=0이 설정되어 있습니다. 외부 영향이 있는 도구가 확인을 요청하지 않고 실행됩니다.',
+  'security.approvalGateOverrideIgnored.title': '재정의 차단됨',
+  'security.approvalGateOverrideIgnored.body':
+    'OPENHUMAN_APPROVAL_GATE=0 재정의가 감지되었지만 무시되었습니다: 데스크톱 앱은 승인 게이트를 항상 켜둡니다.',
 
   // Run queue
   'runQueue.mode.interrupt': '중단',

@@ -178,6 +178,7 @@ const en: TranslationMap = {
   'clearData.failedPersist': 'Failed to clear persisted app state. Please try again.',
 
   // Welcome page
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'Welcome to OpenHuman',
   'welcome.subtitle':
     'Your personal AI super intelligence. Private, simple and extremely powerful.',
@@ -4106,6 +4107,13 @@ const en: TranslationMap = {
   'settings.agentAccess.readWriteAccess': 'read + write',
   'settings.agentAccess.actionSandboxDesc':
     'Default working directory for shell, file, and git tools.',
+  'settings.agentAccess.actionDir.edit': 'Edit',
+  'settings.agentAccess.actionDir.save': 'Save',
+  'settings.agentAccess.actionDir.cancel': 'Cancel',
+  'settings.agentAccess.actionDir.placeholder': 'Absolute path, e.g. /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'Set by OPENHUMAN_ACTION_DIR. Change the environment variable to override.',
+  'settings.agentAccess.actionDir.saved': 'Action directory updated.',
   'settings.agentAccess.internalState': 'Internal state',
   'settings.agentAccess.agentBlocked': 'agent-blocked',
   'settings.agentAccess.internalStateDesc':
@@ -4991,6 +4999,14 @@ const en: TranslationMap = {
   // Monthly cost badge
   'monthlyCost.badge': '${amount} this month',
   'monthlyCost.noData': 'No syncs this month',
+
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'Approval gate disabled',
+  'security.approvalGateDisabled.body':
+    'OPENHUMAN_APPROVAL_GATE=0 is set in your environment. External-effect tools will run without asking for confirmation.',
+  'security.approvalGateOverrideIgnored.title': 'Override blocked',
+  'security.approvalGateOverrideIgnored.body':
+    'An OPENHUMAN_APPROVAL_GATE=0 override was detected but ignored: the desktop app always keeps the approval gate on.',
 
   // Run queue
   'runQueue.mode.interrupt': 'Interrupt',

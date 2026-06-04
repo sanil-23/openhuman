@@ -168,6 +168,7 @@ const messages: TranslationMap = {
   'clearData.failedLogout': 'Falha ao sair. Por favor, tente novamente.',
   'clearData.failedPersist':
     'Falha ao limpar o estado persistido do app. Por favor, tente novamente.',
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'Bem-vindo ao OpenHuman',
   'welcome.subtitle':
     'Sua super inteligência artificial pessoal. Privada, simples e extremamente poderosa.',
@@ -3783,6 +3784,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.readWriteAccess': 'leitura + escrita',
   'settings.agentAccess.actionSandboxDesc':
     'Diretório de trabalho padrão para ferramentas de shell, arquivos e git.',
+  'settings.agentAccess.actionDir.edit': 'Editar',
+  'settings.agentAccess.actionDir.save': 'Salvar',
+  'settings.agentAccess.actionDir.cancel': 'Cancelar',
+  'settings.agentAccess.actionDir.placeholder': 'Caminho absoluto, ex. /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'Definido por OPENHUMAN_ACTION_DIR. Altere a variável de ambiente para substituir.',
+  'settings.agentAccess.actionDir.saved': 'Diretório de ações atualizado.',
   'settings.agentAccess.internalState': 'Estado interno',
   'settings.agentAccess.agentBlocked': 'bloqueado para o agente',
   'settings.agentAccess.internalStateDesc':
@@ -4834,6 +4842,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Executar este fluxo de trabalho',
   'skills.run.title': 'Fluxo de trabalho',
   'workflows.installFromUrl': 'Instalar a partir de URL',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'Portão de aprovação desativado',
+  'security.approvalGateDisabled.body':
+    'OPENHUMAN_APPROVAL_GATE=0 está definido no seu ambiente. Ferramentas com efeito externo serão executadas sem pedir confirmação.',
+  'security.approvalGateOverrideIgnored.title': 'Substituição bloqueada',
+  'security.approvalGateOverrideIgnored.body':
+    'Uma substituição OPENHUMAN_APPROVAL_GATE=0 foi detetada mas ignorada: o aplicativo de desktop mantém sempre o portão de aprovação ativado.',
 
   // Run queue
   'runQueue.mode.interrupt': 'Interromper',

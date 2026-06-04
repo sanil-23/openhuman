@@ -161,6 +161,7 @@ const messages: TranslationMap = {
   'clearData.failed': 'فشل مسح البيانات وتسجيل الخروج. يرجى المحاولة مرة أخرى.',
   'clearData.failedLogout': 'فشل تسجيل الخروج. يرجى المحاولة مرة أخرى.',
   'clearData.failedPersist': 'فشل مسح حالة التطبيق المحفوظة. يرجى المحاولة مرة أخرى.',
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'مرحبًا بك في OpenHuman',
   'welcome.subtitle': 'مساعدك الذكي الشخصي. خاص وبسيط وبالغ القوة.',
   'welcome.connectPrompt': 'ضبط عنوان URL للـ RPC (متقدم)',
@@ -3645,6 +3646,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.actionSandbox': 'صندوق الإجراءات',
   'settings.agentAccess.readWriteAccess': 'قراءة + كتابة',
   'settings.agentAccess.actionSandboxDesc': 'دليل العمل الافتراضي لأدوات الطرفية والملفات وgit.',
+  'settings.agentAccess.actionDir.edit': 'تعديل',
+  'settings.agentAccess.actionDir.save': 'حفظ',
+  'settings.agentAccess.actionDir.cancel': 'إلغاء',
+  'settings.agentAccess.actionDir.placeholder': 'مسار مطلق، مثل /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'محدد بواسطة OPENHUMAN_ACTION_DIR. غيّر متغير البيئة للتجاوز.',
+  'settings.agentAccess.actionDir.saved': 'تم تحديث دليل الإجراءات.',
   'settings.agentAccess.internalState': 'الحالة الداخلية',
   'settings.agentAccess.agentBlocked': 'محظور على الوكيل',
   'settings.agentAccess.internalStateDesc':
@@ -4656,6 +4664,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'تشغيل سير العمل هذا',
   'skills.run.title': 'سير العمل',
   'workflows.installFromUrl': 'التثبيت من رابط',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'تم تعطيل بوابة الموافقة',
+  'security.approvalGateDisabled.body':
+    'تم تعيين OPENHUMAN_APPROVAL_GATE=0 في بيئتك. ستعمل الأدوات ذات التأثير الخارجي دون طلب تأكيد.',
+  'security.approvalGateOverrideIgnored.title': 'تم حظر التجاوز',
+  'security.approvalGateOverrideIgnored.body':
+    'تم اكتشاف تجاوز OPENHUMAN_APPROVAL_GATE=0 لكنه تم تجاهله: يحافظ تطبيق سطح المكتب دائمًا على تفعيل بوابة الموافقة.',
 
   // Run queue
   'runQueue.mode.interrupt': 'مقاطعة',

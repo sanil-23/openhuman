@@ -167,6 +167,7 @@ const messages: TranslationMap = {
   'clearData.failed': 'Impossibile cancellare i dati ed effettuare il logout. Riprova.',
   'clearData.failedLogout': 'Impossibile effettuare il logout. Riprova.',
   'clearData.failedPersist': "Impossibile cancellare lo stato persistente dell'app. Riprova.",
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'Benvenuto in OpenHuman',
   'welcome.subtitle':
     'La tua super intelligenza AI personale. Privata, semplice ed estremamente potente.',
@@ -3781,6 +3782,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.readWriteAccess': 'lettura + scrittura',
   'settings.agentAccess.actionSandboxDesc':
     'Directory di lavoro predefinita per gli strumenti shell, file e git.',
+  'settings.agentAccess.actionDir.edit': 'Modifica',
+  'settings.agentAccess.actionDir.save': 'Salva',
+  'settings.agentAccess.actionDir.cancel': 'Annulla',
+  'settings.agentAccess.actionDir.placeholder': 'Percorso assoluto, es. /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'Impostato da OPENHUMAN_ACTION_DIR. Modifica la variabile d’ambiente per sostituirlo.',
+  'settings.agentAccess.actionDir.saved': 'Directory delle azioni aggiornata.',
   'settings.agentAccess.internalState': 'Stato interno',
   'settings.agentAccess.agentBlocked': "bloccato per l'agente",
   'settings.agentAccess.internalStateDesc':
@@ -4838,6 +4846,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Esegui questo workflow',
   'skills.run.title': 'Workflow',
   'workflows.installFromUrl': 'Installa da URL',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'Porta di approvazione disattivata',
+  'security.approvalGateDisabled.body':
+    'OPENHUMAN_APPROVAL_GATE=0 è impostato nel tuo ambiente. Gli strumenti con effetti esterni verranno eseguiti senza chiedere conferma.',
+  'security.approvalGateOverrideIgnored.title': 'Override bloccato',
+  'security.approvalGateOverrideIgnored.body':
+    "È stato rilevato un override OPENHUMAN_APPROVAL_GATE=0 ma è stato ignorato: l'app desktop mantiene sempre attiva la porta di approvazione.",
 
   // Run queue
   'runQueue.mode.interrupt': 'Interrompi',

@@ -163,6 +163,7 @@ const messages: TranslationMap = {
   'clearData.failed': 'Gagal membersihkan data dan keluar. Silakan coba lagi.',
   'clearData.failedLogout': 'Gagal keluar. Silakan coba lagi.',
   'clearData.failedPersist': 'Gagal membersihkan status aplikasi tersimpan. Silakan coba lagi.',
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'Selamat datang di OpenHuman',
   'welcome.subtitle': 'Asisten AI Anda untuk komunitas',
   'welcome.connectPrompt': 'Konfigurasikan RPC URL (Lanjutan)',
@@ -3733,6 +3734,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.readWriteAccess': 'baca + tulis',
   'settings.agentAccess.actionSandboxDesc':
     'Direktori kerja default untuk alat shell, file, dan git.',
+  'settings.agentAccess.actionDir.edit': 'Edit',
+  'settings.agentAccess.actionDir.save': 'Simpan',
+  'settings.agentAccess.actionDir.cancel': 'Batal',
+  'settings.agentAccess.actionDir.placeholder': 'Jalur absolut, mis. /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'Disetel oleh OPENHUMAN_ACTION_DIR. Ubah variabel lingkungan untuk menggantinya.',
+  'settings.agentAccess.actionDir.saved': 'Direktori aksi diperbarui.',
   'settings.agentAccess.internalState': 'Status internal',
   'settings.agentAccess.agentBlocked': 'diblokir untuk agen',
   'settings.agentAccess.internalStateDesc':
@@ -4764,6 +4772,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Jalankan alur kerja ini',
   'skills.run.title': 'Alur kerja',
   'workflows.installFromUrl': 'Instal dari URL',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'Gerbang persetujuan dinonaktifkan',
+  'security.approvalGateDisabled.body':
+    'OPENHUMAN_APPROVAL_GATE=0 disetel di lingkungan Anda. Alat dengan efek eksternal akan berjalan tanpa meminta konfirmasi.',
+  'security.approvalGateOverrideIgnored.title': 'Override diblokir',
+  'security.approvalGateOverrideIgnored.body':
+    'Override OPENHUMAN_APPROVAL_GATE=0 terdeteksi tetapi diabaikan: aplikasi desktop selalu menjaga gerbang persetujuan tetap aktif.',
 
   // Run queue
   'runQueue.mode.interrupt': 'Interupsi',

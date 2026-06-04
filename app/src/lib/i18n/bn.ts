@@ -161,6 +161,7 @@ const messages: TranslationMap = {
   'clearData.failed': 'ডেটা মুছতে ও লগ আউট করতে ব্যর্থ হয়েছে। আবার চেষ্টা করুন।',
   'clearData.failedLogout': 'লগ আউট করতে ব্যর্থ হয়েছে। আবার চেষ্টা করুন।',
   'clearData.failedPersist': 'অ্যাপ স্টেট মুছতে ব্যর্থ হয়েছে। আবার চেষ্টা করুন।',
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'OpenHuman-এ স্বাগতম',
   'welcome.subtitle':
     'আপনার ব্যক্তিগত AI সুপার ইন্টেলিজেন্স। ব্যক্তিগত, সহজ এবং অত্যন্ত শক্তিশালী।',
@@ -3717,6 +3718,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.readWriteAccess': 'পড়া + লেখা',
   'settings.agentAccess.actionSandboxDesc':
     'শেল, ফাইল এবং git টুলের জন্য ডিফল্ট কার্যকরী ডিরেক্টরি।',
+  'settings.agentAccess.actionDir.edit': 'সম্পাদনা',
+  'settings.agentAccess.actionDir.save': 'সংরক্ষণ',
+  'settings.agentAccess.actionDir.cancel': 'বাতিল',
+  'settings.agentAccess.actionDir.placeholder': 'পরম পথ, যেমন /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'OPENHUMAN_ACTION_DIR দ্বারা নির্ধারিত। ওভাররাইড করতে এনভায়রনমেন্ট ভেরিয়েবল পরিবর্তন করুন।',
+  'settings.agentAccess.actionDir.saved': 'অ্যাকশন ডিরেক্টরি আপডেট হয়েছে।',
   'settings.agentAccess.internalState': 'অভ্যন্তরীণ অবস্থা',
   'settings.agentAccess.agentBlocked': 'এজেন্ট-অবরুদ্ধ',
   'settings.agentAccess.internalStateDesc':
@@ -4745,6 +4753,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'এই ওয়ার্কফ্লো চালান',
   'skills.run.title': 'ওয়ার্কফ্লো',
   'workflows.installFromUrl': 'URL থেকে ইনস্টল করুন',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'অনুমোদন গেট নিষ্ক্রিয়',
+  'security.approvalGateDisabled.body':
+    'আপনার পরিবেশে OPENHUMAN_APPROVAL_GATE=0 সেট করা আছে। বাহ্যিক প্রভাব সম্পন্ন টুলগুলি নিশ্চিতকরণ ছাড়াই চলবে।',
+  'security.approvalGateOverrideIgnored.title': 'ওভাররাইড অবরুদ্ধ',
+  'security.approvalGateOverrideIgnored.body':
+    'একটি OPENHUMAN_APPROVAL_GATE=0 ওভাররাইড সনাক্ত করা হয়েছিল কিন্তু উপেক্ষা করা হয়েছে: ডেস্কটপ অ্যাপ সর্বদা অনুমোদন গেট চালু রাখে।',
 
   // Run queue
   'runQueue.mode.interrupt': 'বাধা দিন',

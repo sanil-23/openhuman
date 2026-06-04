@@ -168,6 +168,7 @@ const messages: TranslationMap = {
   'clearData.failed': "Échec de l'effacement des données et de la déconnexion. Réessaie.",
   'clearData.failedLogout': 'Échec de la déconnexion. Réessaie.',
   'clearData.failedPersist': "Échec de l'effacement de l'état persisté. Réessaie.",
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'Bienvenue sur OpenHuman',
   'welcome.subtitle':
     'Ton assistant IA personnel super-intelligent. Privé, simple et extrêmement puissant.',
@@ -3801,6 +3802,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.readWriteAccess': 'lecture + écriture',
   'settings.agentAccess.actionSandboxDesc':
     'Répertoire de travail par défaut pour les outils shell, fichiers et git.',
+  'settings.agentAccess.actionDir.edit': 'Modifier',
+  'settings.agentAccess.actionDir.save': 'Enregistrer',
+  'settings.agentAccess.actionDir.cancel': 'Annuler',
+  'settings.agentAccess.actionDir.placeholder': 'Chemin absolu, par ex. /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'Défini par OPENHUMAN_ACTION_DIR. Modifiez la variable d’environnement pour le remplacer.',
+  'settings.agentAccess.actionDir.saved': 'Répertoire d’action mis à jour.',
   'settings.agentAccess.internalState': 'État interne',
   'settings.agentAccess.agentBlocked': "bloqué pour l'agent",
   'settings.agentAccess.internalStateDesc':
@@ -4863,6 +4871,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Exécuter ce workflow',
   'skills.run.title': 'Workflow',
   'workflows.installFromUrl': 'Installer depuis une URL',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': "Porte d'approbation désactivée",
+  'security.approvalGateDisabled.body':
+    "OPENHUMAN_APPROVAL_GATE=0 est défini dans votre environnement. Les outils à effet externe s'exécuteront sans demander de confirmation.",
+  'security.approvalGateOverrideIgnored.title': 'Contournement bloqué',
+  'security.approvalGateOverrideIgnored.body':
+    "Un contournement OPENHUMAN_APPROVAL_GATE=0 a été détecté mais ignoré : l'application de bureau garde toujours la porte d'approbation activée.",
 
   // Run queue
   'runQueue.mode.interrupt': 'Interrompre',

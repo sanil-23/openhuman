@@ -170,6 +170,7 @@ const messages: TranslationMap = {
   'clearData.failedLogout': 'No se pudo cerrar sesión. Inténtalo de nuevo.',
   'clearData.failedPersist':
     'No se pudo borrar el estado persistido de la app. Inténtalo de nuevo.',
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'Bienvenido a OpenHuman',
   'welcome.subtitle':
     'Tu super inteligencia artificial personal. Privada, simple y extremadamente poderosa.',
@@ -3789,6 +3790,13 @@ const messages: TranslationMap = {
   'settings.agentAccess.readWriteAccess': 'lectura + escritura',
   'settings.agentAccess.actionSandboxDesc':
     'Directorio de trabajo predeterminado para herramientas de shell, archivos y git.',
+  'settings.agentAccess.actionDir.edit': 'Editar',
+  'settings.agentAccess.actionDir.save': 'Guardar',
+  'settings.agentAccess.actionDir.cancel': 'Cancelar',
+  'settings.agentAccess.actionDir.placeholder': 'Ruta absoluta, p. ej. /Users/you/Projects',
+  'settings.agentAccess.actionDir.envLocked':
+    'Definido por OPENHUMAN_ACTION_DIR. Cambia la variable de entorno para anularlo.',
+  'settings.agentAccess.actionDir.saved': 'Directorio de acciones actualizado.',
   'settings.agentAccess.internalState': 'Estado interno',
   'settings.agentAccess.agentBlocked': 'bloqueado para el agente',
   'settings.agentAccess.internalStateDesc':
@@ -4848,6 +4856,13 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Ejecutar este flujo de trabajo',
   'skills.run.title': 'Flujo de trabajo',
   'workflows.installFromUrl': 'Instalar desde URL',
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'Puerta de aprobación desactivada',
+  'security.approvalGateDisabled.body':
+    'OPENHUMAN_APPROVAL_GATE=0 está configurado en tu entorno. Las herramientas con efectos externos se ejecutarán sin pedir confirmación.',
+  'security.approvalGateOverrideIgnored.title': 'Anulación bloqueada',
+  'security.approvalGateOverrideIgnored.body':
+    'Se detectó una anulación OPENHUMAN_APPROVAL_GATE=0, pero se ignoró: la aplicación de escritorio mantiene siempre activa la puerta de aprobación.',
 
   // Run queue
   'runQueue.mode.interrupt': 'Interrumpir',
