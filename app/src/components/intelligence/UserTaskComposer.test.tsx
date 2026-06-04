@@ -18,10 +18,11 @@ vi.mock('../../store/hooks', () => ({
 
 vi.mock('../../services/api/todosApi', () => ({
   USER_TASKS_THREAD_ID: 'user-tasks',
-  todosApi: { add: vi.fn() },
+  todosApi: { add: vi.fn(), edit: vi.fn() },
 }));
 
 const mockAdd = vi.mocked(todosApi.add);
+const mockEdit = vi.mocked(todosApi.edit);
 
 function emptyBoard(threadId: string) {
   return { threadId, cards: [], updatedAt: '' };
@@ -81,6 +82,67 @@ describe('UserTaskComposer', () => {
 
     await waitFor(() => expect(mockAdd).toHaveBeenCalledTimes(1));
     expect(mockAdd.mock.calls[0][0].threadId).toBe('t-1');
+  });
+
+  it('assigns the new card to the orchestrator when "assign to agent" is on', async () => {
+    const created = {
+      id: 'card-1',
+      title: 'Ship it',
+      status: 'todo',
+      updatedAt: '2099-01-01T00:00:00Z',
+    };
+    mockAdd.mockResolvedValueOnce({ threadId: USER_TASKS_THREAD_ID, cards: [created], updatedAt: '' });
+    mockEdit.mockResolvedValueOnce({
+      threadId: USER_TASKS_THREAD_ID,
+      cards: [{ ...created, assignedAgent: 'orchestrator' }],
+      updatedAt: '',
+    });
+    render(<UserTaskComposer onCreated={vi.fn()} onClose={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('What needs to be done?'), {
+      target: { value: 'Ship it' },
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create task' }));
+
+    await waitFor(() => expect(mockEdit).toHaveBeenCalledTimes(1));
+    // Assigned to the orchestrator + approval waived so the poller auto-runs it.
+    expect(mockEdit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: USER_TASKS_THREAD_ID,
+        id: 'card-1',
+        assignedAgent: 'orchestrator',
+        approvalMode: 'not_required',
+      })
+    );
+  });
+
+  it('does not assign an agent when the toggle is left off', async () => {
+    mockAdd.mockResolvedValueOnce(emptyBoard(USER_TASKS_THREAD_ID));
+    render(<UserTaskComposer onCreated={vi.fn()} onClose={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('What needs to be done?'), {
+      target: { value: 'Buy milk' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create task' }));
+
+    await waitFor(() => expect(mockAdd).toHaveBeenCalledTimes(1));
+    expect(mockEdit).not.toHaveBeenCalled();
+  });
+
+  it('disables assign-to-agent when the task is attached to a conversation', () => {
+    render(<UserTaskComposer onCreated={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByPlaceholderText('What needs to be done?'), {
+      target: { value: 'Book hotel' },
+    });
+    const checkbox = screen.getByRole('checkbox');
+    expect(checkbox).toBeEnabled();
+    // Attaching to a thread takes it off the personal board — the poller doesn't
+    // poll conversation threads, so auto-run is disabled there.
+    fireEvent.change(screen.getByDisplayValue('Personal (no conversation)'), {
+      target: { value: 't-1' },
+    });
+    expect(checkbox).toBeDisabled();
   });
 
   it('surfaces an error and keeps the modal open on failure', async () => {
