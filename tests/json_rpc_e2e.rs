@@ -1003,6 +1003,43 @@ async fn json_rpc_tool_registry_lists_and_gets_entries() {
 }
 
 #[tokio::test]
+async fn json_rpc_monitor_list_and_read_surface() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{rpc_addr}");
+
+    let list = post_json_rpc(&rpc_base, 3371_1, "openhuman.monitor_list", json!({})).await;
+    let list_result = assert_no_jsonrpc_error(&list, "monitor_list");
+    let monitors = list_result
+        .get("monitors")
+        .and_then(Value::as_array)
+        .expect("monitor_list should return monitor array");
+    assert!(
+        monitors.is_empty(),
+        "fresh monitor list should start empty: {list_result}"
+    );
+
+    let missing = post_json_rpc(
+        &rpc_base,
+        3371_2,
+        "openhuman.monitor_read",
+        json!({ "monitor_id": "mon_missing" }),
+    )
+    .await;
+    let error = assert_jsonrpc_error(&missing, "monitor_read missing");
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        message.contains("mon_missing"),
+        "missing monitor error should name id in error.message: {error}"
+    );
+
+    rpc_join.abort();
+}
+
+#[tokio::test]
 async fn json_rpc_agent_registry_manages_defaults_and_custom_agents() {
     let _env_lock = json_rpc_e2e_env_lock();
     let tmp = tempdir().expect("tempdir");
@@ -1043,6 +1080,41 @@ async fn json_rpc_agent_registry_manages_defaults_and_custom_agents() {
         orchestrator.get("enabled").and_then(Value::as_bool),
         Some(true)
     );
+
+    let definitions = post_json_rpc(
+        &rpc_base,
+        2862_1_1,
+        "openhuman.agent_list_definitions",
+        json!({}),
+    )
+    .await;
+    let definitions_result = assert_no_jsonrpc_error(&definitions, "agent_list_definitions");
+    let definitions = definitions_result
+        .get("definitions")
+        .and_then(Value::as_array)
+        .expect("agent_list_definitions should return definitions array");
+    let researcher = definitions
+        .iter()
+        .find(|definition| definition.get("id").and_then(Value::as_str) == Some("researcher"))
+        .expect("safe agent library should include researcher");
+    assert_eq!(
+        researcher.get("display_name").and_then(Value::as_str),
+        Some("Researcher")
+    );
+    assert!(researcher
+        .get("when_to_use")
+        .and_then(Value::as_str)
+        .is_some());
+    assert!(researcher.get("system_prompt").is_none());
+    assert!(researcher.get("tools").is_some());
+    assert!(researcher
+        .get("direct_tool_count")
+        .and_then(Value::as_u64)
+        .is_some());
+    assert!(researcher
+        .get("can_run_as_user_facing_worker")
+        .and_then(Value::as_bool)
+        .is_some());
 
     let missing = post_json_rpc(
         &rpc_base,
