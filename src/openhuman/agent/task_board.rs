@@ -87,6 +87,12 @@ pub struct TaskBoardCard {
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocker: Option<String>,
+    /// Conversation thread id of the card's live/last agent session, when one
+    /// exists. Set by the autonomous dispatcher (`task_session`) and the manual
+    /// "Work" path so the UI can offer a "View session" jump into Conversations.
+    /// `None` for a card that has never been run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_thread_id: Option<String>,
     /// Provider/source identifiers for a card ingested from a task source
     /// (`{provider, source_id, external_id, url, repo?, urgency}`). Set by
     /// the `task_sources` route; consumed downstream for prioritisation and
@@ -439,6 +445,7 @@ mod tests {
                     evidence: vec!["  cargo test  ".into()],
                     notes: Some("  note  ".into()),
                     blocker: None,
+                    session_thread_id: None,
                     source_metadata: None,
                     order: 99,
                     updated_at: String::new(),
@@ -456,6 +463,7 @@ mod tests {
                     evidence: Vec::new(),
                     notes: Some("waiting on user".into()),
                     blocker: None,
+                    session_thread_id: None,
                     source_metadata: None,
                     order: 99,
                     updated_at: String::new(),
@@ -527,6 +535,7 @@ mod tests {
                     evidence: Vec::new(),
                     notes: None,
                     blocker: None,
+                    session_thread_id: None,
                     source_metadata: None,
                     order: 99,
                     updated_at: String::new(),
@@ -544,6 +553,7 @@ mod tests {
                     evidence: Vec::new(),
                     notes: None,
                     blocker: None,
+                    session_thread_id: None,
                     source_metadata: None,
                     order: 99,
                     updated_at: String::new(),

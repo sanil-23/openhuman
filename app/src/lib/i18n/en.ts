@@ -2902,6 +2902,7 @@ const en: TranslationMap = {
   'conversations.taskKanban.saveChanges': 'Save changes',
   'conversations.taskKanban.deleteCard': 'Delete',
   'conversations.taskKanban.workTask': 'Work task',
+  'conversations.taskKanban.viewWork': 'View work',
   'conversations.taskKanban.startingTask': 'Starting…',
   'conversations.taskKanban.updateFailed': 'Could not update task; changes were not saved.',
   'conversations.taskKanban.sourcesButton': 'Sources',
