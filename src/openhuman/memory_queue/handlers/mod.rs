@@ -105,15 +105,18 @@ pub async fn handle_job(config: &Config, job: &Job) -> Result<JobOutcome> {
 /// merge its doc-root into the connection tree. See
 /// [`crate::openhuman::memory_tree::tree::seal_document_subtree`].
 async fn handle_seal_document(config: &Config, job: &Job) -> Result<JobOutcome> {
+    use crate::openhuman::memory::util::redact::redact;
     use crate::openhuman::memory_tree::tree::seal_document_subtree;
 
     let payload: crate::openhuman::memory_queue::types::SealDocumentPayload =
         serde_json::from_str(&job.payload_json).context("parse SealDocument payload")?;
 
+    // doc_id (notion:{conn}:{page}) and tree_scope (notion:{conn}) are
+    // recoverable source identifiers — redact them in all logs / error chains.
     if payload.chunk_ids.is_empty() {
         log::debug!(
             "[memory::jobs] seal_document: empty chunk set doc_id={} — nothing to seal",
-            payload.doc_id
+            redact(&payload.doc_id)
         );
         return Ok(JobOutcome::Done);
     }
@@ -130,7 +133,7 @@ async fn handle_seal_document(config: &Config, job: &Job) -> Result<JobOutcome> 
         Some(payload.chunk_ids.len() as u32),
         Some(format!(
             "doc {} v={:?} ({} chunks)",
-            &payload.doc_id[..payload.doc_id.len().min(24)],
+            redact(&payload.doc_id),
             payload.version_ms,
             payload.chunk_ids.len()
         )),
@@ -148,14 +151,15 @@ async fn handle_seal_document(config: &Config, job: &Job) -> Result<JobOutcome> 
     .with_context(|| {
         format!(
             "seal_document_subtree failed tree_scope={} doc_id={}",
-            payload.tree_scope, payload.doc_id
+            redact(&payload.tree_scope),
+            redact(&payload.doc_id)
         )
     })?;
 
     log::info!(
         "[memory::jobs] seal_document done tree_scope={} doc_id={} version_ms={:?} doc_root_id={}",
-        payload.tree_scope,
-        payload.doc_id,
+        redact(&payload.tree_scope),
+        redact(&payload.doc_id),
         payload.version_ms,
         doc_root_id
     );

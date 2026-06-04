@@ -227,6 +227,11 @@ fn walk_with_embeddings(
     // — superseded revisions simply never appear in results. Non-document
     // nodes (doc_id == None) are unaffected.
     let mut max_version_by_doc: HashMap<String, i64> = HashMap::new();
+    // Doc-roots already surfaced, to dedup at the winning version: if a
+    // `SealDocument` job partially committed then retried, it can mint a second
+    // doc-root for the SAME `(doc_id, version_ms)`. Emit only the first one per
+    // doc_id so a duplicate revision never double-surfaces.
+    let mut emitted_docs: HashSet<String> = HashSet::new();
 
     while !current_level.is_empty() && depth <= max_depth {
         log::trace!(
@@ -327,6 +332,16 @@ fn walk_with_embeddings(
                         log::debug!(
                             "[retrieval::drill_down] skipping superseded doc-root \
                              doc_id={doc_id} version_ms={v} (latest is newer)"
+                        );
+                        continue;
+                    }
+                    // Dedup duplicates at the winning version (e.g. a retried
+                    // SealDocument that minted a second doc-root for the same
+                    // (doc_id, version_ms)) — surface only the first.
+                    if !emitted_docs.insert(doc_id.to_string()) {
+                        log::debug!(
+                            "[retrieval::drill_down] skipping duplicate doc-root \
+                             doc_id={doc_id} version_ms={v} (already surfaced)"
                         );
                         continue;
                     }
