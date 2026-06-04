@@ -32,7 +32,6 @@ import {
   openhumanCronAdd,
   openhumanCronList,
   openhumanCronRemove,
-  openhumanCronRun,
   openhumanCronRuns,
   openhumanCronUpdate,
 } from '../../utils/tauriCommands/cron';
@@ -357,9 +356,35 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
       setTimeout(() => setRecentRunsRefreshNonce((n) => n + 1), ms)
     );
   }, []);
-  // Guards against a fast double-click spawning two runs before the button's
-  // disabled state (driven by async React state) has applied.
+  // Guards against a fast double-click spawning two runs. `runSubmitGuardRef`
+  // is the synchronous gate (a ref, so two clicks in the same tick both see
+  // it); `runBusy` mirrors it into render so the buttons disable. After a
+  // successful spawn we hold the guard for a short cooldown — the run-spawn
+  // RPC returns in ~5ms, so without it a second click ~0.5s later (or before
+  // the new run shows in Recent runs) would spawn a duplicate.
   const runSubmitGuardRef = useRef(false);
+  const [runBusy, setRunBusy] = useState(false);
+  const runCooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (runCooldownTimerRef.current) clearTimeout(runCooldownTimerRef.current);
+    },
+    []
+  );
+  // Release immediately (error → allow retry) or after a cooldown (success →
+  // block accidental duplicates while the new run surfaces).
+  const releaseRunGuard = useCallback((cooldownMs: number) => {
+    if (runCooldownTimerRef.current) clearTimeout(runCooldownTimerRef.current);
+    if (cooldownMs <= 0) {
+      runSubmitGuardRef.current = false;
+      setRunBusy(false);
+      return;
+    }
+    runCooldownTimerRef.current = setTimeout(() => {
+      runSubmitGuardRef.current = false;
+      setRunBusy(false);
+    }, cooldownMs);
+  }, []);
 
   // Inline log viewer: one row expanded at a time. The viewer state map
   // is keyed by run_id so we keep paginated state per run without
@@ -538,22 +563,25 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
       return;
     }
     runSubmitGuardRef.current = true;
+    setRunBusy(true);
     setRun({ status: 'submitting' });
     try {
       const inputs = buildInputsPayload(description, formValues);
       log('runSkill %s inputs=%o', description.id, inputs);
       const result = await skillsApi.runSkill(description.id, inputs);
       setRun({ status: 'started', result });
-      // Surface the new run in "Recent runs" without a manual refresh.
+      // Surface the new run in "Recent runs" without a manual refresh, and
+      // hold the guard through a short cooldown so a second click can't spawn
+      // a duplicate before the run shows up.
       scheduleRecentRunsRefresh();
+      releaseRunGuard(2500);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       log('runSkill error: %s', msg);
       setRun({ status: 'error', message: msg });
-    } finally {
-      runSubmitGuardRef.current = false;
+      releaseRunGuard(0); // allow immediate retry on failure
     }
-  }, [description, formValues, missingRequired, scheduleRecentRunsRefresh, t]);
+  }, [description, formValues, missingRequired, scheduleRecentRunsRefresh, releaseRunGuard, t]);
 
   // ── Recent runs: load on mount + on skill change + on demand ───────
   useEffect(() => {
@@ -737,16 +765,36 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
   }, []);
 
   // ── Schedule-row actions ───────────────────────────────────────────
+  // "Run" on a saved schedule: run the workflow NOW with that schedule's own
+  // snapshotted inputs, via the same direct path as Run-now. (The cron tick
+  // runs it through an agent prompt; triggering that here gave no visible run
+  // and silently errored "already running" on repeat clicks — so run directly,
+  // which spawns a real run that shows in Recent runs immediately.)
   const handleRunJobNow = useCallback(
-    async (jobId: string) => {
+    async (job: CoreCronJob) => {
+      if (runSubmitGuardRef.current) {
+        log('runJobNow: ignoring re-entrant click while a run is starting');
+        return;
+      }
+      runSubmitGuardRef.current = true;
+      setRunBusy(true);
+      setScheduleError(null);
+      const inputs = Object.fromEntries(
+        parseScheduledInputs(job.prompt).map((i) => [i.key, i.value])
+      );
       try {
-        await openhumanCronRun(jobId);
-        setRecentRunsRefreshNonce((n) => n + 1);
+        log('runJobNow: running %s directly with %o', selectedSkillId, inputs);
+        await skillsApi.runSkill(selectedSkillId, inputs);
+        scheduleRecentRunsRefresh();
+        releaseRunGuard(2500);
       } catch (err: unknown) {
-        log('runJobNow error: %s', err instanceof Error ? err.message : String(err));
+        const msg = err instanceof Error ? err.message : String(err);
+        log('runJobNow error: %s', msg);
+        setScheduleError(msg);
+        releaseRunGuard(0);
       }
     },
-    []
+    [selectedSkillId, scheduleRecentRunsRefresh, releaseRunGuard]
   );
 
   const handleRemoveJob = useCallback(
@@ -1111,7 +1159,7 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                     <button
                       type="button"
                       onClick={() => void handleRun()}
-                      disabled={run.status === 'submitting' || missingRequired.length > 0}
+                      disabled={run.status === 'submitting' || runBusy || missingRequired.length > 0}
                       className="rounded bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 text-sm font-medium text-white"
                     >
                       {run.status === 'submitting'
@@ -1277,8 +1325,9 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                               <>
                                 <button
                                   type="button"
-                                  onClick={() => void handleRunJobNow(job.id)}
-                                  className="rounded-lg border border-primary-700/30 bg-primary-600 hover:bg-primary-700 active:bg-primary-800 px-2.5 py-1 text-xs font-semibold text-white transition-colors"
+                                  disabled={runBusy}
+                                  onClick={() => void handleRunJobNow(job)}
+                                  className="rounded-lg border border-primary-700/30 bg-primary-600 hover:bg-primary-700 active:bg-primary-800 disabled:opacity-50 px-2.5 py-1 text-xs font-semibold text-white transition-colors"
                                 >
                                   {t('settings.skillsRunner.schedule.runNow')}
                                 </button>
