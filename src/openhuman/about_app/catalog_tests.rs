@@ -13,7 +13,7 @@ fn composio_direct_mode_capabilities_are_registered() {
     // capability are advertised in the catalog so downstream UI surfaces
     // (settings search, /about catalog dump) can find them.
     let direct = lookup("composio.direct_mode").expect("direct_mode entry exists");
-    assert_eq!(direct.category, CapabilityCategory::Skills);
+    assert_eq!(direct.category, CapabilityCategory::Workflows);
     // Direct mode itself is Beta (works for tool execution today).
     assert_eq!(direct.status, CapabilityStatus::Beta);
 
