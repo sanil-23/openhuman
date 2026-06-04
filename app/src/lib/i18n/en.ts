@@ -3901,6 +3901,8 @@ const en: TranslationMap = {
   'settings.skillsRunner.schedule.loadingJobs': 'Loading existing schedules…',
   'settings.skillsRunner.schedule.noJobs': 'No schedules saved for this skill yet.',
   'settings.skillsRunner.schedule.existing': 'Scheduled jobs for this skill:',
+  'settings.skillsRunner.schedule.inputsLabel': 'Inputs',
+  'settings.skillsRunner.schedule.inputsNone': 'No inputs',
   'settings.skillsRunner.schedule.runNow': 'Run',
   'settings.skillsRunner.schedule.remove': 'Remove',
   'settings.skillsRunner.scheduleEnabled': 'Enabled',

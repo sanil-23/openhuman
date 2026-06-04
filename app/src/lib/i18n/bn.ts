@@ -3511,6 +3511,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.loadingJobs': 'উপস্থিত তালিকা লোড করা হচ্ছে...',
   'settings.skillsRunner.schedule.noJobs': 'এই দক্ষতায় এখনো কোন সময় সংরক্ষিত হয়নি।',
   'settings.skillsRunner.schedule.existing': 'এই কাজের জন্য নির্ধারিত কাজ:',
+  'settings.skillsRunner.schedule.inputsLabel': 'ইনপুট',
+  'settings.skillsRunner.schedule.inputsNone': 'কোনো ইনপুট নেই',
   'settings.skillsRunner.schedule.runNow': 'সঞ্চালন ( R)',
   'settings.skillsRunner.schedule.remove': 'মুছে ফেলুন',
   'settings.skillsRunner.scheduleEnabled': 'সক্রিয়',

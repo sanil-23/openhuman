@@ -701,3 +701,40 @@ describe('WorkflowRunnerBody — Run Now flow', () => {
   });
 });
 
+// ── parseScheduledInputs ─────────────────────────────────────────────
+//
+// Each scheduled job snapshots its own inputs at creation (baked into the
+// cron's agent prompt by buildAgentPrompt); the card reads them back via
+// parseScheduledInputs to show what that schedule runs with.
+
+describe('parseScheduledInputs', () => {
+  it('recovers key/value inputs from a saved cron prompt', async () => {
+    const { parseScheduledInputs } = await import('../WorkflowRunnerBody');
+    const prompt = [
+      'Run the slack-to-notion workflow via the run_workflow tool (workflow_id: "slack-to-notion") with these inputs:',
+      '- channel: team-product',
+      '- limit: 50',
+      '',
+      'Do NOT do the work yourself — call run_workflow and report back the new run_id.',
+    ].join('\n');
+    expect(parseScheduledInputs(prompt)).toEqual([
+      { key: 'channel', value: 'team-product' },
+      { key: 'limit', value: '50' },
+    ]);
+  });
+
+  it('returns [] for a no-input prompt and for a missing prompt', async () => {
+    const { parseScheduledInputs } = await import('../WorkflowRunnerBody');
+    const noInputs = [
+      'Run the x workflow via the run_workflow tool (workflow_id: "x") with these inputs:',
+      '(no inputs)',
+      '',
+      'Do NOT do the work yourself.',
+    ].join('\n');
+    expect(parseScheduledInputs(noInputs)).toEqual([]);
+    expect(parseScheduledInputs(undefined)).toEqual([]);
+    expect(parseScheduledInputs(null)).toEqual([]);
+    expect(parseScheduledInputs('some unrelated prompt')).toEqual([]);
+  });
+});
+

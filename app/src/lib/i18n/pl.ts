@@ -3575,6 +3575,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.noJobs':
     'Nie zapisano jeszcze harmonogramów dla tej umiejętności.',
   'settings.skillsRunner.schedule.existing': 'Zaplanowane zadania dla tej umiejętności:',
+  'settings.skillsRunner.schedule.inputsLabel': 'Dane wejściowe',
+  'settings.skillsRunner.schedule.inputsNone': 'Brak danych wejściowych',
   'settings.skillsRunner.schedule.runNow': 'Uruchom',
   'settings.skillsRunner.schedule.remove': 'Usuń',
   'settings.skillsRunner.scheduleEnabled': 'Włączone',

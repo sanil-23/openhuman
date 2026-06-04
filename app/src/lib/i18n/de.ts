@@ -3603,6 +3603,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.noJobs':
     'Für diesen Skill sind noch keine Zeitpläne gespeichert.',
   'settings.skillsRunner.schedule.existing': 'Geplante Jobs für diesen Skill:',
+  'settings.skillsRunner.schedule.inputsLabel': 'Eingaben',
+  'settings.skillsRunner.schedule.inputsNone': 'Keine Eingaben',
   'settings.skillsRunner.schedule.runNow': 'Laufen',
   'settings.skillsRunner.schedule.remove': 'Entlassen',
   'settings.skillsRunner.scheduleEnabled': 'Aktiviert',

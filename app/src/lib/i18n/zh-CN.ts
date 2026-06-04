@@ -3345,6 +3345,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.loadingJobs': '正在加载现有计划…',
   'settings.skillsRunner.schedule.noJobs': '此技能尚未保存计划。',
   'settings.skillsRunner.schedule.existing': '此技能的计划任务：',
+  'settings.skillsRunner.schedule.inputsLabel': '输入',
+  'settings.skillsRunner.schedule.inputsNone': '无输入',
   'settings.skillsRunner.schedule.runNow': '运行',
   'settings.skillsRunner.schedule.remove': '移除',
   'settings.skillsRunner.scheduleEnabled': '已启用',

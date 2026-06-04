@@ -3520,6 +3520,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.loadingJobs': 'मौजूदा अनुसूची लोड हो रहा है...',
   'settings.skillsRunner.schedule.noJobs': 'इस कौशल के लिए अभी तक कोई शेड्यूल नहीं बचा है।',
   'settings.skillsRunner.schedule.existing': 'इस कौशल के लिए अनुसूचित नौकरियां:',
+  'settings.skillsRunner.schedule.inputsLabel': 'इनपुट',
+  'settings.skillsRunner.schedule.inputsNone': 'कोई इनपुट नहीं',
   'settings.skillsRunner.schedule.runNow': 'रन',
   'settings.skillsRunner.schedule.remove': 'निकालें',
   'settings.skillsRunner.scheduleEnabled': 'सक्षम',

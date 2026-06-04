@@ -3540,6 +3540,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.loadingJobs': 'Загрузка существующих расписаний…',
   'settings.skillsRunner.schedule.noJobs': 'Для этого навыка пока не сохранено расписание.',
   'settings.skillsRunner.schedule.existing': 'Запланированные задания для этого навыка:',
+  'settings.skillsRunner.schedule.inputsLabel': 'Входные данные',
+  'settings.skillsRunner.schedule.inputsNone': 'Нет входных данных',
   'settings.skillsRunner.schedule.runNow': 'Бегать',
   'settings.skillsRunner.schedule.remove': 'Удалять',
   'settings.skillsRunner.scheduleEnabled': 'Включено',

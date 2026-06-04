@@ -3591,6 +3591,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.noJobs':
     "Aucun emploi du temps n'a encore été enregistré pour cette compétence.",
   'settings.skillsRunner.schedule.existing': 'Tâches planifiées pour cette compétence:',
+  'settings.skillsRunner.schedule.inputsLabel': 'Entrées',
+  'settings.skillsRunner.schedule.inputsNone': 'Aucune entrée',
   'settings.skillsRunner.schedule.runNow': 'Courir',
   'settings.skillsRunner.schedule.remove': 'Supprimer',
   'settings.skillsRunner.scheduleEnabled': 'Activé',

@@ -3569,6 +3569,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.loadingJobs': 'Caricamento degli orari esistenti…',
   'settings.skillsRunner.schedule.noJobs': 'Nessun programma salvato per questa competenza ancora.',
   'settings.skillsRunner.schedule.existing': 'Attività programmate per questa competenza:',
+  'settings.skillsRunner.schedule.inputsLabel': 'Input',
+  'settings.skillsRunner.schedule.inputsNone': 'Nessun input',
   'settings.skillsRunner.schedule.runNow': 'Corri',
   'settings.skillsRunner.schedule.remove': 'Rimuovere',
   'settings.skillsRunner.scheduleEnabled': 'Abilitato',

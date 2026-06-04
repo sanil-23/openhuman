@@ -3572,6 +3572,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.loadingJobs': 'Carregando horários existentes…',
   'settings.skillsRunner.schedule.noJobs': 'Nenhum cronograma salvo para esta habilidade ainda.',
   'settings.skillsRunner.schedule.existing': 'Trabalhos agendados para esta habilidade:',
+  'settings.skillsRunner.schedule.inputsLabel': 'Entradas',
+  'settings.skillsRunner.schedule.inputsNone': 'Sem entradas',
   'settings.skillsRunner.schedule.runNow': 'Correr',
   'settings.skillsRunner.schedule.remove': 'Remover',
   'settings.skillsRunner.scheduleEnabled': 'Ativado',

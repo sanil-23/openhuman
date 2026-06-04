@@ -3480,6 +3480,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.loadingJobs': '기존 일정 불러오는 중…',
   'settings.skillsRunner.schedule.noJobs': '이 스킬에 저장된 일정이 아직 없습니다.',
   'settings.skillsRunner.schedule.existing': '이 스킬의 예약된 작업:',
+  'settings.skillsRunner.schedule.inputsLabel': '입력',
+  'settings.skillsRunner.schedule.inputsNone': '입력 없음',
   'settings.skillsRunner.schedule.runNow': '실행',
   'settings.skillsRunner.schedule.remove': '제거',
   'settings.skillsRunner.scheduleEnabled': '활성화됨',

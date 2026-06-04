@@ -3578,6 +3578,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.loadingJobs': 'Cargando horarios existentes…',
   'settings.skillsRunner.schedule.noJobs': 'Aún no hay horarios guardados para esta habilidad.',
   'settings.skillsRunner.schedule.existing': 'Trabajos programados para esta habilidad:',
+  'settings.skillsRunner.schedule.inputsLabel': 'Entradas',
+  'settings.skillsRunner.schedule.inputsNone': 'Sin entradas',
   'settings.skillsRunner.schedule.runNow': 'Correr',
   'settings.skillsRunner.schedule.remove': 'Eliminar',
   'settings.skillsRunner.scheduleEnabled': 'Habilitado',

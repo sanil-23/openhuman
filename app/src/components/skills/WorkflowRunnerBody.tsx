@@ -136,6 +136,31 @@ function buildAgentPrompt(workflowId: string, inputs: Record<string, unknown>): 
   ].join('\n');
 }
 
+/**
+ * Recover the per-schedule inputs from a saved cron job's agent prompt — the
+ * `- key: value` block emitted by {@link buildAgentPrompt}. Each scheduled job
+ * carries its own inputs, snapshotted at creation time; this reads them back
+ * so the job's card can show exactly what that schedule runs with. Returns an
+ * empty list when the job has no inputs (or the prompt isn't recognised).
+ */
+export function parseScheduledInputs(
+  prompt?: string | null
+): Array<{ key: string; value: string }> {
+  if (!prompt) return [];
+  const out: Array<{ key: string; value: string }> = [];
+  let inBlock = false;
+  for (const line of prompt.split('\n')) {
+    if (!inBlock) {
+      if (line.includes('with these inputs:')) inBlock = true;
+      continue;
+    }
+    const m = line.match(/^-\s+([^:]+):\s*(.*)$/);
+    if (!m) break; // first non-input line ("", "(no inputs)", trailing text) ends the block
+    out.push({ key: m[1].trim(), value: m[2].trim() });
+  }
+  return out;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 
 /**
@@ -1235,6 +1260,9 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                       {sortedScheduledJobs.map((job) => {
                         const hist = historyState[job.id];
                         const isActive = job.id === activeJobId;
+                        // Each job's own inputs, recovered from the prompt it
+                        // was created with.
+                        const jobInputs = parseScheduledInputs(job.prompt);
                         return (
                           <ScheduledCronCard
                             key={job.id}
@@ -1262,6 +1290,33 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                               </>
                             }
                           >
+                            {/* The inputs this schedule was created with —
+                                each job keeps its own snapshot, so the card
+                                shows exactly what this schedule runs with. */}
+                            <div
+                              data-testid={`scheduled-job-${job.id}-inputs`}
+                              className="px-4 pt-2"
+                            >
+                              {jobInputs.length > 0 ? (
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <span className="text-[10px] font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">
+                                    {t('settings.skillsRunner.schedule.inputsLabel')}
+                                  </span>
+                                  {jobInputs.map((inp) => (
+                                    <span
+                                      key={inp.key}
+                                      className="rounded bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 font-mono text-[10px] text-stone-700 dark:text-stone-300"
+                                    >
+                                      {inp.key}: {inp.value}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-[10px] italic text-stone-400 dark:text-stone-500">
+                                  {t('settings.skillsRunner.schedule.inputsNone')}
+                                </span>
+                              )}
+                            </div>
                             {/* Per-job run history (lazy on first expand).
                                 Ports DevWorkflowPanel:591-645's pattern:
                                 a disclosure toggle reveals up to 5 runs

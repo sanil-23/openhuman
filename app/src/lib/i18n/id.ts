@@ -3525,6 +3525,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.noJobs':
     'Tidak ada jadwal yang disimpan untuk keterampilan ini belum.',
   'settings.skillsRunner.schedule.existing': 'Tugas yang dijadwalkan untuk keterampilan ini:',
+  'settings.skillsRunner.schedule.inputsLabel': 'Masukan',
+  'settings.skillsRunner.schedule.inputsNone': 'Tidak ada masukan',
   'settings.skillsRunner.schedule.runNow': 'Lari',
   'settings.skillsRunner.schedule.remove': 'Hapus',
   'settings.skillsRunner.scheduleEnabled': 'Diaktifkan',

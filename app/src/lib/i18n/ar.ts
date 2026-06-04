@@ -3446,6 +3446,8 @@ const messages: TranslationMap = {
   'settings.skillsRunner.schedule.loadingJobs': 'وضع الجداول الحالية...',
   'settings.skillsRunner.schedule.noJobs': 'لم يتم توفير جداول لهذه المهارة بعد',
   'settings.skillsRunner.schedule.existing': 'الوظائف المقررة لهذه المهارة:',
+  'settings.skillsRunner.schedule.inputsLabel': 'المدخلات',
+  'settings.skillsRunner.schedule.inputsNone': 'لا مدخلات',
   'settings.skillsRunner.schedule.runNow': 'اركض',
   'settings.skillsRunner.schedule.remove': 'إزالة الألغام',
   'settings.skillsRunner.scheduleEnabled': 'Enabled',
