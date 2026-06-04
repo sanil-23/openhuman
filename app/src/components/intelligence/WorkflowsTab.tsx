@@ -18,13 +18,13 @@
  */
 import debug from 'debug';
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import { useT } from '../../lib/i18n/I18nContext';
 import { skillsApi, type SkillSummary } from '../../services/api/skillsApi';
 import type { ToastNotification } from '../../types/intelligence';
 import CreateSkillModal from '../skills/CreateSkillModal';
 import UnifiedSkillCard from '../skills/SkillCard';
-import SkillDetailDrawer from '../skills/SkillDetailDrawer';
 import { BUILT_IN_SKILL_ICONS } from '../skills/skillIcons';
 import UninstallSkillConfirmDialog from '../skills/UninstallSkillConfirmDialog';
 import { ToastContainer } from './Toast';
@@ -33,11 +33,10 @@ const log = debug('intelligence:workflows');
 
 export default function WorkflowsTab() {
   const { t } = useT();
+  const navigate = useNavigate();
   const [workflows, setWorkflows] = useState<SkillSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<SkillSummary | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [editingWorkflow, setEditingWorkflow] = useState<SkillSummary | null>(null);
   const [uninstallCandidate, setUninstallCandidate] = useState<SkillSummary | null>(null);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
@@ -156,8 +155,8 @@ export default function WorkflowsTab() {
                   testId={`workflow-card-${wf.id}`}
                   ctaTestId={`workflow-open-${wf.id}`}
                   onCtaClick={() => {
-                    log('open drawer workflowId=%s', wf.id);
-                    setSelected(wf);
+                    log('open runner workflowId=%s', wf.id);
+                    navigate(`/workflows/run?workflow=${encodeURIComponent(wf.id)}&lock=1`);
                   }}
                   secondaryActions={
                     canUninstall
@@ -191,39 +190,18 @@ export default function WorkflowsTab() {
         </div>
       ) : null}
 
-      {/* Detail drawer (with Run workflow CTA) */}
-      {selected && (
-        <SkillDetailDrawer
-          skill={selected}
-          onClose={() => setSelected(null)}
-          onEdit={wf => {
-            setSelected(null);
-            setEditingWorkflow(wf);
-            setCreateModalOpen(true);
-          }}
-        />
-      )}
-
-      {/* Create / edit modal */}
+      {/* Create modal (New workflow). Editing a workflow now happens on the
+          runner page it opens into. */}
       {createModalOpen && (
         <CreateSkillModal
-          editing={editingWorkflow ?? undefined}
-          onClose={() => {
-            setCreateModalOpen(false);
-            setEditingWorkflow(null);
-          }}
+          onClose={() => setCreateModalOpen(false)}
           onCreated={wf => {
-            log('saved workflowId=%s edit=%s', wf.id, !!editingWorkflow);
+            log('created workflowId=%s', wf.id);
             setCreateModalOpen(false);
-            setEditingWorkflow(null);
-            // Upsert: replace an existing row on edit, append on create.
-            setWorkflows(prev =>
-              prev.some(s => s.id === wf.id)
-                ? prev.map(s => (s.id === wf.id ? wf : s))
-                : [...prev, wf]
-            );
-            setSelected(wf);
+            setWorkflows(prev => (prev.some(s => s.id === wf.id) ? prev : [...prev, wf]));
             void refresh();
+            // Land the user on the new workflow's runner page.
+            navigate(`/workflows/run?workflow=${encodeURIComponent(wf.id)}&lock=1`);
           }}
         />
       )}
@@ -240,7 +218,6 @@ export default function WorkflowsTab() {
               title: t('workflows.delete'),
               message: `"${result.name}" ${t('common.success')}`,
             });
-            setSelected(prev => (prev && prev.id === result.name ? null : prev));
             setWorkflows(prev => prev.filter(s => s.id !== result.name));
             void refresh();
           }}

@@ -6,7 +6,7 @@ import WorkflowsTab from '../WorkflowsTab';
 
 vi.mock('../../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (k: string) => k }) }));
 
-// SkillDetailDrawer (rendered when a workflow is opened) uses useNavigate.
+// WorkflowsTab navigates to the runner page on card click.
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
 
 const seeded = (overrides: Partial<SkillSummary>): SkillSummary => ({
@@ -35,7 +35,7 @@ vi.mock('../../../services/api/skillsApi', async () => {
 });
 
 describe('WorkflowsTab', () => {
-  it('lists workflows from skillsApi with create + install entry points', async () => {
+  it('lists workflows from skillsApi with the create entry point', async () => {
     listSkills.mockResolvedValue([
       seeded({ id: 'user-wf', name: 'User WF', scope: 'user' }),
       seeded({ id: 'project-wf', name: 'Project WF', scope: 'project' }),
@@ -47,9 +47,10 @@ describe('WorkflowsTab', () => {
     expect(screen.getByTestId('workflows-list')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-card-user-wf')).toBeInTheDocument();
 
-    // Create + install entry points live here now (not on Connections).
+    // Create entry point lives here now (not on Connections). The
+    // install-from-URL button was retired; authoring is create-only.
     expect(screen.getByTestId('workflows-create-btn')).toBeInTheDocument();
-    expect(screen.getByTestId('workflows-install-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('workflows-install-btn')).not.toBeInTheDocument();
   });
 
   it('renders the empty state when no workflows are installed', async () => {

@@ -50,10 +50,10 @@ describe('CreateSkillModal', () => {
 
   it('renders title and required fields', () => {
     render(<CreateSkillModal onClose={vi.fn()} onCreated={vi.fn()} />);
-    expect(screen.getByText('New skill')).toBeInTheDocument();
+    expect(screen.getByText('New Workflow')).toBeInTheDocument();
     expect(screen.getByLabelText(/Name/)).toBeInTheDocument();
     expect(screen.getByLabelText(/Description/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Create skill/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Create workflow/ })).toBeInTheDocument();
   });
 
   it('updates slug preview as the user types the name', () => {
@@ -65,7 +65,7 @@ describe('CreateSkillModal', () => {
 
   it('disables submit when name or description is empty', () => {
     render(<CreateSkillModal onClose={vi.fn()} onCreated={vi.fn()} />);
-    const submit = screen.getByRole('button', { name: /Create skill/ }) as HTMLButtonElement;
+    const submit = screen.getByRole('button', { name: /Create workflow/ }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
 
     fireEvent.change(screen.getByLabelText(/Name/), { target: { value: 'demo' } });
@@ -104,7 +104,7 @@ describe('CreateSkillModal', () => {
     fireEvent.change(screen.getByLabelText(/Name/), { target: { value: 'My Skill' } });
     fireEvent.change(screen.getByLabelText(/Description/), { target: { value: 'does stuff' } });
 
-    const submit = screen.getByRole('button', { name: /Create skill/ });
+    const submit = screen.getByRole('button', { name: /Create workflow/ });
     await act(async () => {
       fireEvent.click(submit);
     });
@@ -127,7 +127,7 @@ describe('CreateSkillModal', () => {
     fireEvent.change(screen.getByLabelText(/Name/), { target: { value: 'dup' } });
     fireEvent.change(screen.getByLabelText(/Description/), { target: { value: 'x' } });
 
-    const submit = screen.getByRole('button', { name: /Create skill/ }) as HTMLButtonElement;
+    const submit = screen.getByRole('button', { name: /Create workflow/ }) as HTMLButtonElement;
     await act(async () => {
       fireEvent.click(submit);
     });

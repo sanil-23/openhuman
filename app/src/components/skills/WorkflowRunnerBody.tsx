@@ -36,6 +36,7 @@ import {
   openhumanCronRuns,
   openhumanCronUpdate,
 } from '../../utils/tauriCommands/cron';
+import CreateSkillModal from './CreateSkillModal';
 import BranchPicker from './inputs/BranchPicker';
 import RepoPicker from './inputs/RepoPicker';
 import { isGithubGateFailure, parseSkillRunError } from './preflightGate';
@@ -219,6 +220,8 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillsError, setSkillsError] = useState<string | null>(null);
+  // Edit-this-workflow modal (only meaningful when locked to a workflow).
+  const [editOpen, setEditOpen] = useState(false);
 
   // Active skill + its full description (inputs declared).
   // Pre-seeded from the URL `?workflow=<id>` query so any surface that
@@ -228,11 +231,14 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
   const [searchParams, setSearchParams] = useSearchParams();
   const initialSkillId = searchParams.get('workflow') ?? '';
   const [selectedSkillId, setSelectedSkillId] = useState(initialSkillId);
-  // Locked mode: opened from a specific workflow's "Schedule" action
-  // (`?workflow=<id>&focus=schedule`). The workflow is fixed to the one it was
-  // opened from — the picker is replaced with a read-only label so the user
-  // just schedules *that* workflow.
-  const locked = searchParams.get('focus') === 'schedule' && !!searchParams.get('workflow');
+  // Locked mode: opened as a specific workflow's view/run page
+  // (`?workflow=<id>&lock=1`) or its Schedule action (`&focus=schedule`). The
+  // workflow is fixed — the picker is replaced with a read-only label so this
+  // page is that one workflow's run/edit/schedule surface.
+  const locked =
+    !!searchParams.get('workflow') &&
+    (searchParams.get('lock') === '1' || searchParams.get('focus') === 'schedule');
+  const selectedWorkflow = skills.find(s => s.id === selectedSkillId);
   const [description, setDescription] = useState<SkillDescription | null>(null);
   const [descLoading, setDescLoading] = useState(false);
   const [descError, setDescError] = useState<string | null>(null);
@@ -458,6 +464,18 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
   }, [description, formValues]);
 
   // ── Run handler ────────────────────────────────────────────────────
+  // Stop a RUNNING recent-run row via workflows_cancel, then refresh the list
+  // so it flips to CANCELLED.
+  const handleStopRun = useCallback(async (runId: string) => {
+    log('stop run runId=%s', runId);
+    try {
+      await skillsApi.cancelRun(runId);
+    } catch (err) {
+      log('cancelRun error: %s', err instanceof Error ? err.message : String(err));
+    }
+    setRecentRunsRefreshNonce((n) => n + 1);
+  }, []);
+
   const handleRun = useCallback(async () => {
     if (!description) return;
     if (missingRequired.length > 0) {
@@ -654,7 +672,7 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
     // this effect on every viewer update would tear down and re-create the
     // timer on every poll. Equally, depending on `viewer` would cause
     // an infinite re-render loop because setViewer happens inside.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [expandedRunId]);
 
   const toggleExpand = useCallback((runId: string) => {
@@ -909,10 +927,23 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
             {t('settings.skillsRunner.skill')}
           </label>
           {locked ? (
-            <div
-              data-testid="skills-runner-skill-locked"
-              className="w-full rounded border border-stone-300 dark:border-stone-600 bg-stone-50 dark:bg-stone-800/60 px-3 py-2 text-sm font-medium text-stone-900 dark:text-stone-100">
-              {skills.find((s) => s.id === selectedSkillId)?.name || selectedSkillId}
+            <div className="flex items-center gap-2">
+              <div
+                data-testid="skills-runner-skill-locked"
+                className="flex-1 rounded border border-stone-300 dark:border-stone-600 bg-stone-50 dark:bg-stone-800/60 px-3 py-2 text-sm font-medium text-stone-900 dark:text-stone-100">
+                {selectedWorkflow?.name || selectedSkillId}
+              </div>
+              {selectedWorkflow &&
+                selectedWorkflow.scope === 'user' &&
+                !selectedWorkflow.legacy && (
+                  <button
+                    type="button"
+                    data-testid="skills-runner-edit"
+                    onClick={() => setEditOpen(true)}
+                    className="inline-flex items-center gap-1 rounded border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 px-3 py-2 text-sm font-medium text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-700">
+                    <span aria-hidden="true">✎</span> {t('common.edit')}
+                  </button>
+                )}
             </div>
           ) : (
             <select
@@ -1363,6 +1394,18 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                       </div>
                     </button>
 
+                    {r.status === 'RUNNING' && (
+                      <div className="px-3 pb-2 pl-8">
+                        <button
+                          type="button"
+                          data-testid={`run-stop-${r.run_id}`}
+                          onClick={() => void handleStopRun(r.run_id)}
+                          className="inline-flex items-center gap-1 rounded border border-coral-300 bg-coral-50 px-2 py-0.5 text-[11px] font-medium text-coral-700 hover:bg-coral-100">
+                          <span aria-hidden="true">◼</span> {t('autocomplete.stop')}
+                        </button>
+                      </div>
+                    )}
+
                     {expanded && (
                       <div className="border-t border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-950">
                         {/* Live indicator while tailing */}
@@ -1394,6 +1437,26 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
             </div>
           )}
         </div>
+
+      {/* Edit-this-workflow modal (locked view only). Refreshes metadata +
+          inputs on save. */}
+      {editOpen && selectedWorkflow && (
+        <CreateSkillModal
+          editing={selectedWorkflow}
+          onClose={() => setEditOpen(false)}
+          onCreated={() => {
+            setEditOpen(false);
+            void skillsApi
+              .listSkills()
+              .then((list) => setSkills(list.filter((s) => s.id !== 'codegraph-smoke')))
+              .catch(() => {});
+            void skillsApi
+              .describeSkill(selectedSkillId)
+              .then(setDescription)
+              .catch(() => {});
+          }}
+        />
+      )}
     </div>
   );
 };
