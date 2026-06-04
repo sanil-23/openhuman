@@ -23,7 +23,6 @@ import { useT } from '../../lib/i18n/I18nContext';
 import { skillsApi, type SkillSummary } from '../../services/api/skillsApi';
 import type { ToastNotification } from '../../types/intelligence';
 import CreateSkillModal from '../skills/CreateSkillModal';
-import InstallSkillDialog from '../skills/InstallSkillDialog';
 import UnifiedSkillCard from '../skills/SkillCard';
 import SkillDetailDrawer from '../skills/SkillDetailDrawer';
 import { BUILT_IN_SKILL_ICONS } from '../skills/skillIcons';
@@ -38,7 +37,6 @@ export default function WorkflowsTab() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<SkillSummary | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [installDialogOpen, setInstallDialogOpen] = useState(false);
   const [uninstallCandidate, setUninstallCandidate] = useState<SkillSummary | null>(null);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
@@ -86,13 +84,6 @@ export default function WorkflowsTab() {
           {t('workflows.subtitle')}
         </p>
         <div className="flex flex-shrink-0 items-center gap-2">
-          <button
-            type="button"
-            data-testid="workflows-install-btn"
-            onClick={() => setInstallDialogOpen(true)}
-            className="rounded-lg border border-stone-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-xs font-medium text-stone-700 dark:text-neutral-200 shadow-soft transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1">
-            {t('workflows.installFromUrl')}
-          </button>
           <button
             type="button"
             data-testid="workflows-create-btn"
@@ -212,24 +203,6 @@ export default function WorkflowsTab() {
             setWorkflows(prev => (prev.some(s => s.id === wf.id) ? prev : [...prev, wf]));
             setSelected(wf);
             void refresh();
-          }}
-        />
-      )}
-
-      {/* Install from URL */}
-      {installDialogOpen && (
-        <InstallSkillDialog
-          onClose={() => setInstallDialogOpen(false)}
-          onInstalled={result => {
-            log('installed newWorkflows=%d', result.newSkills.length);
-            void (async () => {
-              const list = await refresh();
-              const firstNewId = result.newSkills[0];
-              if (firstNewId) {
-                const match = list.find(s => s.id === firstNewId);
-                if (match) setSelected(match);
-              }
-            })();
           }}
         />
       )}
