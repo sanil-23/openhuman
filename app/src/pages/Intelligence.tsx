@@ -49,7 +49,7 @@ export default function Intelligence() {
   // `replace` so switching tabs doesn't stack history entries.
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
-  const activeTab: IntelligenceTab = isVisibleTab(tabParam) ? tabParam : 'memory';
+  const activeTab: IntelligenceTab = isVisibleTab(tabParam) ? tabParam : 'tasks';
   const setActiveTab = useCallback(
     (tab: IntelligenceTab) => {
       setSearchParams(
