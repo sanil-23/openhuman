@@ -103,6 +103,14 @@ export interface CreateSkillFormProps {
   onStateChange?: (state: { valid: boolean; submitting: boolean }) => void;
   /** If true, autofocus the first field on mount (modal default). */
   autoFocus?: boolean;
+  /**
+   * When set, the form is in EDIT mode for this workflow: fields are
+   * pre-filled (name read-only — the slug is identity), and submit calls
+   * `workflows_update` instead of `workflows_create`. Tags / author /
+   * allowed-tools (not exposed as editable fields) are carried through so
+   * they're preserved on save.
+   */
+  editing?: SkillSummary;
 }
 
 /**
@@ -130,8 +138,12 @@ export function previewSlug(name: string): string {
 }
 
 const CreateWorkflowForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProps>(
-  ({ formId, onCreated, onStateChange, autoFocus = false }, ref) => {
+  ({ formId, onCreated, onStateChange, autoFocus = false, editing }, ref) => {
     const { t } = useT();
+    const isEdit = !!editing;
+    // Fields the form doesn't expose but must preserve across an edit
+    // (otherwise workflows_update would regenerate frontmatter without them).
+    const preservedRef = useRef<{ tags?: string[]; author?: string; allowedTools?: string[] }>({});
     const [name, setName] = useState('');
     const [description, setDescription] = useState('');
     // The workflow half of the unified form: *when* an agent should reach for
@@ -190,6 +202,45 @@ const CreateWorkflowForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProp
       };
     }, [autoFocus]);
 
+    // Edit mode: pre-fill from the existing workflow. Name + description come
+    // from the summary; when_to_use + declared inputs come from describe.
+    // tags / author / allowed-tools are stashed for pass-through on save.
+    useEffect(() => {
+      if (!editing) return;
+      setName(editing.name);
+      setDescription(editing.description);
+      preservedRef.current = {
+        tags: editing.tags,
+        author: editing.author ?? undefined,
+        allowedTools: editing.tools,
+      };
+      let cancelled = false;
+      void (async () => {
+        try {
+          const desc = await skillsApi.describeSkill(editing.id);
+          if (cancelled) return;
+          if (desc.when_to_use) setWhenToUse(desc.when_to_use);
+          setInputs(
+            desc.inputs.map((i) => {
+              nextLocalId += 1;
+              return {
+                localId: `row-${nextLocalId}`,
+                name: i.name,
+                description: i.description ?? '',
+                required: i.required,
+                type: (i.type as InputRow['type']) ?? 'string',
+              };
+            })
+          );
+        } catch {
+          // Pre-fill is best-effort; the user can still edit the visible fields.
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [editing]);
+
     const submit = useCallback(async () => {
       if (!formValid) return;
       const payload: CreateSkillInput = {
@@ -199,6 +250,18 @@ const CreateWorkflowForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProp
       };
       if (whenToUse.trim()) {
         payload.whenToUse = whenToUse.trim();
+      }
+      if (editing) {
+        // Preserve fields the form doesn't expose as editable.
+        if (preservedRef.current.tags && preservedRef.current.tags.length > 0) {
+          payload.tags = preservedRef.current.tags;
+        }
+        if (preservedRef.current.author) {
+          payload.author = preservedRef.current.author;
+        }
+        if (preservedRef.current.allowedTools && preservedRef.current.allowedTools.length > 0) {
+          payload.allowedTools = preservedRef.current.allowedTools;
+        }
       }
       if (inputs.length > 0) {
         payload.inputs = inputs.map<CreateSkillInputDef>((r) => {
@@ -218,9 +281,11 @@ const CreateWorkflowForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProp
       setSubmitting(true);
       setError(null);
       try {
-        const created = await skillsApi.createSkill(payload);
-        log('submit-ok id=%s', created.id);
-        onCreated(created);
+        const saved = editing
+          ? await skillsApi.updateSkill(payload)
+          : await skillsApi.createSkill(payload);
+        log('submit-ok id=%s edit=%s', saved.id, isEdit);
+        onCreated(saved);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log('submit-err %s', message);
@@ -228,7 +293,7 @@ const CreateWorkflowForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProp
       } finally {
         setSubmitting(false);
       }
-    }, [description, formValid, inputs, name, whenToUse, onCreated]);
+    }, [description, formValid, inputs, name, whenToUse, onCreated, editing, isEdit]);
 
     useImperativeHandle(
       ref,
@@ -263,8 +328,13 @@ const CreateWorkflowForm = forwardRef<CreateSkillFormHandle, CreateSkillFormProp
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
+            readOnly={isEdit}
             maxLength={128}
-            className="mt-1 w-full rounded-lg border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-stone-900 dark:text-neutral-100 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+            className={`mt-1 w-full rounded-lg border border-stone-200 dark:border-neutral-800 px-3 py-2 text-sm text-stone-900 dark:text-neutral-100 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/30 ${
+              isEdit
+                ? 'cursor-not-allowed bg-stone-50 dark:bg-neutral-800'
+                : 'bg-white dark:bg-neutral-900'
+            }`}
             placeholder={t('skills.create.namePlaceholder')}
           />
           <p className="mt-1 text-[11px] text-stone-500 dark:text-neutral-400">

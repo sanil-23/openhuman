@@ -20,7 +20,7 @@ import { useNavigate } from 'react-router-dom';
 import debug from 'debug';
 
 import { useT } from '../../lib/i18n/I18nContext';
-import type { SkillSummary } from '../../services/api/skillsApi';
+import { skillsApi, type SkillSummary } from '../../services/api/skillsApi';
 import SkillResourcePreview from './SkillResourcePreview';
 import SkillResourceTree from './SkillResourceTree';
 
@@ -29,6 +29,8 @@ const log = debug('skills:drawer');
 interface Props {
   skill: SkillSummary;
   onClose: () => void;
+  /** Open the edit form for this workflow (only for editable user-scope). */
+  onEdit?: (skill: SkillSummary) => void;
 }
 
 function scopePillCls(scope: SkillSummary['scope'], legacy: boolean): string {
@@ -45,19 +47,29 @@ function scopePillCls(scope: SkillSummary['scope'], legacy: boolean): string {
   }
 }
 
-export default function SkillDetailDrawer({ skill, onClose }: Props) {
+export default function SkillDetailDrawer({ skill, onClose, onEdit }: Props) {
   const { t } = useT();
   const navigate = useNavigate();
   const [selectedResource, setSelectedResource] = useState<string | null>(null);
+  // Run-now feedback: idle → running → started/error (transient).
+  const [runState, setRunState] = useState<'idle' | 'running' | 'started' | 'error'>('idle');
+  const isEditable = skill.scope === 'user' && !skill.legacy;
 
-  // "Run workflow" → the focused runner page, pre-selected to this workflow
-  // via `?workflow=<id>`. Closing the drawer first keeps the back stack clean.
-  const handleRun = useCallback(() => {
-    log('run-workflow skillId=%s', skill.id);
-    onClose();
-    navigate(`/workflows/run?workflow=${encodeURIComponent(skill.id)}`);
-  }, [navigate, onClose, skill.id]);
-  // "Schedule" → same focused runner page, but deep-linked to its recurring-
+  const handleRunNow = useCallback(() => {
+    setRunState('running');
+    log('run-now skillId=%s', skill.id);
+    void (async () => {
+      try {
+        await skillsApi.runSkill(skill.id, {});
+        setRunState('started');
+      } catch (err) {
+        log('run-now error: %s', err instanceof Error ? err.message : String(err));
+        setRunState('error');
+      }
+    })();
+  }, [skill.id]);
+
+  // "Schedule" → the focused runner page, deep-linked to its recurring-
   // schedule section (`&focus=schedule`) so cron scheduling is discoverable
   // per workflow (it used to live on the now-removed Runners tab).
   const handleSchedule = useCallback(() => {
@@ -158,11 +170,22 @@ export default function SkillDetailDrawer({ skill, onClose }: Props) {
             <button
               type="button"
               data-testid="skill-detail-run"
-              onClick={handleRun}
+              onClick={handleRunNow}
+              disabled={runState === 'running'}
               aria-label={t('skills.detail.runAriaLabel')}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary-500 px-3 py-1.5 text-xs font-semibold text-white shadow-soft transition-colors hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1">
-              <span aria-hidden="true">▷</span> {t('skills.detail.run')}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary-500 px-3 py-1.5 text-xs font-semibold text-white shadow-soft transition-colors hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1 disabled:opacity-50">
+              <span aria-hidden="true">▷</span>{' '}
+              {runState === 'running' ? `${t('skills.detail.run')}…` : t('skills.detail.run')}
             </button>
+            {isEditable && onEdit && (
+              <button
+                type="button"
+                data-testid="skill-detail-edit"
+                onClick={() => onEdit(skill)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-1.5 text-xs font-medium text-stone-700 dark:text-neutral-200 shadow-soft transition-colors hover:bg-stone-50 dark:hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1">
+                <span aria-hidden="true">✎</span> {t('common.edit')}
+              </button>
+            )}
             <button
               type="button"
               data-testid="skill-detail-schedule"
@@ -190,6 +213,20 @@ export default function SkillDetailDrawer({ skill, onClose }: Props) {
             </button>
           </div>
         </div>
+
+        {/* Run-now feedback (transient) */}
+        {runState === 'started' && (
+          <p
+            className="px-5 pb-2 text-xs text-sage-600 dark:text-sage-300"
+            data-testid="skill-detail-run-started">
+            {t('common.success')}
+          </p>
+        )}
+        {runState === 'error' && (
+          <p className="px-5 pb-2 text-xs text-coral-600 dark:text-coral-300">
+            {t('common.error')}
+          </p>
+        )}
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto">

@@ -37,6 +37,7 @@ export default function WorkflowsTab() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<SkillSummary | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [editingWorkflow, setEditingWorkflow] = useState<SkillSummary | null>(null);
   const [uninstallCandidate, setUninstallCandidate] = useState<SkillSummary | null>(null);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
@@ -191,16 +192,36 @@ export default function WorkflowsTab() {
       ) : null}
 
       {/* Detail drawer (with Run workflow CTA) */}
-      {selected && <SkillDetailDrawer skill={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <SkillDetailDrawer
+          skill={selected}
+          onClose={() => setSelected(null)}
+          onEdit={wf => {
+            setSelected(null);
+            setEditingWorkflow(wf);
+            setCreateModalOpen(true);
+          }}
+        />
+      )}
 
-      {/* Create modal */}
+      {/* Create / edit modal */}
       {createModalOpen && (
         <CreateSkillModal
-          onClose={() => setCreateModalOpen(false)}
-          onCreated={wf => {
-            log('created workflowId=%s', wf.id);
+          editing={editingWorkflow ?? undefined}
+          onClose={() => {
             setCreateModalOpen(false);
-            setWorkflows(prev => (prev.some(s => s.id === wf.id) ? prev : [...prev, wf]));
+            setEditingWorkflow(null);
+          }}
+          onCreated={wf => {
+            log('saved workflowId=%s edit=%s', wf.id, !!editingWorkflow);
+            setCreateModalOpen(false);
+            setEditingWorkflow(null);
+            // Upsert: replace an existing row on edit, append on create.
+            setWorkflows(prev =>
+              prev.some(s => s.id === wf.id)
+                ? prev.map(s => (s.id === wf.id ? wf : s))
+                : [...prev, wf]
+            );
             setSelected(wf);
             void refresh();
           }}

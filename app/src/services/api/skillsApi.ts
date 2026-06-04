@@ -264,6 +264,35 @@ export const skillsApi = {
   },
 
   /**
+   * Edit an existing workflow via `openhuman.workflows_update`. Same payload
+   * shape as create; the Rust side overwrites the workflow at the resolved
+   * slug — rewriting frontmatter + workflow.toml while preserving the
+   * hand-authored SKILL.md/WORKFLOW.md body.
+   */
+  updateSkill: async (input: CreateSkillInput): Promise<SkillSummary> => {
+    log('updateSkill: request name=%s scope=%s', input.name, input.scope ?? 'default');
+    const response = await callCoreRpc<Envelope<RawSkillsCreateResult> | RawSkillsCreateResult>({
+      method: 'openhuman.workflows_update',
+      params: {
+        name: input.name,
+        description: input.description,
+        ...(input.whenToUse !== undefined && input.whenToUse.trim().length > 0
+          ? { when_to_use: input.whenToUse }
+          : {}),
+        ...(input.scope !== undefined ? { scope: input.scope } : {}),
+        ...(input.license !== undefined ? { license: input.license } : {}),
+        ...(input.author !== undefined ? { author: input.author } : {}),
+        ...(input.tags !== undefined ? { tags: input.tags } : {}),
+        ...(input.allowedTools !== undefined ? { 'allowed-tools': input.allowedTools } : {}),
+        ...(input.inputs !== undefined && input.inputs.length > 0 ? { inputs: input.inputs } : {}),
+      },
+    });
+    const raw = unwrapEnvelope(response);
+    log('updateSkill: response id=%s', raw.skill.id);
+    return raw.skill;
+  },
+
+  /**
    * Install a remote SKILL.md by URL via `openhuman.workflows_install_from_url`.
    *
    * The Rust side fetches the SKILL.md directly over HTTPS (no subprocess,

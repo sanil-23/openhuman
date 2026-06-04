@@ -30,9 +30,11 @@ const CREATE_FORM_ID = 'create-skill-modal-form';
 interface Props {
   onClose: () => void;
   onCreated: (skill: SkillSummary) => void;
+  /** When set, the modal edits this workflow instead of creating a new one. */
+  editing?: SkillSummary;
 }
 
-export default function CreateSkillModal({ onClose, onCreated }: Props) {
+export default function CreateSkillModal({ onClose, onCreated, editing }: Props) {
   const { t } = useT();
   const [formValid, setFormValid] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -100,7 +102,7 @@ export default function CreateSkillModal({ onClose, onCreated }: Props) {
               id="create-skill-title"
               className="text-base font-semibold text-stone-900 dark:text-neutral-100 font-sans"
             >
-              {t('workflows.create.title')}
+              {editing ? t('common.edit') : t('workflows.create.title')}
             </h2>
             <p className="mt-0.5 text-xs text-stone-500 dark:text-neutral-400">
               {t('workflows.create.subtitle')}
@@ -136,6 +138,7 @@ export default function CreateSkillModal({ onClose, onCreated }: Props) {
             onCreated={onCreated}
             onStateChange={handleStateChange}
             autoFocus
+            editing={editing}
           />
         </div>
 
@@ -155,7 +158,11 @@ export default function CreateSkillModal({ onClose, onCreated }: Props) {
             disabled={!formValid || submitting}
             className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {submitting ? t('workflows.create.creating') : t('workflows.create.createBtn')}
+            {submitting
+              ? t('workflows.create.creating')
+              : editing
+                ? t('common.save')
+                : t('workflows.create.createBtn')}
           </button>
         </div>
       </div>
