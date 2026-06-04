@@ -117,37 +117,31 @@ pub fn render_inputs_block(defs: &[WorkflowInput], provided: &serde_json::Value)
     lines.join("\n")
 }
 
-/// Default skills shipped *with* OpenHuman — bundled into the binary and
-/// materialised into `<workspace>/skills/<id>/` on first load. Each entry is
-/// `(id, skill.toml, SKILL.md)`.
-// Bundled defaults removed in the workflows-unify refactor (the legacy
-// `dev-workflow` plus the `github-issue-crusher` / `pr-review-shepherd`
-// runner skills). Left empty so `seed_default_workflows` becomes a no-op until
-// (and if) we ship example *workflows* under the unified primitive.
-const DEFAULT_WORKFLOWS: &[(&str, &str, &str)] = &[];
+/// Legacy bundled skills that shipped with older builds and were removed in the
+/// workflows-unify refactor (the old `dev-workflow` plus the
+/// `github-issue-crusher` / `pr-review-shepherd` runner skills). OpenHuman no
+/// longer ships any bundled defaults; these ids are pruned from upgraded
+/// workspaces so they stop surfacing in the Workflows tab.
+const LEGACY_BUNDLED_WORKFLOW_IDS: &[&str] =
+    &["dev-workflow", "github-issue-crusher", "pr-review-shepherd"];
 
-/// Seed the bundled [`DEFAULT_WORKFLOWS`] into `<workspace>/skills/<id>/` when
-/// absent. Idempotent and non-destructive: an existing `skill.toml` (already
-/// seeded, or user-edited) is left untouched, so a default can be customised or
-/// removed. This is what makes a default skill "come with the system" — every
-/// workspace gets it without a manual drop.
-pub fn seed_default_workflows(workspace_dir: &Path) {
+/// Remove the legacy bundled skill dirs an older build seeded into
+/// `<workspace>/skills/<id>/`. Bounded to [`LEGACY_BUNDLED_WORKFLOW_IDS`] so
+/// user-authored workflows are never touched; idempotent (no-op once gone).
+pub fn prune_legacy_default_workflows(workspace_dir: &Path) {
     let base = workspace_dir.join("skills");
-    for (id, skill_toml, skill_md) in DEFAULT_WORKFLOWS {
+    for id in LEGACY_BUNDLED_WORKFLOW_IDS {
         let dir = base.join(id);
-        if dir.join("skill.toml").exists() {
-            continue; // already present — never clobber
-        }
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            log::warn!("[skills] seed {id}: mkdir failed: {e}");
+        if !dir.exists() {
             continue;
         }
-        let _ = std::fs::write(dir.join("skill.toml"), skill_toml);
-        let _ = std::fs::write(dir.join("SKILL.md"), skill_md);
-        log::info!(
-            "[skills] seeded default skill '{id}' into {}",
-            dir.display()
-        );
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => log::info!(
+                "[workflows] pruned legacy bundled skill '{id}' from {}",
+                dir.display()
+            ),
+            Err(e) => log::warn!("[workflows] prune legacy skill '{id}' failed: {e}"),
+        }
     }
 }
 
@@ -167,9 +161,9 @@ pub fn seed_default_workflows(workspace_dir: &Path) {
 /// `skill.toml`, a synthesized SKILL.md-only definition so a bare workflow is
 /// still runnable. A bad `skill.toml` falls back to the SKILL.md-only form.
 pub fn load_workflows(workspace_dir: &Path) -> Vec<WorkflowDefinition> {
-    // Materialise the bundled defaults (idempotent); discover's legacy scan
-    // picks them up.
-    seed_default_workflows(workspace_dir);
+    // Prune any legacy bundled skills an older build left behind so discover's
+    // legacy scan no longer surfaces them (idempotent).
+    prune_legacy_default_workflows(workspace_dir);
 
     let mut workflows: Vec<WorkflowDefinition> = Vec::new();
 
