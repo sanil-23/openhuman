@@ -555,6 +555,28 @@ describe('WorkflowRunnerBody — URL ?workflow= preselect', () => {
       await screen.findByText(/settings.skillsRunner.error.describe/)
     ).toBeInTheDocument();
   });
+
+  it('locked (lock=1): shows the workflow-name header (no picker) AND the Run button', async () => {
+    // Regression: opening a workflow from its card locks the page
+    // (?workflow=<id>&lock=1). The Run button used to be gated behind
+    // !locked, so the consolidated runner could schedule but not run.
+    const Body = await importBody();
+    renderBody(Body, '/workflows/run?workflow=dev-workflow&lock=1');
+
+    await waitFor(() => expect(hoisted.listSkills).toHaveBeenCalled());
+
+    // The picker is replaced by the workflow-name heading...
+    const heading = await screen.findByTestId('skills-runner-skill-locked');
+    expect(heading).toHaveTextContent('Dev Workflow');
+    // ...so there is no <select> picker in locked mode...
+    expect(
+      screen.queryByLabelText('settings.skillsRunner.skill')
+    ).not.toBeInTheDocument();
+    // ...and the Run button is present after the inputs.
+    expect(
+      await screen.findByText('settings.skillsRunner.runNow')
+    ).toBeInTheDocument();
+  });
 });
 
 // ── Phase 5: Run Now flow ────────────────────────────────────────────

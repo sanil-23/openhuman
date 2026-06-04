@@ -918,21 +918,17 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
         {headerText ?? t('settings.developerMenu.skillsRunner.panelDesc')}
       </div>
 
-        {/* Skill picker */}
+        {/* Workflow header (locked) / picker (embedded). When the page is
+            locked to one workflow, the name is the page heading with Edit
+            beside it — not a disabled-looking form field. */}
         <div>
-          <label
-            htmlFor="skills-runner-skill"
-            className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1"
-          >
-            {t('settings.skillsRunner.skill')}
-          </label>
           {locked ? (
-            <div className="flex items-center gap-2">
-              <div
+            <div className="flex items-center justify-between gap-2">
+              <h2
                 data-testid="skills-runner-skill-locked"
-                className="flex-1 rounded border border-stone-300 dark:border-stone-600 bg-stone-50 dark:bg-stone-800/60 px-3 py-2 text-sm font-medium text-stone-900 dark:text-stone-100">
+                className="min-w-0 truncate text-lg font-semibold text-stone-900 dark:text-stone-100">
                 {selectedWorkflow?.name || selectedSkillId}
-              </div>
+              </h2>
               {selectedWorkflow &&
                 selectedWorkflow.scope === 'user' &&
                 !selectedWorkflow.legacy && (
@@ -940,30 +936,38 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                     type="button"
                     data-testid="skills-runner-edit"
                     onClick={() => setEditOpen(true)}
-                    className="inline-flex items-center gap-1 rounded border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 px-3 py-2 text-sm font-medium text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-700">
+                    className="inline-flex flex-shrink-0 items-center gap-1 rounded border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 px-3 py-2 text-sm font-medium text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-700">
                     <span aria-hidden="true">✎</span> {t('common.edit')}
                   </button>
                 )}
             </div>
           ) : (
-            <select
-              id="skills-runner-skill"
-              value={selectedSkillId}
-              onChange={(e) => setSelectedSkillId(e.target.value)}
-              disabled={skillsLoading || skillsError !== null}
-              className="w-full rounded border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 px-3 py-2 text-sm text-stone-900 dark:text-stone-100"
-            >
-              <option value="">
-                {skillsLoading
-                  ? t('settings.skillsRunner.loadingSkills')
-                  : t('settings.skillsRunner.selectSkill')}
-              </option>
-              {skills.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name || s.id}
+            <>
+              <label
+                htmlFor="skills-runner-skill"
+                className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1"
+              >
+                {t('settings.skillsRunner.skill')}
+              </label>
+              <select
+                id="skills-runner-skill"
+                value={selectedSkillId}
+                onChange={(e) => setSelectedSkillId(e.target.value)}
+                disabled={skillsLoading || skillsError !== null}
+                className="w-full rounded border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 px-3 py-2 text-sm text-stone-900 dark:text-stone-100"
+              >
+                <option value="">
+                  {skillsLoading
+                    ? t('settings.skillsRunner.loadingSkills')
+                    : t('settings.skillsRunner.selectSkill')}
                 </option>
-              ))}
-            </select>
+                {skills.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name || s.id}
+                  </option>
+                ))}
+              </select>
+            </>
           )}
           {skillsError && (
             <p className="text-xs text-red-600 dark:text-red-400 mt-1">
@@ -1048,8 +1052,9 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                   </div>
                 )}
 
-                {/* Run Now (hidden when opened in locked schedule-only mode) */}
-                {!locked && (
+                {/* Run — the primary action, right after the input box. Shown
+                    on the locked workflow page too (the consolidated runner is
+                    the workflow's run surface, not schedule-only). */}
                 <div className="pt-2 flex flex-col gap-2">
                   <button
                     type="button"
@@ -1110,7 +1115,6 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                     );
                   })()}
                 </div>
-                )}
 
                 {/* Schedule (cron-driven recurring) */}
                 <div
