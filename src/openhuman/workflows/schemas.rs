@@ -701,8 +701,12 @@ fn handle_workflows_describe(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<WorkflowsDescribeParams>(params)?;
         let workspace = resolve_workspace_dir().await;
-        let skill = registry::get_workflow(&workspace, &payload.workflow_id)
-            .ok_or_else(|| format!("workflows_describe: unknown skill '{}'", payload.workflow_id))?;
+        let skill = registry::get_workflow(&workspace, &payload.workflow_id).ok_or_else(|| {
+            format!(
+                "workflows_describe: unknown skill '{}'",
+                payload.workflow_id
+            )
+        })?;
         let inputs = skill
             .inputs
             .iter()
@@ -1002,7 +1006,10 @@ pub(crate) async fn spawn_workflow_run_background(
             // user-initiated RPC / CLI flows.
             let result = crate::openhuman::agent::turn_origin::with_origin(
                 inherited_origin,
-                with_autonomous_iter_cap(WORKFLOW_RUN_MAX_ITERATIONS, agent.run_single(&task_prompt)),
+                with_autonomous_iter_cap(
+                    WORKFLOW_RUN_MAX_ITERATIONS,
+                    agent.run_single(&task_prompt),
+                ),
             )
             .await;
             agent.set_on_progress(None);
@@ -1079,7 +1086,8 @@ pub(crate) async fn await_run_outcome(
 fn handle_workflows_run(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<WorkflowsRunParams>(params)?;
-        let started = match spawn_workflow_run_background(payload.workflow_id, payload.inputs).await {
+        let started = match spawn_workflow_run_background(payload.workflow_id, payload.inputs).await
+        {
             Ok(s) => s,
             Err(e) => return Err(e),
         };

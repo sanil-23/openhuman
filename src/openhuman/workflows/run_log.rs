@@ -705,9 +705,15 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let path = run_log_path(tmp.path(), "demo", "abcdef12-3456");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        write_header(&path, "demo", "abcdef12-3456", &serde_json::json!({}), "task")
-            .await
-            .unwrap();
+        write_header(
+            &path,
+            "demo",
+            "abcdef12-3456",
+            &serde_json::json!({}),
+            "task",
+        )
+        .await
+        .unwrap();
         // No footer yet ⇒ still running.
         assert!(read_terminal_outcome(&path).is_none());
         write_footer(&path, "DONE", 1234, "the final answer\nspanning two lines")

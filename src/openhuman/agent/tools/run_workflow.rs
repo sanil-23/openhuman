@@ -514,9 +514,7 @@ mod tests {
         // MAX_ACTIVE_AWAITS is 8; hold 8 distinct keys, then the 9th must reject.
         let mut held = Vec::new();
         for i in 0..8 {
-            held.push(
-                super::guard::acquire_await(format!("cap-test-{i}")).expect("under the cap"),
-            );
+            held.push(super::guard::acquire_await(format!("cap-test-{i}")).expect("under the cap"));
         }
         let ninth = super::guard::acquire_await("cap-test-9".to_string());
         assert!(ninth.is_err(), "the 9th concurrent await must reject");

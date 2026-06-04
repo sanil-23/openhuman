@@ -34,7 +34,9 @@ use crate::openhuman::inference::provider::traits::{ChatMessage, ProviderCapabil
 use crate::openhuman::inference::provider::{ChatRequest, ChatResponse, Provider, ToolCall};
 use crate::openhuman::tools::policy::DefaultToolPolicy;
 use crate::openhuman::tools::traits::Tool;
-use crate::openhuman::workflows::ops_create::{create_skill_inner, CreateSkillParams, WorkflowCreateInputDef};
+use crate::openhuman::workflows::ops_create::{
+    create_skill_inner, CreateSkillParams, WorkflowCreateInputDef,
+};
 use crate::openhuman::workflows::ops_types::WorkflowScope;
 use crate::openhuman::workflows::registry::get_workflow;
 use crate::openhuman::workflows::run_log;
@@ -169,7 +171,9 @@ async fn mock_llm_orchestrator_lists_and_runs_workflows_through_the_loop() {
 
     // The two tools the orchestrator now carries for workflows.
     let tools: Vec<Box<dyn Tool>> = vec![
-        Box::new(crate::openhuman::workflows::tools::WorkflowListTool::new(config.clone())),
+        Box::new(crate::openhuman::workflows::tools::WorkflowListTool::new(
+            config.clone(),
+        )),
         Box::new(RunWorkflowTool::new()),
     ];
 
@@ -241,9 +245,15 @@ async fn await_run_outcome_returns_terminal_footer_then_auto_detaches() {
     // A finished run: header + DONE footer → await returns the outcome.
     let done = run_log::run_log_path(ws.path(), "triage-inbox", "run-done-1234");
     std::fs::create_dir_all(done.parent().unwrap()).unwrap();
-    run_log::write_header(&done, "triage-inbox", "run-done-1234", &serde_json::json!({}), "task")
-        .await
-        .unwrap();
+    run_log::write_header(
+        &done,
+        "triage-inbox",
+        "run-done-1234",
+        &serde_json::json!({}),
+        "task",
+    )
+    .await
+    .unwrap();
     run_log::write_footer(&done, "DONE", 1234, "inbox triaged: 12 archived")
         .await
         .unwrap();
@@ -256,9 +266,15 @@ async fn await_run_outcome_returns_terminal_footer_then_auto_detaches() {
     // A still-running run (header, no footer): await up to a short budget then
     // auto-detach with None (what run_workflow turns into a run_id handle).
     let running = run_log::run_log_path(ws.path(), "triage-inbox", "run-live-5678");
-    run_log::write_header(&running, "triage-inbox", "run-live-5678", &serde_json::json!({}), "task")
-        .await
-        .unwrap();
+    run_log::write_header(
+        &running,
+        "triage-inbox",
+        "run-live-5678",
+        &serde_json::json!({}),
+        "task",
+    )
+    .await
+    .unwrap();
     let detached = await_run_outcome(&running, Duration::from_millis(300)).await;
     assert!(
         detached.is_none(),

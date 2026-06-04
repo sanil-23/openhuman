@@ -227,7 +227,8 @@ pub(crate) fn create_skill_inner(
         let skill_toml_path = skill_dir.join("skill.toml");
         // Distinct trigger when provided, else reuse the description so the
         // field is never empty (matches the prior behaviour).
-        let skill_toml = render_skill_toml(&slug, when_to_use.unwrap_or(description), &params.inputs);
+        let skill_toml =
+            render_skill_toml(&slug, when_to_use.unwrap_or(description), &params.inputs);
         std::fs::write(&skill_toml_path, skill_toml)
             .map_err(|e| format!("failed to write {}: {e}", skill_toml_path.display()))?;
     }

@@ -9802,7 +9802,10 @@ async fn json_rpc_workflows_lifecycle_round_trip() {
         Some("a user reports a bug or something is broken")
     );
     assert!(
-        describe_result.get("inputs").and_then(Value::as_array).is_some(),
+        describe_result
+            .get("inputs")
+            .and_then(Value::as_array)
+            .is_some(),
         "describe returns an inputs array (empty for a bare workflow)"
     );
 
@@ -9825,7 +9828,8 @@ async fn json_rpc_workflows_lifecycle_round_trip() {
     let after_result = assert_no_jsonrpc_error(&after, "workflows_list");
     assert!(
         after_result
-            .get("skills")            .and_then(Value::as_array)
+            .get("skills")
+            .and_then(Value::as_array)
             .expect("workflows array")
             .is_empty(),
         "no workflows after uninstall"

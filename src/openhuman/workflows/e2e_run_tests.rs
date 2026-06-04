@@ -38,10 +38,10 @@ use crate::openhuman::inference::provider::traits::{
     ChatMessage, ChatRequest, ChatResponse, ProviderCapabilities,
 };
 use crate::openhuman::inference::provider::{Provider, ToolCall};
-use crate::openhuman::tools::policy::DefaultToolPolicy;
-use crate::openhuman::tools::traits::Tool;
 use crate::openhuman::todos::ops as board_ops;
 use crate::openhuman::todos::ops::{BoardLocation, CardPatch};
+use crate::openhuman::tools::policy::DefaultToolPolicy;
+use crate::openhuman::tools::traits::Tool;
 use crate::openhuman::workflows::schemas::{
     await_run_outcome, resolve_workspace_dir, spawn_workflow_run_background,
 };
@@ -307,7 +307,8 @@ async fn task_card_picked_up_runs_workflow_and_resolves_done() {
     // Real orchestrator definition (so its tool allow-list incl. run_workflow
     // applies); idempotent across the serial tests.
     let _ =
-        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins();
+        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins(
+        );
 
     let _serial = serial().lock().await;
     let ws_root = tempfile::tempdir().unwrap();
@@ -361,7 +362,9 @@ async fn task_card_picked_up_runs_workflow_and_resolves_done() {
         });
     assert_eq!(done.status, TaskCardStatus::Done);
     assert!(
-        done.evidence.iter().any(|e| e.contains("ORCHESTRATOR_DONE")),
+        done.evidence
+            .iter()
+            .any(|e| e.contains("ORCHESTRATOR_DONE")),
         "the run's output should be captured as evidence; got: {:?}",
         done.evidence
     );
@@ -374,7 +377,8 @@ async fn task_card_picked_up_runs_workflow_and_resolves_done() {
 #[tokio::test]
 async fn task_with_no_workflow_runs_directly_and_resolves_done() {
     let _ =
-        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins();
+        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins(
+        );
 
     let _serial = serial().lock().await;
     let ws_root = tempfile::tempdir().unwrap();
@@ -420,7 +424,9 @@ async fn task_with_no_workflow_runs_directly_and_resolves_done() {
     assert_eq!(done.status, TaskCardStatus::Done);
     // The orchestrator answered directly; its output is captured as evidence.
     assert!(
-        done.evidence.iter().any(|e| e.contains("TASK_DONE_NO_WORKFLOW")),
+        done.evidence
+            .iter()
+            .any(|e| e.contains("TASK_DONE_NO_WORKFLOW")),
         "evidence should be the direct answer; got: {:?}",
         done.evidence
     );
@@ -456,13 +462,10 @@ impl Provider for FailingLlm {
     ) -> anyhow::Result<String> {
         Ok("ok".into())
     }
-    async fn chat(
-        &self,
-        _: ChatRequest<'_>,
-        _: &str,
-        _: f64,
-    ) -> anyhow::Result<ChatResponse> {
-        Err(anyhow::anyhow!("simulated provider failure: model unavailable"))
+    async fn chat(&self, _: ChatRequest<'_>, _: &str, _: f64) -> anyhow::Result<ChatResponse> {
+        Err(anyhow::anyhow!(
+            "simulated provider failure: model unavailable"
+        ))
     }
 }
 
@@ -471,7 +474,8 @@ impl Provider for FailingLlm {
 #[tokio::test]
 async fn task_run_failure_resolves_card_to_blocked() {
     let _ =
-        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins();
+        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins(
+        );
     let _serial = serial().lock().await;
     let ws_root = tempfile::tempdir().unwrap();
     let _env = WorkspaceEnv::set(ws_root.path());
@@ -482,8 +486,8 @@ async fn task_run_failure_resolves_card_to_blocked() {
         workspace_dir: workspace.clone(),
         thread_id: "t1".into(),
     };
-    let snap = board_ops::add(&loc, "Do a thing that will fail", CardPatch::default())
-        .expect("add card");
+    let snap =
+        board_ops::add(&loc, "Do a thing that will fail", CardPatch::default()).expect("add card");
     let id = snap.cards[0].id.clone();
     board_ops::update_status(&loc, &id, TaskCardStatus::Ready).expect("ready");
 
@@ -532,7 +536,8 @@ async fn task_run_failure_resolves_card_to_blocked() {
 #[tokio::test]
 async fn redispatch_of_claimed_card_is_rejected() {
     let _ =
-        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins();
+        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins(
+        );
     let _serial = serial().lock().await;
     let ws_root = tempfile::tempdir().unwrap();
     let _env = WorkspaceEnv::set(ws_root.path());
