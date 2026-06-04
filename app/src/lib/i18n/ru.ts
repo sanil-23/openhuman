@@ -4792,7 +4792,7 @@ const messages: TranslationMap = {
   'skills.run.title': 'Запустить рабочий процесс',
   'workflows.installFromUrl': 'Установить по URL',
 
-// Run queue
+  // Run queue
   'runQueue.mode.interrupt': 'Прервать',
   'runQueue.mode.steer': 'Направить',
   'runQueue.mode.followup': 'Продолжение',

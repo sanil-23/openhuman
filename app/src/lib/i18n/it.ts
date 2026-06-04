@@ -4837,7 +4837,7 @@ const messages: TranslationMap = {
   'skills.run.title': 'Esegui workflow',
   'workflows.installFromUrl': 'Installa da URL',
 
-// Run queue
+  // Run queue
   'runQueue.mode.interrupt': 'Interrompi',
   'runQueue.mode.steer': 'Guida',
   'runQueue.mode.followup': 'Seguito',

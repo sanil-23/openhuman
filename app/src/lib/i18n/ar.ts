@@ -4655,7 +4655,7 @@ const messages: TranslationMap = {
   'skills.run.title': 'تشغيل سير العمل',
   'workflows.installFromUrl': 'التثبيت من رابط',
 
-// Run queue
+  // Run queue
   'runQueue.mode.interrupt': 'مقاطعة',
   'runQueue.mode.steer': 'توجيه',
   'runQueue.mode.followup': 'متابعة',

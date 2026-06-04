@@ -4514,7 +4514,7 @@ const messages: TranslationMap = {
   'skills.run.title': '运行工作流',
   'workflows.installFromUrl': '从 URL 安装',
 
-// Run queue
+  // Run queue
   'runQueue.mode.interrupt': '中断',
   'runQueue.mode.steer': '引导',
   'runQueue.mode.followup': '后续跟进',

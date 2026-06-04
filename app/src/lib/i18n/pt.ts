@@ -4833,7 +4833,7 @@ const messages: TranslationMap = {
   'skills.run.title': 'Executar fluxo de trabalho',
   'workflows.installFromUrl': 'Instalar a partir de URL',
 
-// Run queue
+  // Run queue
   'runQueue.mode.interrupt': 'Interromper',
   'runQueue.mode.steer': 'Direcionar',
   'runQueue.mode.followup': 'Acompanhamento',

@@ -4699,7 +4699,7 @@ const messages: TranslationMap = {
   'skills.run.title': '워크플로 실행',
   'workflows.installFromUrl': 'URL에서 설치',
 
-// Run queue
+  // Run queue
   'runQueue.mode.interrupt': '중단',
   'runQueue.mode.steer': '방향 조정',
   'runQueue.mode.followup': '후속 조치',
