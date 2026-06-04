@@ -8,7 +8,7 @@ pub enum CapabilityCategory {
     Conversation,
     #[serde(rename = "intelligence")]
     Intelligence,
-    #[serde(rename = "workflows")]
+    #[serde(rename = "workflows", alias = "skills")]
     Workflows,
     #[serde(rename = "local_ai")]
     LocalAI,

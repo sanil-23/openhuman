@@ -49,10 +49,7 @@ export default function Intelligence() {
   // `replace` so switching tabs doesn't stack history entries.
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
-  const activeTab: IntelligenceTab =
-    tabParam && ['memory', 'subconscious', 'tasks', 'workflows', 'council'].includes(tabParam)
-      ? (tabParam as IntelligenceTab)
-      : 'memory';
+  const activeTab: IntelligenceTab = isVisibleTab(tabParam) ? tabParam : 'memory';
   const setActiveTab = useCallback(
     (tab: IntelligenceTab) => {
       setSearchParams(
@@ -147,7 +144,7 @@ export default function Intelligence() {
         <PillTabBar
           items={tabs.map(tab => ({ label: tab.label, value: tab.id }))}
           selected={activeTab}
-          onChange={selectTab}
+          onChange={setActiveTab}
           activeClassName="border-primary-600 bg-primary-600 text-white"
           renderItem={(item, active) => {
             const tab = tabs.find(entry => entry.id === item.value);
