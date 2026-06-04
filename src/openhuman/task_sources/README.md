@@ -7,9 +7,9 @@ Proactive ingestion of work items from external tools. A **task source** is a us
 - Persist per-source configs (provider + filter + schedule + routing target + optional pinned connection / static executor).
 - Periodically poll enabled sources (`periodic.rs`) on a global 10-minute tick honoring per-source `interval_secs` (floored to 60s).
 - Translate a typed `FilterSpec` into the provider-agnostic `TaskFetchFilter` (`filter.rs`) and fetch via the registered Composio provider.
-- Dedup ingested items with an edit-aware SHA-256 content hash; re-ingest only when the upstream task changed (`store.rs` + `pipeline.rs`).
+- Dedup ingested items two ways: (1) the per-source ledger skips an unchanged re-fetch via an edit-aware SHA-256 content hash (`store.rs` + `pipeline.rs`); (2) routing dedups across sources by a stable, source-independent identity so the same upstream item pulled by overlapping or recreated sources yields exactly one board card (`dedup.rs` + `route.rs`).
 - Deterministically enrich raw tasks into agent-ready ones — urgency heuristic, summary, linked assignee, templated agent prompt (`enrich.rs`).
-- Route enriched tasks onto the `task-sources` thread board as todo cards and, for proactive sources, dispatch a triage turn through the same path Composio webhooks use (`route.rs`).
+- Route enriched tasks onto the `task-sources` thread board as todo cards (skipping silently when a card already covers the item) and, for proactive sources, dispatch a triage turn through the same path Composio webhooks use (`route.rs`).
 - Fire a one-shot fetch when a matching Composio connection is created (`bus.rs`).
 - Expose an `openhuman.task_sources_*` RPC surface for CRUD, manual fetch, filter preview, ingested-task listing, and status (`schemas.rs` + `ops.rs`).
 
@@ -25,7 +25,8 @@ Proactive ingestion of work items from external tools. A **task source** is a us
 | `src/openhuman/task_sources/pipeline.rs` | `run_source_once` — the infallible fetch → dedup → enrich → route pass shared by poll, manual RPC, and connection hook; publishes domain events. |
 | `src/openhuman/task_sources/filter.rs` | `to_fetch_filter` — flattens a `FilterSpec` variant into the shared `TaskFetchFilter`. |
 | `src/openhuman/task_sources/enrich.rs` | Deterministic, dependency-free `enrich_task`: urgency heuristic, summary, linked assignee, agent prompt. No LLM call. |
-| `src/openhuman/task_sources/route.rs` | `route_enriched` / `add_card` / `board_cards` — appends todo cards to the `task-sources` board (`TASK_SOURCES_THREAD_ID`), removes stale cards on re-ingest, and dispatches a scheduler-gated triage turn for proactive sources. |
+| `src/openhuman/task_sources/dedup.rs` | Pure, source-independent task identity (`provider:external_id`, url fallback), the board-card identity match, and the "replaceable only while untouched `Todo`" rule. No I/O — unit-tested in isolation. |
+| `src/openhuman/task_sources/route.rs` | `route_enriched` (→ `RouteOutcome::Routed`/`Deduped`) / `create_card` / `remove_source_cards` / `board_cards` — appends todo cards to the `task-sources` board (`TASK_SOURCES_THREAD_ID`), does status-aware cross-source dedup, and dispatches a scheduler-gated triage turn for proactive sources. |
 | `src/openhuman/task_sources/periodic.rs` | `start_periodic_poll` — global tick scheduler; per-source due-timing in a process-global map; `run_one_tick` is `pub(crate)` for tests. |
 | `src/openhuman/task_sources/bus.rs` | `TaskSourcesConnectionSubscriber` + `register_task_sources_subscriber` — one-shot fetch on `ComposioConnectionCreated`. |
 | `src/openhuman/task_sources/store_tests.rs` | Sibling test suite for `store.rs`. |
@@ -50,7 +51,7 @@ Namespace `task_sources` (methods `openhuman.task_sources_<function>`):
 | `get` | Fetch one source by id. |
 | `add` | Create a source; missing schedule/target/cap fall back to `[task_sources]` config defaults. |
 | `update` | Apply a partial `TaskSourcePatch`. |
-| `remove` | Delete a source by id (cascades `ingested_tasks`). |
+| `remove` | Delete a source by id (cascades `ingested_tasks`); also sweeps the source's still-untouched (`Todo`, unclaimed) board cards. Progressed/claimed cards are preserved. |
 | `fetch` | Fetch one source now (`FetchReason::Manual`) and route new tasks. |
 | `list_tasks` | List recently ingested tasks for a source (newest first, default limit 50). |
 | `preview_filter` | Dry-run a filter — fetch matching tasks WITHOUT routing/recording. |
@@ -107,7 +108,12 @@ Additive idempotent column migrations (`add_column_if_missing`) backfill `ingest
 - **Periodic cadence is coarse.** `TICK_SECONDS = 600` is the effective lower bound: any `interval_secs` shorter than 10 minutes is rounded up to the tick. A misconfigured `interval_secs = 0` is floored to `MIN_INTERVAL_SECONDS = 60`. The first immediate-fire tick is skipped so startup isn't slammed.
 - **Pipeline is infallible at the boundary.** `run_source_once` captures any error into `FetchOutcome::error` (and a failure event) so the scheduler loop never unwinds.
 - **Route-then-mark ordering.** A task is marked ingested only after routing succeeds, so a routing failure retries next pass instead of being silently dropped.
-- **Edit-aware dedup.** `content_hash` includes `url` deliberately (it drives card notes/metadata and external write-back); a changed hash re-ingests and removes the stale board card via the persisted `card_id`.
+- **Edit-aware (per-source) dedup.** `content_hash` includes `url` deliberately (it drives card notes/metadata and external write-back); a changed hash re-ingests. The ledger's `card_id` is the *same source's* prior card for the item.
+- **Cross-source, status-aware dedup (`route.rs` + `dedup.rs`).** The per-source ledger can't catch the same upstream item arriving via two overlapping sources, or via a source deleted and recreated (new `source_id`) — each would otherwise drop a duplicate card. So routing computes a source-independent identity (`provider:external_id`, identical-url fallback) and, before creating a card, scans the board:
+  - a card for the same identity owned by **another** source/handler → **skip silently** (count `skipped_dupe`); the new source's ledger row is pointed at the existing card so it stops re-evaluating;
+  - only **our own** prior card matches and it's an untouched `Todo` → replace it (edit refresh);
+  - the matching card has **progressed** past `Todo` (or is claimed by a run) → **skip, never remove** — yanking would destroy in-flight work or resurface a `Rejected`/`Done` item. This is the load-bearing safety rule: dedup only ever removes a card that is `Todo` *and* unclaimed.
+  Pre-existing duplicate cards that have already progressed are left as-is (safe); the fix stops *new* duplication rather than retroactively deleting in-flight cards.
 - **Static executor routing (G7).** A source's optional `assigned_executor` is pre-stamped onto each card's `assigned_agent` so the dispatcher can run it deterministically without the LLM router. `add` applies it as a follow-up patch to keep `store::add_source`'s signature stable.
 - **`route.rs` is the only writer of card `source_metadata`** (provider/source_id/external_id/urgency, plus url and — GitHub-only — repo).
 - **`update_source` TOCTOU.** Documented theoretical read-modify-write window across three connections; acceptable at settings-panel scale.

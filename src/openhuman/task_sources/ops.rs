@@ -103,11 +103,38 @@ pub async fn update(
 }
 
 /// Remove a source by id.
+///
+/// Also sweeps the source's still-untouched (`Todo`, unclaimed) cards off the
+/// `task-sources` board so deleting a source doesn't leave orphaned duplicate
+/// cards behind. Cards that have progressed or are claimed by a run are
+/// preserved — deleting a source never destroys in-flight work.
 pub async fn remove(config: &Config, id: &str) -> Result<RpcOutcome<Value>, String> {
     store::remove_source(config, id).map_err(|e| e.to_string())?;
-    tracing::debug!(source_id = %id, "[task_sources:ops] removed");
+
+    // Board cleanup is best-effort: the source row is already gone, so a board
+    // error must not fail the delete (the orphans self-heal on the next ingest
+    // of the same item via identity dedup).
+    let (removed_cards, preserved_cards) = match super::route::remove_source_cards(config, id) {
+        Ok(counts) => counts,
+        Err(e) => {
+            tracing::warn!(source_id = %id, error = %e, "[task_sources:ops] board cleanup failed");
+            (0, 0)
+        }
+    };
+
+    tracing::debug!(
+        source_id = %id,
+        removed_cards,
+        preserved_cards,
+        "[task_sources:ops] removed"
+    );
     Ok(RpcOutcome::new(
-        json!({ "id": id, "removed": true }),
+        json!({
+            "id": id,
+            "removed": true,
+            "removedCards": removed_cards,
+            "preservedCards": preserved_cards,
+        }),
         vec![],
     ))
 }

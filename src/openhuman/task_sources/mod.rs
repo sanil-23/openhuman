@@ -4,9 +4,10 @@
 //! (GitHub, Notion, Linear, ClickUp) with a per-provider [`FilterSpec`].
 //! The periodic poll ([`periodic`]) fetches matching items through the
 //! existing Composio providers' [`fetch_tasks`] surface, the pipeline
-//! ([`pipeline`]) dedups + enriches them, and [`route`] drops a todo
-//! card onto the dedicated `task-sources` thread board and (for
-//! proactive sources) dispatches a triage turn so an agent can start
+//! ([`pipeline`]) skips unchanged re-fetches and enriches the rest, and
+//! [`route`] applies cross-source, status-aware dedup ([`dedup`]) before
+//! dropping a todo card onto the dedicated `task-sources` thread board and
+//! (for proactive sources) dispatching a triage turn so an agent can start
 //! working.
 //!
 //! Layering mirrors the `cron` domain: `mod.rs` is export-only, business
@@ -16,6 +17,7 @@
 //! [`fetch_tasks`]: crate::openhuman::memory_sync::composio::providers::ComposioProvider::fetch_tasks
 
 pub mod bus;
+pub mod dedup;
 pub mod enrich;
 pub mod filter;
 pub mod ops;

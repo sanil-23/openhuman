@@ -120,9 +120,10 @@ async fn run_inner(
             continue;
         }
 
-        // Look up the stale card id (if any) before enrichment so we can
-        // remove the old board card when re-routing an edited upstream task.
-        let stale_card_id = store::get_card_id(config, &source.id, &task.external_id)
+        // Look up this source's own prior card (if any) before enrichment so
+        // route can tell an edit of our own card from a duplicate owned by
+        // another source.
+        let own_prior_card_id = store::get_card_id(config, &source.id, &task.external_id)
             .map_err(|e| format!("get_card_id failed: {e}"))?;
 
         let enriched = enrich::enrich_task(task);
@@ -130,36 +131,45 @@ async fn run_inner(
         // Route first; only mark ingested on success so a routing
         // failure retries on the next pass instead of being silently
         // dropped.
-        let new_card_id = match route::route_enriched(
-            config,
-            source,
-            &enriched,
-            stale_card_id.as_deref(),
-        )
-        .await
-        {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(
-                    source_id = %source.id,
-                    external_id = %enriched.task.external_id,
-                    error = %e,
-                    "[task_sources:pipeline] routing failed (will retry next pass)"
-                );
-                continue;
-            }
-        };
+        let outcome_route =
+            match route::route_enriched(config, source, &enriched, own_prior_card_id.as_deref())
+                .await
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::warn!(
+                        source_id = %source.id,
+                        external_id = %enriched.task.external_id,
+                        error = %e,
+                        "[task_sources:pipeline] routing failed (will retry next pass)"
+                    );
+                    continue;
+                }
+            };
 
-        store::mark_ingested(config, &source.id, &enriched.task, &new_card_id)
-            .map_err(|e| format!("mark_ingested failed: {e}"))?;
-        publish_global(DomainEvent::TaskSourceTaskIngested {
-            source_id: source.id.clone(),
-            provider: enriched.task.provider.clone(),
-            external_id: enriched.task.external_id.clone(),
-            title: enriched.task.title.clone(),
-            urgency: enriched.urgency,
-        });
-        outcome.routed += 1;
+        match outcome_route {
+            route::RouteOutcome::Routed(new_card_id) => {
+                store::mark_ingested(config, &source.id, &enriched.task, &new_card_id)
+                    .map_err(|e| format!("mark_ingested failed: {e}"))?;
+                publish_global(DomainEvent::TaskSourceTaskIngested {
+                    source_id: source.id.clone(),
+                    provider: enriched.task.provider.clone(),
+                    external_id: enriched.task.external_id.clone(),
+                    title: enriched.task.title.clone(),
+                    urgency: enriched.urgency,
+                });
+                outcome.routed += 1;
+            }
+            route::RouteOutcome::Deduped { existing_card_id } => {
+                // Another card already covers this item (different source, a
+                // recreated source, or our own in-flight card). Record it in
+                // this source's ledger — pointing at the covering card and the
+                // current content hash — so we don't re-evaluate it every poll.
+                store::mark_ingested(config, &source.id, &enriched.task, &existing_card_id)
+                    .map_err(|e| format!("mark_ingested failed: {e}"))?;
+                outcome.skipped_dupe += 1;
+            }
+        }
     }
 
     Ok(())

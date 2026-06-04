@@ -12,90 +12,237 @@
 
 use serde_json::json;
 
+use crate::openhuman::agent::task_board::TaskBoardCard;
 use crate::openhuman::agent::triage::{apply_decision, run_triage, TriageOutcome, TriggerEnvelope};
 use crate::openhuman::config::Config;
 use crate::openhuman::todos::ops::{
     add as todo_add, remove as todo_remove, BoardLocation, CardPatch,
 };
+use crate::openhuman::todos::runs;
 use crate::openhuman::{scheduler_gate, todos};
 
 use super::types::{EnrichedTask, FilterSpec, SourceTarget, TaskSource};
-use super::TaskKind;
+use super::{dedup, TaskKind};
 
 /// Stable thread id whose board collects every ingested task.
 pub const TASK_SOURCES_THREAD_ID: &str = "task-sources";
 
-/// Route an enriched task: append a todo card, then (for proactive
-/// sources) dispatch a triage turn. Returns the new card id on success.
+/// Outcome of routing one enriched task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteOutcome {
+    /// A fresh card was created with this id (and, for proactive sources, a
+    /// triage turn was dispatched). The pipeline records it in the ledger.
+    Routed(String),
+    /// An existing card already represents this upstream item, so nothing was
+    /// created and no triage ran. Carries that card's id so the pipeline can
+    /// point this source's ledger row at it and stop re-evaluating the item
+    /// every poll.
+    Deduped { existing_card_id: String },
+}
+
+/// The `task-sources` board for this workspace.
+fn board_location(config: &Config) -> BoardLocation {
+    BoardLocation::Thread {
+        workspace_dir: config.workspace_dir.clone(),
+        thread_id: TASK_SOURCES_THREAD_ID.to_string(),
+    }
+}
+
+/// Route an enriched task with cross-source, status-aware dedup, then (for
+/// proactive sources whose card was freshly created) dispatch a triage turn.
+///
+/// `own_prior_card_id` is the card this *same* source last created for this
+/// upstream item (from the ledger), if any — used to distinguish an edit of
+/// our own card from a duplicate owned by another source.
+///
+/// Dedup never removes a card that has progressed past `Todo` or is claimed by
+/// a run: such a card is in-flight or already resolved, so the new fetch skips
+/// silently ([`RouteOutcome::Deduped`]) and the existing card is left intact.
 pub async fn route_enriched(
     config: &Config,
     source: &TaskSource,
     enriched: &EnrichedTask,
-    stale_card_id: Option<&str>,
-) -> Result<String, String> {
-    let card_id = add_card(config, source, enriched, stale_card_id)?;
+    own_prior_card_id: Option<&str>,
+) -> Result<RouteOutcome, String> {
+    match decide_and_add(config, source, enriched, own_prior_card_id)? {
+        Decision::Deduped(existing_card_id) => Ok(RouteOutcome::Deduped { existing_card_id }),
+        Decision::Created(card_id) => match source.target {
+            SourceTarget::TodoOnly => {
+                tracing::debug!(
+                    source_id = %source.id,
+                    external_id = %enriched.task.external_id,
+                    "[task_sources:route] todo-only target, card added (no agent turn)"
+                );
+                Ok(RouteOutcome::Routed(card_id))
+            }
+            SourceTarget::AgentTodoProactive => {
+                dispatch_triage(config, source, enriched, &card_id).await?;
+                Ok(RouteOutcome::Routed(card_id))
+            }
+        },
+    }
+}
 
-    match source.target {
-        SourceTarget::TodoOnly => {
-            tracing::debug!(
-                source_id = %source.id,
-                external_id = %enriched.task.external_id,
-                "[task_sources:route] todo-only target, card added (no agent turn)"
+/// Internal result of the dedup decision: either an existing card already
+/// covers the item, or a new card was created.
+enum Decision {
+    Created(String),
+    Deduped(String),
+}
+
+/// True when `card` may be safely removed/replaced by dedup: it is still an
+/// untouched `Todo` **and** no run is actively claiming it. Progressed,
+/// resolved, or claimed cards must never be yanked.
+fn is_replaceable(location: &BoardLocation, card: &TaskBoardCard) -> bool {
+    dedup::is_replaceable_status(&card.status) && !has_active_run(location, &card.id)
+}
+
+/// Whether a non-completed run is currently claiming `card_id`. Errors are
+/// treated as "active" (fail-safe: never remove a card we can't prove is idle).
+fn has_active_run(location: &BoardLocation, card_id: &str) -> bool {
+    match runs::list_runs(location, Some(card_id)) {
+        Ok(records) => records.iter().any(|r| r.is_active()),
+        Err(e) => {
+            tracing::warn!(
+                card_id,
+                error = %e,
+                "[task_sources:route] run lookup failed; treating card as active (won't remove)"
             );
-            Ok(card_id)
-        }
-        SourceTarget::AgentTodoProactive => {
-            dispatch_triage(config, source, enriched, &card_id).await?;
-            Ok(card_id)
+            true
         }
     }
 }
 
-/// Append a new card on the `task-sources` board, optionally removing a
-/// stale card first (when an upstream task was edited and re-routed). Returns
-/// the id of the newly created card.
+/// Decide whether to create a card for `enriched` or dedup against one already
+/// on the board, then perform the chosen action.
 ///
-/// Removing the stale card before adding the new one prevents duplicate board
-/// entries from accumulating across edit cycles. If the stale card is already
-/// gone (e.g. user manually removed it) the remove error is logged and
-/// ignored so the fresh card still lands.
-fn add_card(
+/// Rules:
+/// 1. **Cross-source duplicate** — a card owned by another source (or a
+///    recreated/deleted source) already represents this item → skip silently,
+///    sweeping our own redundant card if it's still an untouched `Todo`.
+/// 2. **Same-source refresh** — only our own prior card matches → replace it if
+///    it's still an untouched `Todo`; if it has progressed/resolved, leave it
+///    and skip (don't yank in-flight work or resurface a rejected/done item).
+/// 3. **New item** — no match → create a fresh card.
+fn decide_and_add(
     config: &Config,
     source: &TaskSource,
     enriched: &EnrichedTask,
-    stale_card_id: Option<&str>,
-) -> Result<String, String> {
-    let location = BoardLocation::Thread {
-        workspace_dir: config.workspace_dir.clone(),
-        thread_id: TASK_SOURCES_THREAD_ID.to_string(),
-    };
+    own_prior_card_id: Option<&str>,
+) -> Result<Decision, String> {
+    let location = board_location(config);
+    let identity = dedup::task_identity(&enriched.task);
+    let cards = todos::ops::list(&location)
+        .map_err(|e| format!("[task_sources:route] failed to list board: {e}"))?
+        .cards;
 
-    // Remove stale card from the previous ingestion of this task (if any)
-    // before creating the replacement, so the board never accumulates
-    // duplicate cards for the same upstream item.
-    if let Some(old_id) = stale_card_id {
-        match todo_remove(&location, old_id) {
-            Ok(_) => {
-                tracing::debug!(
-                    source_id = %source.id,
-                    external_id = %enriched.task.external_id,
-                    stale_card_id = %old_id,
-                    "[task_sources:route] stale card removed before re-routing edited task"
-                );
-            }
-            Err(e) => {
-                // Not fatal: card may have been manually removed already.
-                tracing::debug!(
-                    source_id = %source.id,
-                    external_id = %enriched.task.external_id,
-                    stale_card_id = %old_id,
-                    error = %e,
-                    "[task_sources:route] stale card removal skipped (already gone?)"
-                );
-            }
+    // Split existing cards for this item into our own prior card vs any card
+    // owned by a different source/handler.
+    let mut own_prior: Option<&TaskBoardCard> = None;
+    let mut foreign: Option<&TaskBoardCard> = None;
+    for card in &cards {
+        if !dedup::card_matches_identity(card, &identity) {
+            continue;
+        }
+        if Some(card.id.as_str()) == own_prior_card_id {
+            own_prior = Some(card);
+        } else if foreign.is_none() {
+            foreign = Some(card);
         }
     }
 
+    // (1) Another card already covers this upstream item.
+    if let Some(existing) = foreign {
+        if let Some(prior) = own_prior {
+            if is_replaceable(&location, prior) {
+                let _ = todo_remove(&location, &prior.id);
+            }
+        }
+        tracing::info!(
+            source_id = %source.id,
+            external_id = %identity.external_id,
+            existing_card_id = %existing.id,
+            existing_status = existing.status.as_str(),
+            "[task_sources:route] cross-source duplicate; skipping (existing card covers item)"
+        );
+        return Ok(Decision::Deduped(existing.id.clone()));
+    }
+
+    // (2) Same-source refresh of our own prior card.
+    if let Some(prior) = own_prior {
+        if is_replaceable(&location, prior) {
+            let _ = todo_remove(&location, &prior.id);
+            tracing::debug!(
+                source_id = %source.id,
+                external_id = %identity.external_id,
+                stale_card_id = %prior.id,
+                "[task_sources:route] replacing own stale Todo card with refreshed ingest"
+            );
+        } else {
+            tracing::info!(
+                source_id = %source.id,
+                external_id = %identity.external_id,
+                card_id = %prior.id,
+                status = prior.status.as_str(),
+                "[task_sources:route] own card is in-flight/resolved; skipping refresh"
+            );
+            return Ok(Decision::Deduped(prior.id.clone()));
+        }
+    }
+
+    // (3) New item (or our prior Todo was just swept) → create a fresh card.
+    let card_id = create_card(config, source, enriched, &location)?;
+    Ok(Decision::Created(card_id))
+}
+
+/// Remove every still-untouched (`Todo`, unclaimed) card belonging to
+/// `source_id` from the board. Cards that have progressed or are claimed by a
+/// run are preserved so deleting a source never destroys in-flight work.
+/// Returns `(removed, preserved)` counts.
+pub fn remove_source_cards(config: &Config, source_id: &str) -> Result<(usize, usize), String> {
+    let location = board_location(config);
+    let cards = todos::ops::list(&location)
+        .map_err(|e| format!("[task_sources:route] failed to list board: {e}"))?
+        .cards;
+
+    let mut removed = 0usize;
+    let mut preserved = 0usize;
+    for card in &cards {
+        let owned = card
+            .source_metadata
+            .as_ref()
+            .and_then(|m| m.get("source_id"))
+            .and_then(|v| v.as_str())
+            == Some(source_id);
+        if !owned {
+            continue;
+        }
+        if is_replaceable(&location, card) {
+            if todo_remove(&location, &card.id).is_ok() {
+                removed += 1;
+            }
+        } else {
+            preserved += 1;
+        }
+    }
+
+    tracing::info!(
+        source_id,
+        removed,
+        preserved,
+        "[task_sources:route] cleaned board cards for deleted source"
+    );
+    Ok((removed, preserved))
+}
+
+/// Build and append a fresh card for `enriched` on the board. Returns the new
+/// card id. (Dedup/stale-card handling happens in [`decide_and_add`].)
+fn create_card(
+    config: &Config,
+    source: &TaskSource,
+    enriched: &EnrichedTask,
+    location: &BoardLocation,
+) -> Result<String, String> {
     let task = &enriched.task;
     let label = provider_label(&task.provider);
     let content = format!("[{label}] {}", task.title.trim());
@@ -135,7 +282,7 @@ fn add_card(
         .map(str::to_string);
 
     let snapshot = todo_add(
-        &location,
+        location,
         &content,
         CardPatch {
             notes,
@@ -299,6 +446,7 @@ pub fn board_cards(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::openhuman::agent::task_board::TaskCardStatus;
     use crate::openhuman::task_sources::types::ProviderSlug;
     use crate::openhuman::task_sources::NormalizedTask;
     use chrono::Utc;
@@ -408,7 +556,7 @@ mod tests {
         src.assigned_executor = Some("  agent-x  ".into());
         let e = enriched("123", Some("https://github.com/octo/repo/issues/123"), 0.7);
 
-        add_card(&config, &src, &e, None).expect("add_card succeeds");
+        create_card(&config, &src, &e, &board_location(&config)).expect("create_card succeeds");
 
         let cards = board_cards(&config).expect("board_cards");
         assert_eq!(cards.len(), 1);
@@ -450,7 +598,7 @@ mod tests {
             enriched_at: Utc::now(),
         };
 
-        add_card(&config, &src, &e, None).expect("add_card succeeds");
+        create_card(&config, &src, &e, &board_location(&config)).expect("create_card succeeds");
 
         let cards = board_cards(&config).expect("board_cards");
         let card = &cards[0];
@@ -473,7 +621,7 @@ mod tests {
         src.assigned_executor = Some("   ".into());
         let e = enriched("9", None, 0.4);
 
-        add_card(&config, &src, &e, None).expect("add_card succeeds");
+        create_card(&config, &src, &e, &board_location(&config)).expect("create_card succeeds");
 
         let cards = board_cards(&config).expect("board_cards");
         assert_eq!(cards.len(), 1);
@@ -498,5 +646,196 @@ mod tests {
         let meta = build_source_metadata(&src, &e);
         assert!(meta.get("repo").is_none());
         assert_eq!(meta["source_id"], json!("ts-1"));
+    }
+
+    // ── Dedup behavior ──────────────────────────────────────────────────
+
+    /// A `TodoOnly` source with the given id, so dedup tests never reach the
+    /// triage dispatch path.
+    fn source_with_id(id: &str) -> TaskSource {
+        let mut src = github_source(Some("octo/repo"));
+        src.id = id.into();
+        src.target = SourceTarget::TodoOnly;
+        src
+    }
+
+    fn set_status(config: &Config, card_id: &str, status: TaskCardStatus) {
+        let location = board_location(config);
+        let mut cards = todos::ops::list(&location).expect("list").cards;
+        for c in &mut cards {
+            if c.id == card_id {
+                c.status = status.clone();
+            }
+        }
+        todos::ops::replace(&location, cards).expect("replace");
+    }
+
+    #[test]
+    fn cross_source_duplicate_skips_second_card() {
+        let (_tmp, config) = temp_config();
+        let src_a = source_with_id("source-a");
+        let src_b = source_with_id("source-b");
+        let e = enriched("42", Some("https://github.com/octo/repo/issues/42"), 0.5);
+
+        // Source A creates the card.
+        let first = decide_and_add(&config, &src_a, &e, None).expect("first add");
+        let card_a = match first {
+            Decision::Created(id) => id,
+            Decision::Deduped(_) => panic!("first ingest should create"),
+        };
+
+        // Source B ingests the same upstream item → dedup to A's card.
+        let second = decide_and_add(&config, &src_b, &e, None).expect("second add");
+        match second {
+            Decision::Deduped(existing) => assert_eq!(existing, card_a),
+            Decision::Created(_) => panic!("cross-source duplicate must not create a second card"),
+        }
+        assert_eq!(board_cards(&config).unwrap().len(), 1, "exactly one card");
+    }
+
+    #[test]
+    fn recreated_source_does_not_duplicate() {
+        // A source deleted and recreated gets a new id and an empty ledger
+        // (own_prior = None), but the old card is still on the board.
+        let (_tmp, config) = temp_config();
+        let old = source_with_id("old-uuid");
+        let new = source_with_id("new-uuid");
+        let e = enriched("7", Some("https://github.com/octo/repo/issues/7"), 0.4);
+
+        decide_and_add(&config, &old, &e, None).expect("old add");
+        let second = decide_and_add(&config, &new, &e, None).expect("new add");
+        assert!(matches!(second, Decision::Deduped(_)));
+        assert_eq!(board_cards(&config).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn same_source_edit_replaces_untouched_todo_card() {
+        let (_tmp, config) = temp_config();
+        let src = source_with_id("source-a");
+        let e = enriched("9", Some("https://github.com/octo/repo/issues/9"), 0.4);
+
+        let card1 = match decide_and_add(&config, &src, &e, None).expect("add") {
+            Decision::Created(id) => id,
+            Decision::Deduped(_) => panic!("first add creates"),
+        };
+
+        // Edited re-ingest with our own prior card id → replace (still Todo).
+        let card2 = match decide_and_add(&config, &src, &e, Some(&card1)).expect("edit") {
+            Decision::Created(id) => id,
+            Decision::Deduped(_) => panic!("untouched todo should be replaced"),
+        };
+        assert_ne!(card1, card2, "a fresh card replaced the old one");
+        assert_eq!(board_cards(&config).unwrap().len(), 1, "no accumulation");
+    }
+
+    #[test]
+    fn inflight_card_is_not_replaced_on_edit() {
+        let (_tmp, config) = temp_config();
+        let src = source_with_id("source-a");
+        let e = enriched("11", Some("https://github.com/octo/repo/issues/11"), 0.4);
+
+        let card1 = match decide_and_add(&config, &src, &e, None).expect("add") {
+            Decision::Created(id) => id,
+            Decision::Deduped(_) => panic!("first add creates"),
+        };
+        set_status(&config, &card1, TaskCardStatus::InProgress);
+
+        // Edited re-ingest must NOT yank the in-flight card.
+        let outcome = decide_and_add(&config, &src, &e, Some(&card1)).expect("edit");
+        match outcome {
+            Decision::Deduped(existing) => assert_eq!(existing, card1),
+            Decision::Created(_) => panic!("must not replace an in-flight card"),
+        }
+        let cards = board_cards(&config).unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(
+            cards[0].status,
+            TaskCardStatus::InProgress,
+            "left untouched"
+        );
+    }
+
+    #[test]
+    fn cross_source_skip_does_not_remove_progressed_duplicate() {
+        // An existing progressed card from another source blocks a new card and
+        // is never removed.
+        let (_tmp, config) = temp_config();
+        let src_a = source_with_id("source-a");
+        let src_b = source_with_id("source-b");
+        let e = enriched("13", Some("https://github.com/octo/repo/issues/13"), 0.5);
+
+        let card_a = match decide_and_add(&config, &src_a, &e, None).expect("add") {
+            Decision::Created(id) => id,
+            Decision::Deduped(_) => unreachable!(),
+        };
+        set_status(&config, &card_a, TaskCardStatus::AwaitingApproval);
+
+        let outcome = decide_and_add(&config, &src_b, &e, None).expect("add b");
+        assert!(matches!(outcome, Decision::Deduped(_)));
+        let cards = board_cards(&config).unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].status, TaskCardStatus::AwaitingApproval);
+    }
+
+    #[test]
+    fn active_run_blocks_replacement() {
+        let (_tmp, config) = temp_config();
+        let src = source_with_id("source-a");
+        let e = enriched("15", Some("https://github.com/octo/repo/issues/15"), 0.4);
+
+        let card1 = match decide_and_add(&config, &src, &e, None).expect("add") {
+            Decision::Created(id) => id,
+            Decision::Deduped(_) => unreachable!(),
+        };
+        // Card is still Todo, but a run claims it → must not be removed.
+        let location = board_location(&config);
+        runs::create_run(&location, "run-1", &card1, "default").expect("create_run");
+
+        let outcome = decide_and_add(&config, &src, &e, Some(&card1)).expect("edit");
+        match outcome {
+            Decision::Deduped(existing) => assert_eq!(existing, card1),
+            Decision::Created(_) => panic!("claimed card must not be replaced"),
+        }
+        assert_eq!(board_cards(&config).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn remove_source_cards_drops_todo_preserves_progressed() {
+        let (_tmp, config) = temp_config();
+        let src = source_with_id("source-a");
+        let todo = enriched("20", Some("https://github.com/octo/repo/issues/20"), 0.4);
+        let busy = enriched("21", Some("https://github.com/octo/repo/issues/21"), 0.4);
+
+        decide_and_add(&config, &src, &todo, None).expect("add todo");
+        let busy_id = match decide_and_add(&config, &src, &busy, None).expect("add busy") {
+            Decision::Created(id) => id,
+            Decision::Deduped(_) => unreachable!(),
+        };
+        set_status(&config, &busy_id, TaskCardStatus::InProgress);
+
+        let (removed, preserved) = remove_source_cards(&config, "source-a").expect("cleanup");
+        assert_eq!(removed, 1, "the untouched Todo card is removed");
+        assert_eq!(preserved, 1, "the in-flight card is preserved");
+        let cards = board_cards(&config).unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].id, busy_id);
+    }
+
+    #[test]
+    fn remove_source_cards_ignores_other_sources() {
+        let (_tmp, config) = temp_config();
+        let a = source_with_id("source-a");
+        let b = source_with_id("source-b");
+        decide_and_add(&config, &a, &enriched("30", None, 0.4), None).expect("a");
+        decide_and_add(&config, &b, &enriched("31", None, 0.4), None).expect("b");
+
+        let (removed, _) = remove_source_cards(&config, "source-a").expect("cleanup");
+        assert_eq!(removed, 1);
+        let cards = board_cards(&config).unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(
+            cards[0].source_metadata.as_ref().unwrap()["source_id"],
+            json!("source-b")
+        );
     }
 }

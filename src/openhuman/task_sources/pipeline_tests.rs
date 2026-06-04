@@ -175,6 +175,38 @@ async fn edited_task_reroutes_as_new_card() {
 }
 
 #[tokio::test]
+async fn two_sources_same_item_routes_once() {
+    let _guard = registry_lock();
+    register_provider(Arc::new(StubProvider {
+        tasks: vec![canned_task("100", "Shared item", "2025-01-01T00:00:00Z")],
+    }));
+
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp);
+    // Two distinct sources covering the same upstream item (e.g. overlapping
+    // filters on the same repo) — different source_ids.
+    let source_a = add_github_source(&config);
+    let source_b = add_github_source(&config);
+    assert_ne!(source_a.id, source_b.id);
+
+    let first = run_source_once(&config, &source_a, FetchReason::Manual).await;
+    assert_eq!(first.routed, 1);
+
+    // Source B sees the same item → cross-source dedup, no second card.
+    let second = run_source_once(&config, &source_b, FetchReason::Manual).await;
+    assert_eq!(second.routed, 0, "second source must not route a duplicate");
+    assert_eq!(second.skipped_dupe, 1);
+
+    let cards = route::board_cards(&config).unwrap();
+    assert_eq!(cards.len(), 1, "exactly one card for the shared item");
+
+    // Source B's ledger still records the item (pointing at the shared card),
+    // so it won't re-evaluate it every poll.
+    let ingested_b = store::list_ingested(&config, &source_b.id, 10).unwrap();
+    assert_eq!(ingested_b.len(), 1);
+}
+
+#[tokio::test]
 async fn missing_provider_surfaces_error_in_outcome() {
     let _guard = registry_lock();
     let tmp = TempDir::new().unwrap();
