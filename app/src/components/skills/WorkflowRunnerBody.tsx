@@ -1037,19 +1037,19 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
             )}
             {description && (
               <>
-                <div className="rounded border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-900 p-3">
-                  <p className="text-sm text-stone-700 dark:text-stone-300 whitespace-pre-wrap">
-                    {description.when_to_use}
-                  </p>
-                </div>
-
-                {/* Inputs + Run + Schedule in one box — fill the inputs once,
-                    then either Run now or save a recurring schedule that
-                    snapshots them. */}
+                {/* Description + Inputs + Run + Schedule in one box — read
+                    what it does, fill the inputs once, then either Run now or
+                    save a recurring schedule that snapshots them. */}
                 <div
                   id="workflow-schedule"
                   className="space-y-4 rounded-2xl border border-stone-200/90 dark:border-stone-700/80 bg-gradient-to-br from-stone-50 via-white to-stone-100 dark:from-stone-900 dark:via-stone-900 dark:to-stone-800/80 px-4 py-4 shadow-soft"
                 >
+                  <div className="rounded border border-stone-200 dark:border-stone-700 bg-white/70 dark:bg-stone-900/60 p-3">
+                    <p className="text-sm text-stone-700 dark:text-stone-300 whitespace-pre-wrap">
+                      {description.when_to_use}
+                    </p>
+                  </div>
+
                 {description.inputs.length === 0 ? (
                   <p className="text-sm italic text-stone-500 dark:text-stone-400">
                     {t('settings.skillsRunner.noInputs')}
