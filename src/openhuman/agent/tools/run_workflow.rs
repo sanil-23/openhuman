@@ -137,10 +137,31 @@ fn parse_wait_seconds(args: &serde_json::Value) -> u64 {
 }
 
 /// Fingerprint a (workflow_id, inputs) pair for the re-entrancy guard.
+/// Object keys are sorted recursively so logically identical inputs
+/// produce the same key regardless of insertion order.
 fn reentrancy_key(workflow_id: &str, inputs: &Option<serde_json::Value>) -> String {
+    fn canonicalize(v: &serde_json::Value) -> serde_json::Value {
+        match v {
+            serde_json::Value::Object(map) => {
+                let mut sorted: Vec<_> = map.iter().collect();
+                sorted.sort_by_key(|(k, _)| k.clone());
+                serde_json::Value::Object(
+                    sorted
+                        .into_iter()
+                        .map(|(k, v)| (k.clone(), canonicalize(v)))
+                        .collect(),
+                )
+            }
+            serde_json::Value::Array(arr) => {
+                serde_json::Value::Array(arr.iter().map(canonicalize).collect())
+            }
+            other => other.clone(),
+        }
+    }
+
     let inputs_repr = inputs
         .as_ref()
-        .map(|v| v.to_string())
+        .map(|v| canonicalize(v).to_string())
         .unwrap_or_else(|| "null".to_string());
     format!("{workflow_id}\u{1}{inputs_repr}")
 }
