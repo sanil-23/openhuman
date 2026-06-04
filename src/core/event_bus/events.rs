@@ -961,7 +961,7 @@ impl DomainEvent {
             Self::WorkflowLoaded { .. }
             | Self::WorkflowStopped { .. }
             | Self::WorkflowStartFailed { .. }
-            | Self::WorkflowExecuted { .. } => "skill",
+            | Self::WorkflowExecuted { .. } => "workflow",
 
             Self::ToolExecutionStarted { .. } | Self::ToolExecutionCompleted { .. } => "tool",
 

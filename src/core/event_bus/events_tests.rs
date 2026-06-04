@@ -215,20 +215,20 @@ fn all_variants_have_correct_domain() {
                 skill_id: "s".into(),
                 runtime: "nodejs".into(),
             },
-            "skill",
+            "workflow",
         ),
         (
             DomainEvent::WorkflowStopped {
                 skill_id: "s".into(),
             },
-            "skill",
+            "workflow",
         ),
         (
             DomainEvent::WorkflowStartFailed {
                 skill_id: "s".into(),
                 error: "e".into(),
             },
-            "skill",
+            "workflow",
         ),
         (
             DomainEvent::WorkflowExecuted {
@@ -239,7 +239,7 @@ fn all_variants_have_correct_domain() {
                 success: true,
                 elapsed_ms: 0,
             },
-            "skill",
+            "workflow",
         ),
         // Tool
         (
