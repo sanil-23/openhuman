@@ -228,6 +228,11 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
   const [searchParams, setSearchParams] = useSearchParams();
   const initialSkillId = searchParams.get('workflow') ?? '';
   const [selectedSkillId, setSelectedSkillId] = useState(initialSkillId);
+  // Locked mode: opened from a specific workflow's "Schedule" action
+  // (`?workflow=<id>&focus=schedule`). The workflow is fixed to the one it was
+  // opened from — the picker is replaced with a read-only label so the user
+  // just schedules *that* workflow.
+  const locked = searchParams.get('focus') === 'schedule' && !!searchParams.get('workflow');
   const [description, setDescription] = useState<SkillDescription | null>(null);
   const [descLoading, setDescLoading] = useState(false);
   const [descError, setDescError] = useState<string | null>(null);
@@ -903,24 +908,32 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
           >
             {t('settings.skillsRunner.skill')}
           </label>
-          <select
-            id="skills-runner-skill"
-            value={selectedSkillId}
-            onChange={(e) => setSelectedSkillId(e.target.value)}
-            disabled={skillsLoading || skillsError !== null}
-            className="w-full rounded border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 px-3 py-2 text-sm text-stone-900 dark:text-stone-100"
-          >
-            <option value="">
-              {skillsLoading
-                ? t('settings.skillsRunner.loadingSkills')
-                : t('settings.skillsRunner.selectSkill')}
-            </option>
-            {skills.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name || s.id}
+          {locked ? (
+            <div
+              data-testid="skills-runner-skill-locked"
+              className="w-full rounded border border-stone-300 dark:border-stone-600 bg-stone-50 dark:bg-stone-800/60 px-3 py-2 text-sm font-medium text-stone-900 dark:text-stone-100">
+              {skills.find((s) => s.id === selectedSkillId)?.name || selectedSkillId}
+            </div>
+          ) : (
+            <select
+              id="skills-runner-skill"
+              value={selectedSkillId}
+              onChange={(e) => setSelectedSkillId(e.target.value)}
+              disabled={skillsLoading || skillsError !== null}
+              className="w-full rounded border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 px-3 py-2 text-sm text-stone-900 dark:text-stone-100"
+            >
+              <option value="">
+                {skillsLoading
+                  ? t('settings.skillsRunner.loadingSkills')
+                  : t('settings.skillsRunner.selectSkill')}
               </option>
-            ))}
-          </select>
+              {skills.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name || s.id}
+                </option>
+              ))}
+            </select>
+          )}
           {skillsError && (
             <p className="text-xs text-red-600 dark:text-red-400 mt-1">
               {t('settings.skillsRunner.error.listSkills')} {skillsError}
@@ -1004,7 +1017,8 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                   </div>
                 )}
 
-                {/* Run Now */}
+                {/* Run Now (hidden when opened in locked schedule-only mode) */}
+                {!locked && (
                 <div className="pt-2 flex flex-col gap-2">
                   <button
                     type="button"
@@ -1065,6 +1079,7 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                     );
                   })()}
                 </div>
+                )}
 
                 {/* Schedule (cron-driven recurring) */}
                 <div
