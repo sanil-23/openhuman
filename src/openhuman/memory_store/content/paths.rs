@@ -413,7 +413,7 @@ mod tests {
         );
         assert_eq!(
             p,
-            "wiki/summaries/source-notion-conn1/docs/notion-conn1-pageA/v-1717500000000/L2/summary-1700000000000-L2-deadbeef.md"
+            "wiki/summaries/source-notion-conn1/docs/notion-conn1-pagea/v-1717500000000/L2/summary-1700000000000-L2-deadbeef.md"
         );
     }
 
@@ -430,7 +430,7 @@ mod tests {
             },
         );
         assert!(
-            p.contains("/docs/notion-conn1-pageB/v-unversioned/L1/"),
+            p.contains("/docs/notion-conn1-pageb/v-unversioned/L1/"),
             "got {p}"
         );
     }
