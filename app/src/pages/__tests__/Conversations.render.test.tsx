@@ -19,6 +19,7 @@ import { CoreRpcError } from '../../services/coreRpcClient';
 import agentProfileReducer from '../../store/agentProfileSlice';
 import chatRuntimeReducer, {
   setInferenceStatusForThread,
+  setTaskBoardForThread,
   setToolTimelineForThread,
 } from '../../store/chatRuntimeSlice';
 import socketReducer from '../../store/socketSlice';
@@ -1658,5 +1659,57 @@ describe('Conversations — open-session resume (View work)', () => {
     // filter) and loads its messages.
     await waitFor(() => expect(store.getState().thread.selectedThreadId).toBe('task-open-1'));
     await waitFor(() => expect(mockGetThreadMessages).toHaveBeenCalled());
+  });
+
+  it("View work on a selected task board opens that card's session thread", async () => {
+    const thread = makeThread({ id: 'board-thread', title: 'Board thread' });
+    mockGetThreads.mockResolvedValue({ threads: [thread], count: 1 });
+
+    const store = buildStore({ thread: selectedThreadState(thread) });
+
+    const { default: Conversations } = await import('../Conversations');
+    await act(async () => {
+      render(
+        <Provider store={store}>
+          <MemoryRouter initialEntries={['/conversations']}>
+            <Conversations />
+          </MemoryRouter>
+        </Provider>
+      );
+    });
+    // Let the mount-resume effect settle, then seed the selected thread's task
+    // board with a card that has a live session (seeding before mount gets
+    // clobbered by turn-state hydration).
+    await screen.findByPlaceholderText('How can I help you today?');
+    const selectedId = store.getState().thread.selectedThreadId ?? 'board-thread';
+    await act(async () => {
+      store.dispatch(
+        setTaskBoardForThread({
+          threadId: selectedId,
+          board: {
+            threadId: selectedId,
+            updatedAt: '',
+            cards: [
+              {
+                id: 'tc1',
+                title: 'Worked card',
+                status: 'in_progress',
+                order: 0,
+                updatedAt: '',
+                sessionThreadId: 'sess-99',
+              },
+            ],
+          },
+        })
+      );
+    });
+
+    const viewBtn = await screen.findByTitle('View work');
+    await act(async () => {
+      fireEvent.click(viewBtn);
+    });
+
+    // onViewSession navigates the chat view to the card's session thread.
+    await waitFor(() => expect(store.getState().thread.selectedThreadId).toBe('sess-99'));
   });
 });
