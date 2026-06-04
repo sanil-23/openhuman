@@ -628,7 +628,10 @@ async fn agent_task_board_store_normalizes_persists_and_surfaces_errors() {
         .cards;
     assert_eq!(loaded[0].approval_mode, Some(TaskApprovalMode::Required));
     // …and the normalized value survives a reload from disk.
-    assert_eq!(loaded[0].session_thread_id.as_deref(), Some("task-sess-owned"));
+    assert_eq!(
+        loaded[0].session_thread_id.as_deref(),
+        Some("task-sess-owned")
+    );
 
     assert!(store.delete("thread-owned").expect("delete present"));
     assert!(!store.delete("thread-owned").expect("delete missing"));
