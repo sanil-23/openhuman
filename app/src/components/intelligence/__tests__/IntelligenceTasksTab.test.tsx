@@ -24,6 +24,7 @@ const hoisted = vi.hoisted(() => ({
   todosAdd: vi.fn(),
   todosEdit: vi.fn(),
   todosUpdateStatus: vi.fn(),
+  todosSetSessionThread: vi.fn(),
   todosRemove: vi.fn(),
   selectorResult: {
     chatRuntime: { taskBoardByThread: {} as Record<string, unknown> },
@@ -52,6 +53,7 @@ vi.mock('../../../services/api/todosApi', () => ({
     add: hoisted.todosAdd,
     edit: hoisted.todosEdit,
     updateStatus: hoisted.todosUpdateStatus,
+    setSessionThread: hoisted.todosSetSessionThread,
     remove: hoisted.todosRemove,
   },
 }));
@@ -172,6 +174,7 @@ describe('IntelligenceTasksTab', () => {
     hoisted.todosAdd.mockReset();
     hoisted.todosEdit.mockReset();
     hoisted.todosUpdateStatus.mockReset();
+    hoisted.todosSetSessionThread.mockReset();
     hoisted.todosRemove.mockReset();
     hoisted.selectorResult.chatRuntime.taskBoardByThread = {};
     hoisted.selectorResult.thread.threads = [];
@@ -208,6 +211,11 @@ describe('IntelligenceTasksTab', () => {
       createdAt: '2026-01-01T00:00:00Z',
     });
     hoisted.chatSend.mockResolvedValue(undefined);
+    // The "Work" flow links the card to its session thread after starting it
+    // (`todosApi.setSessionThread(...).catch(...)`), so resolve it to a board
+    // by default — otherwise the awaited `.catch()` chain stalls the handler
+    // before it reaches chatSend.
+    hoisted.todosSetSessionThread.mockResolvedValue(makeBoard('user-tasks', []));
     hoisted.todosList.mockImplementation((threadId: string) =>
       Promise.resolve(makeBoard(threadId, []))
     );
@@ -466,14 +474,18 @@ describe('IntelligenceTasksTab', () => {
       'personal-1',
       'in_progress'
     );
-    expect(hoisted.chatSend).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: 'thread-agent-task',
-        message: expect.stringContaining('Acceptance criteria:'),
-        model: 'reasoning-v1',
-        profileId: 'agent-profile-1',
-        locale: 'en',
-      })
+    // chatSend is the last call in the work flow, after an extra `await`
+    // (session-thread link), so wait for it rather than asserting synchronously.
+    await waitFor(() =>
+      expect(hoisted.chatSend).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: 'thread-agent-task',
+          message: expect.stringContaining('Acceptance criteria:'),
+          model: 'reasoning-v1',
+          profileId: 'agent-profile-1',
+          locale: 'en',
+        })
+      )
     );
   });
 

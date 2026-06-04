@@ -21,6 +21,13 @@ vi.mock('../../../utils/tauriCommands', () => ({
   openhumanTaskSourcesUpdate: vi.fn(),
 }));
 
+// TaskSourceControls navigates to the settings page via useNavigate(); these
+// tests render the board without a <Router>, so stub navigation to a no-op.
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return { ...actual, useNavigate: () => vi.fn() };
+});
+
 function card(partial: Partial<TaskBoardCard>): TaskBoardCard {
   return {
     id: 'c1',
