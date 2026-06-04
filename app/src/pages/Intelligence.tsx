@@ -43,38 +43,28 @@ const isVisibleTab = (tab: string | null | undefined): tab is IntelligenceTab =>
 export default function Intelligence() {
   const { t } = useT();
 
-  // Honour `?tab=<id>` so deep links (e.g. the /workflows redirect) can land
-  // directly on a specific tab; default to Tasks otherwise.
+  // Tab is URL-backed (`/intelligence?tab=…`) so navigating away — e.g. to
+  // Settings → Task Sources from the Agent Tasks tab — and coming back via
+  // browser-back restores the same tab instead of resetting to Memory.
+  // `replace` so switching tabs doesn't stack history entries.
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialTab: IntelligenceTab = (() => {
-    const requested = searchParams.get('tab');
-    return isVisibleTab(requested) ? requested : 'tasks';
-  })();
-  const [activeTab, setActiveTab] = useState<IntelligenceTab>(initialTab);
-
-  // Persist the active tab to `?tab=` so it survives refresh AND is restored
-  // when navigating back here (e.g. Back from the workflow runner lands on the
-  // Workflows tab, not the Tasks default). `replace` keeps tab clicks out of
-  // the history stack.
-  const selectTab = useCallback(
+  const tabParam = searchParams.get('tab');
+  const activeTab: IntelligenceTab =
+    tabParam && ['memory', 'subconscious', 'tasks', 'workflows', 'council'].includes(tabParam)
+      ? (tabParam as IntelligenceTab)
+      : 'memory';
+  const setActiveTab = useCallback(
     (tab: IntelligenceTab) => {
-      setActiveTab(tab);
-      const next = new URLSearchParams(searchParams);
-      next.set('tab', tab);
-      setSearchParams(next, { replace: true });
+      setSearchParams(
+        prev => {
+          prev.set('tab', tab);
+          return prev;
+        },
+        { replace: true }
+      );
     },
-    [searchParams, setSearchParams]
+    [setSearchParams]
   );
-
-  // Follow the URL when it changes under us (back/forward, deep links).
-  // Validated against the visible set so a stale/forged `?tab=council` can't
-  // open a dev-only tab in prod.
-  useEffect(() => {
-    const requested = searchParams.get('tab');
-    if (isVisibleTab(requested)) {
-      setActiveTab(requested);
-    }
-  }, [searchParams]);
 
   // The legacy header pills (system-status + Ingesting/Queued chips) were
   // sourced from `useConsciousItems` + `useMemoryIngestionStatus`. They are
