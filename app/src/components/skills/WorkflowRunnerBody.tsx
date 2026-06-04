@@ -1054,6 +1054,13 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                   </p>
                 </div>
 
+                {/* Inputs + Run + Schedule in one box — fill the inputs once,
+                    then either Run now or save a recurring schedule that
+                    snapshots them. */}
+                <div
+                  id="workflow-schedule"
+                  className="space-y-4 rounded-2xl border border-stone-200/90 dark:border-stone-700/80 bg-gradient-to-br from-stone-50 via-white to-stone-100 dark:from-stone-900 dark:via-stone-900 dark:to-stone-800/80 px-4 py-4 shadow-soft"
+                >
                 {description.inputs.length === 0 ? (
                   <p className="text-sm italic text-stone-500 dark:text-stone-400">
                     {t('settings.skillsRunner.noInputs')}
@@ -1109,14 +1116,8 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
                   </div>
                 )}
 
-                {/* Run now + Schedule in one box — both act on the same
-                    inputs above. Run fires immediately; the schedule row saves
-                    a recurring cron with those inputs snapshotted. */}
-                <div
-                  id="workflow-schedule"
-                  className="space-y-4 rounded-2xl border border-stone-200/90 dark:border-stone-700/80 bg-gradient-to-br from-stone-50 via-white to-stone-100 dark:from-stone-900 dark:via-stone-900 dark:to-stone-800/80 px-4 py-4 shadow-soft"
-                >
-                  <div className="flex flex-col gap-2">
+                {/* Run now — fires immediately with the inputs above. */}
+                <div className="flex flex-col gap-2">
                   <button
                     type="button"
                     onClick={() => void handleRun()}
