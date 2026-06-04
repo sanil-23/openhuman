@@ -113,9 +113,14 @@ pub(crate) fn discover_skills_inner(
 }
 
 fn user_roots(home: &Path) -> Vec<PathBuf> {
+    // `workflows/` is the current layout (create writes here); the `skills/`
+    // roots are still scanned for back-compat with installs created before the
+    // skills→workflows rename. Order matters: `workflows/` is scanned last so a
+    // same-named entry there wins over a legacy `skills/` one.
     vec![
         home.join(".openhuman").join("skills"),
         home.join(".agents").join("skills"),
+        home.join(".openhuman").join("workflows"),
     ]
 }
 
@@ -123,6 +128,7 @@ fn project_roots(workspace: &Path) -> Vec<PathBuf> {
     vec![
         workspace.join(".openhuman").join("skills"),
         workspace.join(".agents").join("skills"),
+        workspace.join(".openhuman").join("workflows"),
     ]
 }
 

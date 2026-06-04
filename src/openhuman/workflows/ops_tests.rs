@@ -570,7 +570,7 @@ fn create_skill_user_scope_scaffolds_skill_md_and_resource_dirs() {
     let skill_root = home
         .path()
         .join(".openhuman")
-        .join("skills")
+        .join("workflows")
         .join("my-demo-workflow");
     assert!(skill_root.join(SKILL_MD).is_file());
     for sub in RESOURCE_DIRS {
@@ -716,7 +716,7 @@ fn create_skill_project_scope_writes_under_workspace_when_trusted() {
     assert!(ws
         .path()
         .join(".openhuman")
-        .join("skills")
+        .join("workflows")
         .join("ws-skill")
         .join(SKILL_MD)
         .is_file());
@@ -1047,6 +1047,32 @@ fn uninstall_skill_removes_user_scope_dir() {
 
     let after = discover_skills(Some(home.path()), None, false);
     assert!(after.is_empty(), "discovery should no longer see it");
+}
+
+/// The current user-scope layout is `~/.openhuman/workflows/<id>/SKILL.md`
+/// (create writes here post skills→workflows rename). Discovery must surface
+/// it as a User-scope workflow.
+#[test]
+fn discover_reads_user_scope_workflows_dir() {
+    let home = tempfile::tempdir().unwrap();
+    write(
+        &home
+            .path()
+            .join(".openhuman")
+            .join("workflows")
+            .join("inbox-triage")
+            .join("SKILL.md"),
+        "---\nname: inbox-triage\ndescription: triage the inbox\n---\n\nbody\n",
+    );
+    let found = discover_skills(Some(home.path()), None, false);
+    assert_eq!(
+        found.len(),
+        1,
+        "workflow under .openhuman/workflows/ must load"
+    );
+    assert_eq!(found[0].name, "inbox-triage");
+    assert_eq!(found[0].scope, WorkflowScope::User);
+    assert!(!found[0].legacy);
 }
 
 /// Names containing path separators or traversal sequences are rejected

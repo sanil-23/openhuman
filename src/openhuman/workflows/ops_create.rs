@@ -152,17 +152,17 @@ pub(crate) fn create_skill_inner(
         WorkflowScope::User => {
             let home =
                 home_dir.ok_or_else(|| "could not resolve user home directory".to_string())?;
-            home.join(".openhuman").join("skills")
+            home.join(".openhuman").join("workflows")
         }
         WorkflowScope::Project => {
             if !is_workspace_trusted(workspace_dir) {
                 return Err(format!(
-                    "workspace {} is not trusted; create {}/.openhuman/trust to enable project-scope skills",
+                    "workspace {} is not trusted; create {}/.openhuman/trust to enable project-scope workflows",
                     workspace_dir.display(),
                     workspace_dir.display(),
                 ));
             }
-            workspace_dir.join(".openhuman").join("skills")
+            workspace_dir.join(".openhuman").join("workflows")
         }
         WorkflowScope::Legacy => {
             return Err(

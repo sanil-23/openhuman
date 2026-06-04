@@ -310,11 +310,11 @@ mod tests {
     #[test]
     fn load_skills_reads_runtime_skill_prompt_and_inputs() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let sd = tmp.path().join("skills").join("github-issue-crusher");
+        let sd = tmp.path().join("skills").join("issue-crusher");
         std::fs::create_dir_all(&sd).unwrap();
         std::fs::write(
             sd.join("skill.toml"),
-            "id = \"github-issue-crusher\"\nwhen_to_use = \"fix a github issue\"\n\
+            "id = \"issue-crusher\"\nwhen_to_use = \"fix a github issue\"\n\
              [[inputs]]\nname = \"repo\"\ndescription = \"owner/name\"\nrequired = true\n\
              [[inputs]]\nname = \"issue\"\ndescription = \"issue #\"\nrequired = true\ntype = \"integer\"\n",
         )
@@ -324,7 +324,7 @@ mod tests {
         let skills = load_workflows(tmp.path());
         let s = skills
             .iter()
-            .find(|s| s.definition.id == "github-issue-crusher")
+            .find(|s| s.definition.id == "issue-crusher")
             .expect("runtime skill loaded");
         assert_eq!(s.inputs.len(), 2);
         assert_eq!(s.inputs[1].kind.as_deref(), Some("integer"));
@@ -332,6 +332,26 @@ mod tests {
             PromptSource::Inline(p) => assert!(p.contains("Fix it.")),
             other => panic!("expected inline prompt, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn prune_removes_legacy_bundled_only() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skills = tmp.path().join("skills");
+        // A legacy bundled id + a user-authored workflow that must survive.
+        for id in ["github-issue-crusher", "my-workflow"] {
+            std::fs::create_dir_all(skills.join(id)).unwrap();
+            std::fs::write(skills.join(id).join("SKILL.md"), "# x").unwrap();
+        }
+        prune_legacy_default_workflows(tmp.path());
+        assert!(
+            !skills.join("github-issue-crusher").exists(),
+            "legacy bundled id should be pruned"
+        );
+        assert!(
+            skills.join("my-workflow").exists(),
+            "user-authored workflow must be left untouched"
+        );
     }
 
     #[test]
