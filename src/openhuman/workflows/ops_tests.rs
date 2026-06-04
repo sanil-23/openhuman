@@ -608,6 +608,74 @@ fn create_skill_rejects_slug_collision() {
 }
 
 #[test]
+fn edit_updates_workflow_that_still_lives_under_legacy_skills_root() {
+    // Regression: a workflow created before the skills→workflows rename lives
+    // at `~/.openhuman/skills/<slug>/SKILL.md`. Editing it (overwrite=true)
+    // must resolve that legacy location and update it in place — NOT fail with
+    // "cannot update workflow '<slug>': it does not exist at
+    // ~/.openhuman/workflows/<slug>" (which only checked the new root).
+    let home = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+
+    let legacy_dir = home
+        .path()
+        .join(".openhuman")
+        .join("skills")
+        .join("slack-to-notion");
+    write(
+        &legacy_dir.join(SKILL_MD),
+        "---\nname: slack-to-notion\ndescription: Old description.\n---\n\nOriginal procedure body.\n",
+    );
+
+    let params = CreateWorkflowParams {
+        name: "slack-to-notion".to_string(),
+        description: "Updated description.".to_string(),
+        when_to_use: None,
+        scope: WorkflowScope::User,
+        overwrite: true,
+        ..Default::default()
+    };
+    let updated = create_workflow_inner(Some(home.path()), ws.path(), params)
+        .expect("editing a legacy-located workflow should succeed");
+
+    assert_eq!(updated.name, "slack-to-notion");
+    assert_eq!(updated.scope, WorkflowScope::User);
+    assert_eq!(updated.description, "Updated description.");
+
+    // Updated in place under the legacy dir, migrated to WORKFLOW.md...
+    let workflow_md = legacy_dir.join(WORKFLOW_MD);
+    assert!(
+        workflow_md.is_file(),
+        "WORKFLOW.md must be written into the legacy skills/ dir"
+    );
+    // ...with the stale SKILL.md retired so discovery sees no duplicate...
+    assert!(
+        !legacy_dir.join(SKILL_MD).exists(),
+        "legacy SKILL.md must be removed after the in-place migration"
+    );
+    // ...and the hand-authored body preserved across the edit.
+    let body = std::fs::read_to_string(&workflow_md).unwrap();
+    assert!(
+        body.contains("Original procedure body."),
+        "edit must preserve the body; got:\n{body}"
+    );
+    assert!(
+        body.contains("description: Updated description."),
+        "edit must rewrite the frontmatter description; got:\n{body}"
+    );
+    // Nothing should have been created under the new workflows/ root.
+    assert!(
+        !home
+            .path()
+            .join(".openhuman")
+            .join("workflows")
+            .join("slack-to-notion")
+            .exists(),
+        "in-place edit must not fork a second copy under workflows/"
+    );
+}
+
+#[test]
 fn create_skill_writes_distinct_when_to_use_to_skill_toml_without_inputs() {
     // The unified create form merges the old workflow's `when_to_use` trigger
     // into the skill form. A workflow with a distinct trigger but NO inputs

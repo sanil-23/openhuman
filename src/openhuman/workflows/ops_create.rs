@@ -1,7 +1,7 @@
 //! Workflow creation: scaffolding new SKILL.md-based skills on disk.
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::ops_discover::{discover_workflows_inner, is_workspace_trusted};
 use super::ops_types::{
@@ -124,6 +124,46 @@ pub fn create_workflow(
     create_workflow_inner(home.as_deref(), workspace_dir, params)
 }
 
+/// Resolve an existing pre-rename workflow directory for `slug` under the
+/// legacy compat roots discovery still scans (`<root>/skills/<slug>`), so an
+/// edit can update it in place instead of failing with "does not exist".
+/// Mirrors `ops_discover::user_roots` / `project_roots` (minus the primary
+/// `workflows/` root, which the caller checks first). Returns the first
+/// existing canonicalized `<root>/<slug>` that stays within its root; `None`
+/// when no legacy copy exists.
+fn legacy_workflow_dir(
+    home_dir: Option<&Path>,
+    workspace_dir: &Path,
+    scope: WorkflowScope,
+    slug: &str,
+) -> Option<PathBuf> {
+    let roots: Vec<PathBuf> = match scope {
+        WorkflowScope::User => {
+            let home = home_dir?;
+            vec![
+                home.join(".openhuman").join("skills"),
+                home.join(".agents").join("skills"),
+            ]
+        }
+        WorkflowScope::Project => vec![
+            workspace_dir.join(".openhuman").join("skills"),
+            workspace_dir.join(".agents").join("skills"),
+        ],
+        WorkflowScope::Legacy => return None,
+    };
+    for root in roots {
+        let canonical_root = match std::fs::canonicalize(&root) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let candidate = canonical_root.join(slug);
+        if candidate.starts_with(&canonical_root) && candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 pub(crate) fn create_workflow_inner(
     home_dir: Option<&Path>,
     workspace_dir: &Path,
@@ -191,13 +231,33 @@ pub(crate) fn create_workflow_inner(
         )
     })?;
 
-    let skill_dir = canonical_root.join(&slug);
+    let mut skill_dir = canonical_root.join(&slug);
     if !skill_dir.starts_with(&canonical_root) {
         return Err(format!(
             "resolved skill dir {} escapes scope root {}",
             skill_dir.display(),
             canonical_root.display(),
         ));
+    }
+
+    // On edit (overwrite) the target may predate the skills→workflows rename and
+    // still live under a legacy compat root (`~/.openhuman/skills/`,
+    // `~/.agents/skills/`, or their project equivalents) — the same roots
+    // discovery scans (see ops_discover::user_roots/project_roots). When it
+    // isn't at the primary `workflows/` path, resolve it from those legacy
+    // roots and update it in place; the SKILL.md→WORKFLOW.md migration below
+    // converts the on-disk naming. A fresh create always writes to `workflows/`.
+    if params.overwrite && !skill_dir.exists() {
+        if let Some(legacy_dir) =
+            legacy_workflow_dir(home_dir, workspace_dir, params.scope, &slug)
+        {
+            tracing::debug!(
+                slug = %slug,
+                from = %legacy_dir.display(),
+                "[skills] create_workflow: updating legacy-located workflow in place"
+            );
+            skill_dir = legacy_dir;
+        }
     }
 
     let dir_exists = skill_dir.exists();
