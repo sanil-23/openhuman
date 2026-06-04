@@ -9,13 +9,61 @@
 //! `.runs` is a sibling of the runtime skill *definitions* (`<workspace>/
 //! skills/<id>/`) so run logs never collide with a skill-id directory.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
+use once_cell::sync::Lazy;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::Receiver;
+use tokio_util::sync::CancellationToken;
 
 use crate::openhuman::agent::progress::AgentProgress;
+
+/// Registry of in-flight workflow runs → their cancellation token. A run
+/// registers itself before executing and removes itself when it finishes; the
+/// `workflows_cancel` RPC looks a run up by id and fires its token, which the
+/// run's `tokio::select!` observes to stop the agent and write a `CANCELLED`
+/// footer.
+static RUN_CANCELS: Lazy<Mutex<HashMap<String, CancellationToken>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Register a fresh cancellation token for `run_id` and return it. The caller
+/// passes the returned token into its run loop's `select!`.
+pub fn register_run_cancel(run_id: &str) -> CancellationToken {
+    let token = CancellationToken::new();
+    RUN_CANCELS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(run_id.to_string(), token.clone());
+    token
+}
+
+/// Drop the registry entry for `run_id` (call once the run is fully done).
+pub fn unregister_run_cancel(run_id: &str) {
+    RUN_CANCELS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(run_id);
+}
+
+/// Signal cancellation for a running run. Returns `true` if a live run with
+/// this id was found and signalled, `false` if it's unknown (already finished
+/// or never existed).
+pub fn cancel_run(run_id: &str) -> bool {
+    match RUN_CANCELS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(run_id)
+    {
+        Some(token) => {
+            token.cancel();
+            true
+        }
+        None => false,
+    }
+}
 
 /// `<workspace>/skills/.runs`.
 pub fn runs_dir(workspace: &Path) -> PathBuf {
@@ -526,6 +574,20 @@ pub async fn write_footer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_cancel_registry_roundtrip() {
+        let token = register_run_cancel("run-roundtrip");
+        assert!(!token.is_cancelled());
+        // Cancelling a registered run fires its token and reports found.
+        assert!(cancel_run("run-roundtrip"));
+        assert!(token.is_cancelled());
+        // Unknown id ⇒ not found.
+        assert!(!cancel_run("run-does-not-exist"));
+        // After unregister the run is no longer cancellable.
+        unregister_run_cancel("run-roundtrip");
+        assert!(!cancel_run("run-roundtrip"));
+    }
 
     #[test]
     fn detect_repeated_line_catches_real_failure_modes() {

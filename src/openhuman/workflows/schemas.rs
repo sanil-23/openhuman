@@ -214,6 +214,7 @@ pub fn all_workflows_controller_schemas() -> Vec<ControllerSchema> {
         workflows_schemas("workflows_install_from_url"),
         workflows_schemas("workflows_uninstall"),
         workflows_schemas("workflows_run"),
+        workflows_schemas("workflows_cancel"),
     ]
 }
 
@@ -258,6 +259,10 @@ pub fn all_workflows_registered_controllers() -> Vec<RegisteredController> {
         RegisteredController {
             schema: workflows_schemas("workflows_run"),
             handler: handle_workflows_run,
+        },
+        RegisteredController {
+            schema: workflows_schemas("workflows_cancel"),
+            handler: handle_workflows_cancel,
         },
     ]
 }
@@ -317,6 +322,31 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
                     name: "log",
                     ty: TypeSchema::String,
                     comment: "Path to the per-run streaming log (<workspace>/skills/.runs/<skill>_<ts>.log).",
+                    required: true,
+                },
+            ],
+        },
+        "workflows_cancel" => ControllerSchema {
+            namespace: "workflows",
+            function: "cancel",
+            description: "Request cancellation of an in-flight workflow run by run_id. The run stops at its next await point and records a CANCELLED footer. Returns cancelled=false if the run id is unknown (already finished or never existed).",
+            inputs: vec![FieldSchema {
+                name: "run_id",
+                ty: TypeSchema::String,
+                comment: "Id of the running workflow run to cancel (from workflows_run).",
+                required: true,
+            }],
+            outputs: vec![
+                FieldSchema {
+                    name: "run_id",
+                    ty: TypeSchema::String,
+                    comment: "Echo of the requested run id.",
+                    required: true,
+                },
+                FieldSchema {
+                    name: "cancelled",
+                    ty: TypeSchema::Bool,
+                    comment: "True if a live run was found and signalled; false if unknown.",
                     required: true,
                 },
             ],
@@ -1014,26 +1044,46 @@ pub(crate) async fn spawn_workflow_run_background(
             agent.set_on_progress(Some(tx));
             let bridge = tokio::spawn(run_log::drain_to_log(rx, log_path.clone()));
 
+            // Register the cancellation token now (after the run can actually
+            // start) so `workflows_cancel` can stop it; a config/agent-build
+            // failure above returns before this, leaving nothing to leak.
+            let cancel_token = run_log::register_run_cancel(&run_id);
+
             let started = std::time::Instant::now();
             // Inherit the parent turn's origin so a skill triggered from an
             // ExternalChannel / tainted context retains its provenance
             // through the approval gate. Falls back to Cli for direct
             // user-initiated RPC / CLI flows.
-            let result = crate::openhuman::agent::turn_origin::with_origin(
-                inherited_origin,
-                with_autonomous_iter_cap(
-                    WORKFLOW_RUN_MAX_ITERATIONS,
-                    agent.run_single(&task_prompt),
-                ),
-            )
-            .await;
+            //
+            // Race the run against its cancellation token: if `workflows_cancel`
+            // fires the token, the run future is dropped (cancelled at its next
+            // await) and we record a CANCELLED footer. `Some(_)` ⇒ ran to a
+            // natural end; `None` ⇒ cancelled.
+            let result = tokio::select! {
+                biased;
+                _ = cancel_token.cancelled() => None,
+                r = crate::openhuman::agent::turn_origin::with_origin(
+                    inherited_origin,
+                    with_autonomous_iter_cap(
+                        WORKFLOW_RUN_MAX_ITERATIONS,
+                        agent.run_single(&task_prompt),
+                    ),
+                ) => Some(r),
+            };
             agent.set_on_progress(None);
             drop(agent);
             let _ = bridge.await;
 
             let ms = started.elapsed().as_millis() as u64;
+            run_log::unregister_run_cancel(&run_id);
             match result {
-                Ok(out) => {
+                None => {
+                    let _ =
+                        run_log::write_footer(&log_path, "CANCELLED", ms, "Run stopped by user.")
+                            .await;
+                    tracing::info!(run_id = %run_id, "[workflows] workflow_run: cancelled");
+                }
+                Some(Ok(out)) => {
                     if let Some((line, count)) = run_log::detect_repeated_line(&out, 30, 4) {
                         let preview = line.chars().take(160).collect::<String>();
                         let body = format!(
@@ -1054,7 +1104,7 @@ pub(crate) async fn spawn_workflow_run_background(
                         tracing::info!(run_id = %run_id, "[skills] workflow_run: completed");
                     }
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     let _ = run_log::write_footer(&log_path, "FAILED", ms, &format!("{e:#}")).await;
                     tracing::warn!(run_id = %run_id, error = ?e, "[skills] workflow_run: failed");
                 }
@@ -1113,6 +1163,27 @@ fn handle_workflows_run(params: Map<String, Value>) -> ControllerFuture {
                 "workflow_id": started.workflow_id,
                 "log": started.log_path.display().to_string(),
             }),
+            Vec::new(),
+        ))
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowsCancelParams {
+    run_id: String,
+}
+
+/// `openhuman.workflows_cancel` — request cancellation of an in-flight run.
+/// Fires the run's cancellation token; the run stops at its next await and
+/// writes a `CANCELLED` footer. Returns `cancelled: false` when the run id is
+/// unknown (already finished or never existed).
+fn handle_workflows_cancel(params: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move {
+        let payload = deserialize_params::<WorkflowsCancelParams>(params)?;
+        let cancelled = run_log::cancel_run(&payload.run_id);
+        tracing::info!(run_id = %payload.run_id, cancelled, "[workflows][rpc] cancel");
+        to_json(RpcOutcome::new(
+            serde_json::json!({ "run_id": payload.run_id, "cancelled": cancelled }),
             Vec::new(),
         ))
     })
