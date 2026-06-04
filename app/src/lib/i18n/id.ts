@@ -203,6 +203,10 @@ const messages: TranslationMap = {
   'home.usageExhaustedBody':
     'Kuota penggunaan yang termasuk saat ini sudah habis. Mulai langganan untuk membuka kapasitas berkelanjutan yang lebih besar.',
   'home.usageExhaustedCta': 'Mulai berlangganan',
+  'openrouterFree.cta': 'Gunakan model gratis OpenRouter',
+  'openrouterFree.saving': 'Menghubungkan OpenRouter...',
+  'openrouterFree.error':
+    'Tidak dapat beralih ke model gratis OpenRouter. Periksa login OpenRouter Anda dan coba lagi.',
   'home.routinesCard': 'Rutinitas Anda',
   'home.routinesActive': '{count} aktif',
   'routines.title': 'Rutinitas Anda',
@@ -1713,16 +1717,13 @@ const messages: TranslationMap = {
   'common.disable': 'Nonaktifkan',
   'common.enable': 'Aktifkan',
   'chat.safetyTimeout': 'Tidak ada respons dari agen setelah 2 menit. Coba lagi atau cek koneksi.',
-  'chat.filter.all': 'Semua',
-  'chat.filter.work': 'Kerja',
-  'chat.filter.briefing': 'Ringkasan',
-  'chat.filter.notification': 'Notifikasi',
-  'chat.filter.workers': 'Worker',
+  'chat.filter.general': 'Umum',
+  'chat.filter.subconscious': 'Bawah sadar',
+  'chat.filter.tasks': 'Tugas',
   'chat.selectThread': 'Pilih thread',
   'chat.threads': 'Thread',
   'chat.noThreads': 'Belum ada thread',
   'chat.noLabelThreads': 'Tidak ada thread "{label}"',
-  'chat.noWorkerThreads': 'Belum ada thread worker',
   'chat.deleteThread': 'Hapus thread',
   'chat.deleteThreadConfirm': 'Yakin ingin menghapus "{title}"?',
   'chat.untitledThread': 'Thread tanpa judul',
@@ -2655,6 +2656,9 @@ const messages: TranslationMap = {
   'intelligence.tasks.composer.create': 'Buat tugas',
   'intelligence.tasks.composer.creating': 'Membuat…',
   'intelligence.tasks.composer.createFailed': 'Gagal membuat tugas',
+  'intelligence.tasks.composer.assignAgentLabel': 'Biarkan agen mengerjakan ini secara otomatis',
+  'intelligence.tasks.composer.assignAgentHint':
+    'Papan tugas akan mengambil dan menjalankannya untuk Anda. Biarkan nonaktif untuk tugas pribadi biasa.',
   'intelligence.tasks.sourceList.subtitle': 'Tugas sumber yang menunggu menjadi pekerjaan agen.',
   'intelligence.tasks.sourceList.empty': 'Tidak ada tugas sumber yang menunggu.',
   'intelligence.tasks.sourceList.queued': 'Dalam antrean',
@@ -4200,6 +4204,8 @@ const messages: TranslationMap = {
   'chat.agentProfile.defaultAgentLabel': 'Orchestrator',
   'chat.agentProfile.exists': 'Profil agen "{name}" sudah ada.',
   'chat.agentProfile.label': 'Profil agen',
+  'chat.agentProfile.quick': 'Cepat',
+  'chat.agentProfile.reasoning': 'Penalaran',
   'chat.agentProfile.namePlaceholder': 'Nama profil',
   'chat.agentProfile.promptStylePlaceholder': 'Gaya perintah',
   'chat.agentProfile.allowedToolsPlaceholder': 'Alat yang diizinkan',
@@ -4756,6 +4762,18 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Jalankan alur kerja ini',
   'skills.run.title': 'Jalankan alur kerja',
   'workflows.installFromUrl': 'Instal dari URL',
+
+// Run queue
+  'runQueue.mode.interrupt': 'Interupsi',
+  'runQueue.mode.steer': 'Arahkan',
+  'runQueue.mode.followup': 'Tindak lanjut',
+  'runQueue.mode.collect': 'Tambah konteks',
+  'runQueue.queued': 'Pesan masuk antrean',
+  'runQueue.steerHint': 'Arahkan giliran saat ini',
+  'runQueue.followupHint': 'Masukkan ke antrean sebagai tindak lanjut',
+  'runQueue.collectHint': 'Tambahkan sebagai konteks tambahan',
+  'runQueue.status': '{total} dalam antrean',
+  'runQueue.cleared': 'Antrean dikosongkan',
 };
 
 export default messages;

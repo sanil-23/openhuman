@@ -148,6 +148,12 @@ named = [
     # downstream agents — the orchestrator coordinates, it doesn't
     # touch files itself.
     "todowrite",
+    # `update_task` moves/updates a specific task card by id on a target board
+    # (defaults to the proactive `task-sources` board) — so the orchestrator can
+    # advance the task it's working: → in_progress when it starts, → done with
+    # evidence when finished, or → blocked with a reason when stuck. Complements
+    # `todowrite`, which only touches the current thread's board.
+    "update_task",
     "plan_exit",
     # Workflow composition. `run_workflow` runs another workflow as a
     # subagent and (by default) waits on its result like a function call;

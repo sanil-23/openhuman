@@ -203,6 +203,10 @@ const messages: TranslationMap = {
   'home.usageExhaustedBody':
     'Включённый объём использования пока исчерпан. Оформите подписку, чтобы получить больше постоянной мощности.',
   'home.usageExhaustedCta': 'Оформить подписку',
+  'openrouterFree.cta': 'Использовать бесплатные модели OpenRouter',
+  'openrouterFree.saving': 'Подключение OpenRouter...',
+  'openrouterFree.error':
+    'Не удалось переключиться на бесплатные модели OpenRouter. Проверьте вход в OpenRouter и повторите попытку.',
   'home.routinesCard': 'Ваши подпрограммы',
   'home.routinesActive': '{count} активных',
   'routines.title': 'Ваши рутины',
@@ -1724,16 +1728,13 @@ const messages: TranslationMap = {
   'common.enable': 'Включить',
   'chat.safetyTimeout':
     'Агент не ответил в течение 2 минут. Попробуй снова или проверь соединение.',
-  'chat.filter.all': 'Все',
-  'chat.filter.work': 'Работа',
-  'chat.filter.briefing': 'Брифинг',
-  'chat.filter.notification': 'Уведомление',
-  'chat.filter.workers': 'Воркеры',
+  'chat.filter.general': 'Общее',
+  'chat.filter.subconscious': 'Подсознание',
+  'chat.filter.tasks': 'Задачи',
   'chat.selectThread': 'Выбери чат',
   'chat.threads': 'Чаты',
   'chat.noThreads': 'Чатов пока нет',
   'chat.noLabelThreads': 'Нет чатов «{label}»',
-  'chat.noWorkerThreads': 'Чатов воркеров пока нет',
   'chat.deleteThread': 'Удалить чат',
   'chat.deleteThreadConfirm': 'Удалить «{title}»?',
   'chat.untitledThread': 'Чат без названия',
@@ -2668,6 +2669,9 @@ const messages: TranslationMap = {
   'intelligence.tasks.composer.create': 'Создать задачу',
   'intelligence.tasks.composer.creating': 'Создание…',
   'intelligence.tasks.composer.createFailed': 'Не удалось создать задачу',
+  'intelligence.tasks.composer.assignAgentLabel': 'Поручить агенту выполнить это автоматически',
+  'intelligence.tasks.composer.assignAgentHint':
+    'Доска задач возьмёт её и выполнит за вас. Оставьте выключенным для обычной личной задачи.',
   'intelligence.tasks.sourceList.subtitle':
     'Задачи из источников, ожидающие превращения в работу агента.',
   'intelligence.tasks.sourceList.empty': 'Нет ожидающих задач из источников.',
@@ -4216,6 +4220,8 @@ const messages: TranslationMap = {
   'chat.agentProfile.defaultAgentLabel': 'Оркестратор',
   'chat.agentProfile.exists': 'Профиль агента «{name}» уже существует.',
   'chat.agentProfile.label': 'Профиль агента',
+  'chat.agentProfile.quick': 'Быстрый',
+  'chat.agentProfile.reasoning': 'Рассуждение',
   'chat.agentProfile.namePlaceholder': 'Имя профиля',
   'chat.agentProfile.promptStylePlaceholder': 'Стиль подсказки',
   'chat.agentProfile.allowedToolsPlaceholder': 'Разрешенные инструменты',
@@ -4785,6 +4791,18 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Запустить этот рабочий процесс',
   'skills.run.title': 'Запустить рабочий процесс',
   'workflows.installFromUrl': 'Установить по URL',
+
+// Run queue
+  'runQueue.mode.interrupt': 'Прервать',
+  'runQueue.mode.steer': 'Направить',
+  'runQueue.mode.followup': 'Продолжение',
+  'runQueue.mode.collect': 'Добавить контекст',
+  'runQueue.queued': 'Сообщение в очереди',
+  'runQueue.steerHint': 'Направить текущий ход',
+  'runQueue.followupHint': 'Добавить в очередь как продолжение',
+  'runQueue.collectHint': 'Добавить как дополнительный контекст',
+  'runQueue.status': '{total} в очереди',
+  'runQueue.cleared': 'Очередь очищена',
 };
 
 export default messages;

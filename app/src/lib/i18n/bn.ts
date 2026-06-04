@@ -201,6 +201,10 @@ const messages: TranslationMap = {
   'home.usageExhaustedBody':
     'আপাতত আপনার অন্তর্ভুক্ত ব্যবহার শেষ। আরও ধারাবাহিক সক্ষমতা আনলক করতে একটি সাবস্ক্রিপশন শুরু করুন।',
   'home.usageExhaustedCta': 'সাবস্ক্রিপশন শুরু করুন',
+  'openrouterFree.cta': 'OpenRouter-এর বিনামূল্যের মডেল ব্যবহার করুন',
+  'openrouterFree.saving': 'OpenRouter সংযুক্ত হচ্ছে...',
+  'openrouterFree.error':
+    'OpenRouter-এর বিনামূল্যের মডেলে স্যুইচ করা যায়নি। আপনার OpenRouter সাইন-ইন পরীক্ষা করে আবার চেষ্টা করুন।',
   'home.routinesCard': 'আপনার রুটিন',
   'home.routinesActive': '{count}টি সক্রিয়',
   'routines.title': 'তোমার বিদ্বান',
@@ -1710,16 +1714,13 @@ const messages: TranslationMap = {
   'common.enable': 'সক্রিয় করুন',
   'chat.safetyTimeout':
     '২ মিনিট পরেও এজেন্টের কোনো সাড়া নেই। আবার চেষ্টা করুন বা সংযোগ পরীক্ষা করুন।',
-  'chat.filter.all': 'সব',
-  'chat.filter.work': 'কাজ',
-  'chat.filter.briefing': 'ব্রিফিং',
-  'chat.filter.notification': 'বিজ্ঞপ্তি',
-  'chat.filter.workers': 'ওয়ার্কার',
+  'chat.filter.general': 'সাধারণ',
+  'chat.filter.subconscious': 'সাবকনশাস',
+  'chat.filter.tasks': 'টাস্ক',
   'chat.selectThread': 'একটি থ্রেড বেছে নিন',
   'chat.threads': 'থ্রেড',
   'chat.noThreads': 'এখনো কোনো থ্রেড নেই',
   'chat.noLabelThreads': '"{label}" থ্রেড নেই',
-  'chat.noWorkerThreads': 'এখনো কোনো ওয়ার্কার থ্রেড নেই',
   'chat.deleteThread': 'থ্রেড মুছুন',
   'chat.deleteThreadConfirm': 'আপনি কি "{title}" মুছতে চান?',
   'chat.untitledThread': 'শিরোনামহীন থ্রেড',
@@ -2648,6 +2649,9 @@ const messages: TranslationMap = {
   'intelligence.tasks.composer.create': 'কাজ তৈরি করুন ( T)',
   'intelligence.tasks.composer.creating': 'তৈরি করা হচ্ছে...',
   'intelligence.tasks.composer.createFailed': 'কাজ তৈরি করতে ব্যর্থ',
+  'intelligence.tasks.composer.assignAgentLabel': 'একজন এজেন্টকে স্বয়ংক্রিয়ভাবে এটি করতে দিন',
+  'intelligence.tasks.composer.assignAgentHint':
+    'টাস্ক বোর্ড এটি তুলে নিয়ে আপনার হয়ে চালাবে। সাধারণ ব্যক্তিগত কাজের জন্য বন্ধ রাখুন।',
   'intelligence.tasks.sourceList.subtitle': 'এজেন্টের কাজে রূপান্তরের অপেক্ষায় থাকা উৎস কাজ।',
   'intelligence.tasks.sourceList.empty': 'অপেক্ষায় কোনো উৎস কাজ নেই।',
   'intelligence.tasks.sourceList.queued': 'সারিবদ্ধ',
@@ -4181,6 +4185,8 @@ const messages: TranslationMap = {
   'chat.agentProfile.defaultAgentLabel': 'অর্কেস্ট্রেটর',
   'chat.agentProfile.exists': 'এজেন্ট প্রোফাইল "{name}" ইতিমধ্যেই বিদ্যমান৷',
   'chat.agentProfile.label': 'এজেন্ট প্রোফাইল',
+  'chat.agentProfile.quick': 'দ্রুত',
+  'chat.agentProfile.reasoning': 'যুক্তি',
   'chat.agentProfile.namePlaceholder': 'প্রোফাইল নাম',
   'chat.agentProfile.promptStylePlaceholder': 'প্রম্পট স্টাইল',
   'chat.agentProfile.allowedToolsPlaceholder': 'অনুমোদিত টুল',
@@ -4737,6 +4743,18 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'এই ওয়ার্কফ্লো চালান',
   'skills.run.title': 'ওয়ার্কফ্লো চালান',
   'workflows.installFromUrl': 'URL থেকে ইনস্টল করুন',
+
+// Run queue
+  'runQueue.mode.interrupt': 'বাধা দিন',
+  'runQueue.mode.steer': 'পরিচালনা করুন',
+  'runQueue.mode.followup': 'ফলো-আপ',
+  'runQueue.mode.collect': 'প্রসঙ্গ যোগ করুন',
+  'runQueue.queued': 'বার্তা সারিবদ্ধ হয়েছে',
+  'runQueue.steerHint': 'বর্তমান পর্যায় পরিচালনা করুন',
+  'runQueue.followupHint': 'ফলো-আপ হিসেবে সারিতে যোগ করুন',
+  'runQueue.collectHint': 'অতিরিক্ত প্রসঙ্গ হিসেবে যোগ করুন',
+  'runQueue.status': '{total}টি সারিবদ্ধ',
+  'runQueue.cleared': 'সারি পরিষ্কার করা হয়েছে',
 };
 
 export default messages;

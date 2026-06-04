@@ -1476,6 +1476,7 @@ async fn run_inner_loop(
         max_iterations,
         None, // sub-agents don't stream a draft
         &["ask_user_clarification"],
+        None, // sub-agents don't support run-queue steering
     ))
     .await?;
 
@@ -1754,7 +1755,7 @@ impl super::super::engine::TurnObserver for SubagentObserver {
         self.usage.charged_amount_usd += usage.charged_amount_usd;
     }
 
-    fn on_assistant(
+    async fn on_assistant(
         &mut self,
         _display_text: &str,
         response_text: &str,

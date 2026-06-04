@@ -201,6 +201,10 @@ const messages: TranslationMap = {
   'home.usageExhaustedBody':
     '현재 포함된 사용량을 모두 소진했습니다. 더 많은 지속 용량을 사용하려면 구독을 시작하세요.',
   'home.usageExhaustedCta': '구독 시작',
+  'openrouterFree.cta': 'OpenRouter 무료 모델 사용',
+  'openrouterFree.saving': 'OpenRouter 연결 중...',
+  'openrouterFree.error':
+    'OpenRouter 무료 모델로 전환하지 못했습니다. OpenRouter 로그인을 확인하고 다시 시도하세요.',
   'home.routinesCard': '내 루틴',
   'home.routinesActive': '{count}개 활성',
   'routines.title': '내 루틴',
@@ -1691,16 +1695,13 @@ const messages: TranslationMap = {
   'common.disable': '비활성화',
   'common.enable': '활성화',
   'chat.safetyTimeout': '2분 후에도 에이전트의 응답이 없습니다. 다시 시도하거나 연결을 확인하세요.',
-  'chat.filter.all': '전체',
-  'chat.filter.work': '업무',
-  'chat.filter.briefing': '브리핑',
-  'chat.filter.notification': '알림',
-  'chat.filter.workers': '워커',
+  'chat.filter.general': '일반',
+  'chat.filter.subconscious': '잠재의식',
+  'chat.filter.tasks': '작업',
   'chat.selectThread': '스레드 선택',
   'chat.threads': '스레드',
   'chat.noThreads': '아직 스레드가 없습니다',
   'chat.noLabelThreads': '"{label}" 스레드가 없습니다',
-  'chat.noWorkerThreads': '아직 워커 스레드가 없습니다',
   'chat.deleteThread': '스레드 삭제',
   'chat.deleteThreadConfirm': '"{title}" 스레드를 삭제하시겠습니까?',
   'chat.untitledThread': '제목 없는 스레드',
@@ -2628,6 +2629,9 @@ const messages: TranslationMap = {
   'intelligence.tasks.composer.create': '작업 만들기',
   'intelligence.tasks.composer.creating': '만드는 중…',
   'intelligence.tasks.composer.createFailed': '작업을 만들 수 없습니다',
+  'intelligence.tasks.composer.assignAgentLabel': '에이전트가 이 작업을 자동으로 처리하도록 하기',
+  'intelligence.tasks.composer.assignAgentHint':
+    '작업 보드가 이를 가져와 대신 실행합니다. 일반 개인 할 일은 꺼 두세요.',
   'intelligence.tasks.sourceList.subtitle': '에이전트 작업으로 전환될 소스 작업입니다.',
   'intelligence.tasks.sourceList.empty': '대기 중인 소스 작업이 없습니다.',
   'intelligence.tasks.sourceList.queued': '대기열에 추가됨',
@@ -4145,6 +4149,8 @@ const messages: TranslationMap = {
   'chat.agentProfile.defaultAgentLabel': 'Orchestrator',
   'chat.agentProfile.exists': '에이전트 프로필 "{name}"이(가) 이미 존재합니다.',
   'chat.agentProfile.label': '에이전트 프로필',
+  'chat.agentProfile.quick': '빠름',
+  'chat.agentProfile.reasoning': '추론',
   'chat.agentProfile.namePlaceholder': '프로필 이름',
   'chat.agentProfile.promptStylePlaceholder': '프롬프트 스타일',
   'chat.agentProfile.allowedToolsPlaceholder': '허용된 도구',
@@ -4692,6 +4698,18 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': '이 워크플로 실행',
   'skills.run.title': '워크플로 실행',
   'workflows.installFromUrl': 'URL에서 설치',
+
+// Run queue
+  'runQueue.mode.interrupt': '중단',
+  'runQueue.mode.steer': '방향 조정',
+  'runQueue.mode.followup': '후속 조치',
+  'runQueue.mode.collect': '컨텍스트 추가',
+  'runQueue.queued': '메시지가 대기열에 추가됨',
+  'runQueue.steerHint': '현재 턴 방향 조정',
+  'runQueue.followupHint': '후속 조치로 대기열에 추가',
+  'runQueue.collectHint': '추가 컨텍스트로 추가',
+  'runQueue.status': '{total}개 대기 중',
+  'runQueue.cleared': '대기열이 비워졌습니다',
 };
 
 export default messages;

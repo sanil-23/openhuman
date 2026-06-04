@@ -211,6 +211,10 @@ const messages: TranslationMap = {
   'home.usageExhaustedBody':
     'Ya no te queda uso incluido por ahora. Inicia una suscripción para desbloquear más capacidad continua.',
   'home.usageExhaustedCta': 'Obtener una suscripción',
+  'openrouterFree.cta': 'Usar modelos gratis de OpenRouter',
+  'openrouterFree.saving': 'Conectando OpenRouter...',
+  'openrouterFree.error':
+    'No se pudo cambiar a los modelos gratis de OpenRouter. Revisa tu inicio de sesión de OpenRouter e inténtalo de nuevo.',
   'home.routinesCard': 'Tus rutinas',
   'home.routinesActive': '{count} activas',
   'routines.title': 'Tus rutinas',
@@ -1749,16 +1753,13 @@ const messages: TranslationMap = {
   'common.enable': 'Activar',
   'chat.safetyTimeout':
     'Sin respuesta del agente después de 2 minutos. Intenta de nuevo o verifica tu conexión.',
-  'chat.filter.all': 'Todos',
-  'chat.filter.work': 'Trabajo',
-  'chat.filter.briefing': 'Resumen',
-  'chat.filter.notification': 'Notificación',
-  'chat.filter.workers': 'Trabajadores',
+  'chat.filter.general': 'General',
+  'chat.filter.subconscious': 'Subconsciente',
+  'chat.filter.tasks': 'Tareas',
   'chat.selectThread': 'Selecciona un hilo',
   'chat.threads': 'Hilos',
   'chat.noThreads': 'Sin hilos aún',
   'chat.noLabelThreads': 'Sin hilos "{label}"',
-  'chat.noWorkerThreads': 'Sin hilos de worker aún',
   'chat.deleteThread': 'Eliminar hilo',
   'chat.deleteThreadConfirm': '¿Seguro que quieres eliminar "{title}"?',
   'chat.untitledThread': 'Hilo sin título',
@@ -2698,6 +2699,10 @@ const messages: TranslationMap = {
   'intelligence.tasks.composer.create': 'Crear tarea',
   'intelligence.tasks.composer.creating': 'Creando…',
   'intelligence.tasks.composer.createFailed': 'No se pudo crear la tarea',
+  'intelligence.tasks.composer.assignAgentLabel':
+    'Deja que un agente se encargue de esto automáticamente',
+  'intelligence.tasks.composer.assignAgentHint':
+    'El tablero de tareas la toma y la ejecuta por ti. Déjalo desactivado para una tarea personal simple.',
   'intelligence.tasks.sourceList.subtitle':
     'Tareas de fuentes esperando convertirse en trabajo del agente.',
   'intelligence.tasks.sourceList.empty': 'No hay tareas de fuentes en espera.',
@@ -4261,6 +4266,8 @@ const messages: TranslationMap = {
   'chat.agentProfile.defaultAgentLabel': 'orquestador',
   'chat.agentProfile.exists': 'El perfil del agente "{name}" ya existe.',
   'chat.agentProfile.label': 'Perfil del agente',
+  'chat.agentProfile.quick': 'Rápido',
+  'chat.agentProfile.reasoning': 'Razonamiento',
   'chat.agentProfile.namePlaceholder': 'Nombre del perfil',
   'chat.agentProfile.promptStylePlaceholder': 'estilo rápido',
   'chat.agentProfile.allowedToolsPlaceholder': 'Herramientas permitidas',
@@ -4839,6 +4846,18 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Ejecutar este flujo de trabajo',
   'skills.run.title': 'Ejecutar flujo de trabajo',
   'workflows.installFromUrl': 'Instalar desde URL',
+
+// Run queue
+  'runQueue.mode.interrupt': 'Interrumpir',
+  'runQueue.mode.steer': 'Dirigir',
+  'runQueue.mode.followup': 'Seguimiento',
+  'runQueue.mode.collect': 'Añadir contexto',
+  'runQueue.queued': 'Mensaje en cola',
+  'runQueue.steerHint': 'Dirigir el turno actual',
+  'runQueue.followupHint': 'Poner en cola como seguimiento',
+  'runQueue.collectHint': 'Añadir como contexto adicional',
+  'runQueue.status': '{total} en cola',
+  'runQueue.cleared': 'Cola vaciada',
 };
 
 export default messages;

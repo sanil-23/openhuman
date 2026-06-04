@@ -158,6 +158,11 @@ pub fn all_tools_with_runtime(
         // build-mode pass. The plan→build mode switch itself is a
         // follow-up; the tool emits a stable marker today.
         Box::new(TodoTool::new()),
+        // Move/update a specific task card by id on a target board (defaults to
+        // the proactive `task-sources` board) — lets the agent advance the task
+        // it's working (in_progress / done+evidence / blocked+reason) from any
+        // thread, complementing `todo` which only touches the current thread.
+        Box::new(UpdateTaskTool::new()),
         Box::new(PlanExitTool::new()),
         // Workflow composition: `run_workflow` runs another workflow as a
         // subagent and (by default) waits on its result like a function call;

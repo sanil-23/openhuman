@@ -6,6 +6,7 @@ pub mod remember_preference;
 mod run_workflow;
 pub mod save_preference;
 mod todo;
+mod update_task;
 
 pub use ask_clarification::AskClarificationTool;
 pub use delegate::DelegateTool;
@@ -17,3 +18,4 @@ pub use run_workflow::{
 };
 pub use save_preference::SavePreferenceTool;
 pub use todo::TodoTool;
+pub use update_task::UpdateTaskTool;

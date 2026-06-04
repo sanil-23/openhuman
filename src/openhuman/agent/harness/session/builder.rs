@@ -93,6 +93,7 @@ impl AgentBuilder {
             model_name: None,
             temperature: None,
             workspace_dir: None,
+            action_dir: None,
             skills: None,
             auto_save: None,
             post_turn_hooks: Vec::new(),
@@ -196,6 +197,11 @@ impl AgentBuilder {
     /// Sets the workspace directory for the agent.
     pub fn workspace_dir(mut self, workspace_dir: std::path::PathBuf) -> Self {
         self.workspace_dir = Some(workspace_dir);
+        self
+    }
+
+    pub fn action_dir(mut self, action_dir: std::path::PathBuf) -> Self {
+        self.action_dir = Some(action_dir);
         self
     }
 
@@ -524,6 +530,11 @@ impl AgentBuilder {
             prompt_builder,
         );
 
+        let workspace_dir = self
+            .workspace_dir
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let action_dir = self.action_dir.unwrap_or_else(|| workspace_dir.clone());
+
         Ok(Agent {
             provider,
             tools: Arc::new(tools),
@@ -544,9 +555,8 @@ impl AgentBuilder {
             config,
             model_name,
             temperature: self.temperature.unwrap_or(0.7),
-            workspace_dir: self
-                .workspace_dir
-                .unwrap_or_else(|| std::path::PathBuf::from(".")),
+            workspace_dir,
+            action_dir,
             skills: self.skills.unwrap_or_default(),
             auto_save: self.auto_save.unwrap_or(false),
             last_memory_context: None,
@@ -586,6 +596,7 @@ impl AgentBuilder {
             cached_transcript_messages: None,
             context,
             on_progress: None,
+            run_queue: None,
             connected_integrations: Vec::new(),
             connected_integrations_initialized: false,
             integration_runtime_config: None,
@@ -1553,6 +1564,7 @@ impl Agent {
             .model_name(model_name)
             .temperature(effective_temperature)
             .workspace_dir(config.workspace_dir.clone())
+            .action_dir(config.action_dir.clone())
             .skills(crate::openhuman::workflows::load_skills(
                 &config.workspace_dir,
             ))

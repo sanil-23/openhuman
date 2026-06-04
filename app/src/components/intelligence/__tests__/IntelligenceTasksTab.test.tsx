@@ -182,7 +182,7 @@ describe('IntelligenceTasksTab', () => {
     hoisted.createNewThread.mockResolvedValue({
       id: 'thread-agent-task',
       title: 'Agent task',
-      labels: ['agent-task'],
+      labels: ['tasks'],
       chatId: null,
       isActive: true,
       messageCount: 0,
@@ -192,7 +192,7 @@ describe('IntelligenceTasksTab', () => {
     hoisted.updateTitle.mockResolvedValue({
       id: 'thread-agent-task',
       title: 'Agent task: My personal task',
-      labels: ['agent-task'],
+      labels: ['tasks'],
       chatId: null,
       isActive: true,
       messageCount: 0,
@@ -336,7 +336,7 @@ describe('IntelligenceTasksTab', () => {
       expect.objectContaining({
         threadId: 'user-tasks',
         id: 'agent-task-1',
-        assignedAgent: 'agent_coder',
+        assignedAgent: 'orchestrator',
         approvalMode: 'not_required',
       })
     );
@@ -407,7 +407,7 @@ describe('IntelligenceTasksTab', () => {
     expect(hoisted.todosUpdateStatus).toHaveBeenCalledWith('user-tasks', 'card-0', 'in_progress');
   });
 
-  test('starts a labeled agent-task thread from a personal task', async () => {
+  test('starts a labeled Tasks thread from a personal task', async () => {
     hoisted.todosList.mockImplementation((threadId: string) =>
       Promise.resolve(
         threadId === 'user-tasks'
@@ -445,7 +445,7 @@ describe('IntelligenceTasksTab', () => {
 
     fireEvent.click(screen.getByText('stub-work-task'));
 
-    await waitFor(() => expect(hoisted.createNewThread).toHaveBeenCalledWith(['agent-task']));
+    await waitFor(() => expect(hoisted.createNewThread).toHaveBeenCalledWith(['tasks']));
     expect(hoisted.updateTitle).toHaveBeenCalledWith(
       'thread-agent-task',
       'Agent task: Implement task source worker'
@@ -495,6 +495,35 @@ describe('IntelligenceTasksTab', () => {
     fireEvent.click(screen.getByText('stub-delete'));
     await waitFor(() => expect(hoisted.todosRemove).toHaveBeenCalledTimes(1));
     expect(hoisted.todosRemove).toHaveBeenCalledWith('user-tasks', 'card-0');
+  });
+
+  test('re-polls the personal + task-source boards on an interval (background runs show live)', async () => {
+    vi.useFakeTimers();
+    try {
+      hoisted.todosList.mockImplementation((threadId: string) =>
+        Promise.resolve(makeBoard(threadId, []))
+      );
+      vi.resetModules();
+      const Tab = await importTab();
+      renderTab(Tab);
+
+      // Flush the mount effect's setTimeout(0) + the initial loadAll fetches.
+      await vi.advanceTimersByTimeAsync(0);
+      const userBefore = hoisted.todosList.mock.calls.filter(c => c[0] === 'user-tasks').length;
+      const sourceBefore = hoisted.todosList.mock.calls.filter(c => c[0] === 'task-sources').length;
+      expect(userBefore).toBeGreaterThan(0);
+      expect(sourceBefore).toBeGreaterThan(0);
+
+      // One poll interval later, both boards are re-read (so a background poller
+      // run's board changes surface without a manual refresh).
+      await vi.advanceTimersByTimeAsync(4000);
+      const userAfter = hoisted.todosList.mock.calls.filter(c => c[0] === 'user-tasks').length;
+      const sourceAfter = hoisted.todosList.mock.calls.filter(c => c[0] === 'task-sources').length;
+      expect(userAfter).toBeGreaterThan(userBefore);
+      expect(sourceAfter).toBeGreaterThan(sourceBefore);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('opens the composer and applies the created personal board', async () => {

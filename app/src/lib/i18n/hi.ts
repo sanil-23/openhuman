@@ -201,6 +201,10 @@ const messages: TranslationMap = {
   'home.usageExhaustedBody':
     'आपकी शामिल उपयोग सीमा अभी समाप्त हो चुकी है। अधिक निरंतर क्षमता अनलॉक करने के लिए सदस्यता शुरू करें।',
   'home.usageExhaustedCta': 'सदस्यता शुरू करें',
+  'openrouterFree.cta': 'OpenRouter के मुफ्त मॉडल इस्तेमाल करें',
+  'openrouterFree.saving': 'OpenRouter कनेक्ट हो रहा है...',
+  'openrouterFree.error':
+    'OpenRouter के मुफ्त मॉडल पर स्विच नहीं हो सका। अपना OpenRouter साइन-इन जांचें और फिर कोशिश करें।',
   'home.routinesCard': 'आपकी रूटीन',
   'home.routinesActive': '{count} सक्रिय',
   'routines.title': 'आपका दिनचर्या',
@@ -1711,16 +1715,13 @@ const messages: TranslationMap = {
   'common.enable': 'चालू करें',
   'chat.safetyTimeout':
     '2 मिनट बाद भी एजेंट से कोई जवाब नहीं मिला। दोबारा कोशिश करें या अपना कनेक्शन चेक करें।',
-  'chat.filter.all': 'सभी',
-  'chat.filter.work': 'वर्क',
-  'chat.filter.briefing': 'ब्रीफिंग',
-  'chat.filter.notification': 'नोटिफिकेशन',
-  'chat.filter.workers': 'वर्कर्स',
+  'chat.filter.general': 'सामान्य',
+  'chat.filter.subconscious': 'सबकॉन्शस',
+  'chat.filter.tasks': 'टास्क',
   'chat.selectThread': 'एक थ्रेड चुनें',
   'chat.threads': 'थ्रेड्स',
   'chat.noThreads': 'अभी कोई थ्रेड नहीं',
   'chat.noLabelThreads': 'कोई "{label}" थ्रेड नहीं',
-  'chat.noWorkerThreads': 'अभी कोई वर्कर थ्रेड नहीं',
   'chat.deleteThread': 'थ्रेड डिलीट करें',
   'chat.deleteThreadConfirm': 'क्या आप वाकई "{title}" डिलीट करना चाहते हैं?',
   'chat.untitledThread': 'बिना शीर्षक की थ्रेड',
@@ -2653,6 +2654,9 @@ const messages: TranslationMap = {
   'intelligence.tasks.composer.create': 'कार्य',
   'intelligence.tasks.composer.creating': 'बनाना',
   'intelligence.tasks.composer.createFailed': 'काम नहीं कर सका',
+  'intelligence.tasks.composer.assignAgentLabel': 'किसी एजेंट को इसे स्वचालित रूप से करने दें',
+  'intelligence.tasks.composer.assignAgentHint':
+    'टास्क बोर्ड इसे उठाकर आपके लिए चला देगा। सामान्य निजी कार्य के लिए इसे बंद रखें।',
   'intelligence.tasks.sourceList.subtitle': 'एजेंट कार्य बनने की प्रतीक्षा कर रहे स्रोत कार्य।',
   'intelligence.tasks.sourceList.empty': 'कोई स्रोत कार्य प्रतीक्षा में नहीं है।',
   'intelligence.tasks.sourceList.queued': 'कतार में',
@@ -4191,6 +4195,8 @@ const messages: TranslationMap = {
   'chat.agentProfile.defaultAgentLabel': 'ऑर्केस्ट्रेटर',
   'chat.agentProfile.exists': 'एजेंट प्रोफ़ाइल "{name}" पहले से मौजूद है।',
   'chat.agentProfile.label': 'एजेंट प्रोफ़ाइल',
+  'chat.agentProfile.quick': 'त्वरित',
+  'chat.agentProfile.reasoning': 'तर्क',
   'chat.agentProfile.namePlaceholder': 'प्रोफ़ाइल नाम',
   'chat.agentProfile.promptStylePlaceholder': 'शीघ्र शैली',
   'chat.agentProfile.allowedToolsPlaceholder': 'अनुमत उपकरण',
@@ -4744,6 +4750,18 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'यह वर्कफ़्लो चलाएँ',
   'skills.run.title': 'वर्कफ़्लो चलाएँ',
   'workflows.installFromUrl': 'URL से इंस्टॉल करें',
+
+// Run queue
+  'runQueue.mode.interrupt': 'बाधित करें',
+  'runQueue.mode.steer': 'दिशा दें',
+  'runQueue.mode.followup': 'अनुसरण',
+  'runQueue.mode.collect': 'संदर्भ जोड़ें',
+  'runQueue.queued': 'संदेश कतार में है',
+  'runQueue.steerHint': 'वर्तमान चरण को दिशा दें',
+  'runQueue.followupHint': 'अनुसरण के रूप में कतार में जोड़ें',
+  'runQueue.collectHint': 'अतिरिक्त संदर्भ के रूप में जोड़ें',
+  'runQueue.status': '{total} कतार में',
+  'runQueue.cleared': 'कतार साफ़ की गई',
 };
 
 export default messages;

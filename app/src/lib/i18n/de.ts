@@ -210,6 +210,10 @@ const messages: TranslationMap = {
   'home.usageExhaustedBody':
     'Dein enthaltenes Nutzungskontingent ist vorerst aufgebraucht. Starte ein Abo, um mehr laufende Kapazität freizuschalten.',
   'home.usageExhaustedCta': 'Abo starten',
+  'openrouterFree.cta': 'Kostenlose OpenRouter-Modelle verwenden',
+  'openrouterFree.saving': 'OpenRouter wird verbunden...',
+  'openrouterFree.error':
+    'Der Wechsel zu kostenlosen OpenRouter-Modellen ist fehlgeschlagen. Prüfe deine OpenRouter-Anmeldung und versuche es erneut.',
   'home.routinesCard': 'Deine Routinen',
   'home.routinesActive': '{count} aktiv',
   'routines.title': 'Ihre Routinen',
@@ -1755,16 +1759,13 @@ const messages: TranslationMap = {
   'common.enable': 'Aktivieren',
   'chat.safetyTimeout':
     'Keine Antwort vom Agenten nach 2 Minuten. Versuche es erneut oder prüfe deine Verbindung.',
-  'chat.filter.all': 'Alle',
-  'chat.filter.work': 'Arbeit',
-  'chat.filter.briefing': 'Briefing',
-  'chat.filter.notification': 'Benachrichtigung',
-  'chat.filter.workers': 'Arbeiter',
+  'chat.filter.general': 'Allgemein',
+  'chat.filter.subconscious': 'Unterbewusstsein',
+  'chat.filter.tasks': 'Aufgaben',
   'chat.selectThread': 'Wähle einen Thread aus',
   'chat.threads': 'Themen',
   'chat.noThreads': 'Noch keine Threads',
   'chat.noLabelThreads': 'Keine „{label}“-Threads',
-  'chat.noWorkerThreads': 'Noch keine Arbeitsthreads',
   'chat.deleteThread': 'Thread löschen',
   'chat.deleteThreadConfirm': 'Bist du sicher, dass du „{title}“ löschen möchtest?',
   'chat.untitledThread': 'Thread ohne Titel',
@@ -2714,6 +2715,9 @@ const messages: TranslationMap = {
   'intelligence.tasks.composer.create': 'Aufgabe erstellen',
   'intelligence.tasks.composer.creating': 'Erstellen…',
   'intelligence.tasks.composer.createFailed': 'Die Aufgabe konnte nicht erstellt werden',
+  'intelligence.tasks.composer.assignAgentLabel': 'Einen Agenten automatisch daran arbeiten lassen',
+  'intelligence.tasks.composer.assignAgentHint':
+    'Das Aufgabenboard übernimmt sie und erledigt sie für dich. Für eine einfache persönliche Aufgabe ausgeschaltet lassen.',
   'intelligence.tasks.sourceList.subtitle':
     'Quellaufgaben, die in Agentenarbeit umgewandelt werden sollen.',
   'intelligence.tasks.sourceList.empty': 'Keine Quellaufgaben in der Warteschlange.',
@@ -4294,6 +4298,8 @@ const messages: TranslationMap = {
   'chat.agentProfile.defaultAgentLabel': 'Orchestrator',
   'chat.agentProfile.exists': 'Agentenprofil „{name}“ ist bereits vorhanden.',
   'chat.agentProfile.label': 'Agentenprofil',
+  'chat.agentProfile.quick': 'Schnell',
+  'chat.agentProfile.reasoning': 'Denkmodus',
   'chat.agentProfile.namePlaceholder': 'Profilname',
   'chat.agentProfile.promptStylePlaceholder': 'Eingabeaufforderungsstil',
   'chat.agentProfile.allowedToolsPlaceholder': 'Zulässige Tools',
@@ -4874,6 +4880,18 @@ const messages: TranslationMap = {
   'skills.detail.runAriaLabel': 'Diesen Workflow ausführen',
   'skills.run.title': 'Workflow ausführen',
   'workflows.installFromUrl': 'Von URL installieren',
+
+// Run queue
+  'runQueue.mode.interrupt': 'Unterbrechen',
+  'runQueue.mode.steer': 'Steuern',
+  'runQueue.mode.followup': 'Nachfassen',
+  'runQueue.mode.collect': 'Kontext hinzufügen',
+  'runQueue.queued': 'Nachricht in Warteschlange',
+  'runQueue.steerHint': 'Aktuellen Durchlauf steuern',
+  'runQueue.followupHint': 'Als Nachfassen einreihen',
+  'runQueue.collectHint': 'Als zusätzlichen Kontext hinzufügen',
+  'runQueue.status': '{total} in der Warteschlange',
+  'runQueue.cleared': 'Warteschlange geleert',
 };
 
 export default messages;
