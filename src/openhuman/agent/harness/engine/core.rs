@@ -33,7 +33,7 @@ use crate::openhuman::inference::provider::{
 use super::super::parse::build_native_assistant_history;
 use super::super::run_queue::RunQueue;
 use super::super::token_budget::trim_chat_messages_to_budget;
-use super::super::tool_loop::{RepeatFailureGuard, STREAM_CHUNK_MIN_CHARS};
+use super::super::tool_loop::{RepeatFailureGuard, RepeatOutputGuard, STREAM_CHUNK_MIN_CHARS};
 use super::checkpoint::CheckpointStrategy;
 use super::parser::ResponseParser;
 use super::progress::ProgressReporter;
@@ -111,6 +111,10 @@ pub(crate) async fn run_turn_engine(
     // Repeated-failure circuit breaker — halts with a root cause rather than
     // grinding to `max_iterations`.
     let mut failure_guard = RepeatFailureGuard::new();
+    // No-progress narration breaker — trips when the model re-emits the same
+    // response + tool call across iterations even when each call "succeeds"
+    // (the gap left by the failure guard + per-generation frequency_penalty).
+    let mut repeat_guard = RepeatOutputGuard::new();
     let mut halt_reason: Option<String> = None;
     for iteration in 0..max_iterations {
         progress
@@ -494,6 +498,37 @@ pub(crate) async fn run_turn_engine(
                 hit_cap: false,
                 early_exit_tool: None,
             });
+        }
+
+        // No-progress narration breaker: if this iteration's assistant output
+        // (text + tool-call name/args) is byte-identical to the previous N in a
+        // row, the run is stuck re-issuing the same step. Halt with a summary
+        // rather than grinding to the iteration cap. Checked BEFORE executing
+        // the (repeated) tool call so we don't burn another no-op iteration.
+        {
+            let mut sig = response_text.trim().to_string();
+            for call in &tool_calls {
+                sig.push('\u{1}');
+                sig.push_str(&call.name);
+                sig.push('\u{1}');
+                sig.push_str(&call.arguments.to_string());
+            }
+            if let Some(reason) = repeat_guard.record(&sig) {
+                tracing::warn!(
+                    iteration,
+                    "[agent_loop] repeat-output circuit breaker tripped — identical response+tool-call repeated; halting with no-progress summary"
+                );
+                history.push(ChatMessage::assistant(assistant_history_content.clone()));
+                observer.after_iteration(history, iteration);
+                progress.turn_completed((iteration + 1) as u32).await;
+                return Ok(TurnEngineOutcome {
+                    text: reason,
+                    iterations: (iteration + 1) as u32,
+                    cost: turn_cost,
+                    hit_cap: false,
+                    early_exit_tool: None,
+                });
+            }
         }
 
         // Print any text the LLM produced alongside tool calls (unless silent)
