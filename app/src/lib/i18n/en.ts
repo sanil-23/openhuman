@@ -178,6 +178,7 @@ const en: TranslationMap = {
   'clearData.failedPersist': 'Failed to clear persisted app state. Please try again.',
 
   // Welcome page
+  'welcome.logoAlt': 'OpenHuman',
   'welcome.title': 'Welcome to OpenHuman',
   'welcome.subtitle':
     'Your personal AI super intelligence. Private, simple and extremely powerful.',
@@ -2297,6 +2298,7 @@ const en: TranslationMap = {
   'memorySources.loadingConnections': 'Loading connections…',
   'memorySources.noConnections':
     'No active Composio connections found. Connect an integration first.',
+  'memorySources.connectionAccount': 'Account',
   'memorySources.pickConnection': 'Pick a connection',
   'memorySources.selectConnection': '— Select a connection —',
   'memorySources.composioListFailed': 'Failed to load Composio connections.',
@@ -2349,6 +2351,32 @@ const en: TranslationMap = {
   'memorySources.build.successTitle': 'Tree built',
   'memorySources.build.failedTitle': 'Build failed',
   'memorySources.build.sealsMessage': 'seal(s) completed',
+  'memorySources.allIn.button': 'All In',
+  'memorySources.allIn.title': 'Go All In?',
+  'memorySources.allIn.message':
+    'This enables every memory source and removes all sync limits. It builds the richest memory graph, but may use more credits.',
+  'memorySources.allIn.confirm': 'Yes',
+  'memorySources.allIn.cancel': 'No',
+  'memorySources.allIn.success': 'All sources enabled with no limits. Syncing started.',
+  'memorySources.allIn.failed': 'Could not apply All In. Please try again.',
+  'memorySources.settings.button': 'Settings',
+  'memorySources.settings.title': 'Sync settings',
+  'memorySources.settings.maxPrs': 'Max pull requests',
+  'memorySources.settings.maxIssues': 'Max issues',
+  'memorySources.settings.maxCommits': 'Max commits',
+  'memorySources.settings.maxItems': 'Max items',
+  'memorySources.settings.sinceDays': 'Lookback (days)',
+  'memorySources.settings.syncDepthDays': 'Sync depth (days)',
+  'memorySources.settings.maxTokens': 'Max tokens per sync',
+  'memorySources.settings.maxCost': 'Max cost per sync (USD)',
+  'memorySources.settings.unlimited': 'Unlimited',
+  'memorySources.settings.unlimitedTooltip':
+    "You've opted in to sync the maximum for {toolkit}. You can change the caps here.",
+  'memorySources.settings.maxed': 'Maxed',
+  'memorySources.settings.save': 'Save',
+  'memorySources.settings.saving': 'Saving…',
+  'memorySources.settings.saved': 'Settings saved',
+  'memorySources.settings.saveFailed': 'Could not save settings',
 
   // Backend
   'backend.aiBackend': 'AI Backend',
@@ -4116,6 +4144,16 @@ const en: TranslationMap = {
   'settings.agentAccess.agentBlocked': 'agent-blocked',
   'settings.agentAccess.internalStateDesc':
     'Memory databases, sessions, tokens, and other core persistence. Not accessible to agent tools.',
+  'settings.agentAccess.actionDirInputLabel': 'Action sandbox path',
+  'settings.agentAccess.actionDirSave': 'Save',
+  'settings.agentAccess.actionDirSaving': 'Saving…',
+  'settings.agentAccess.actionDirSaved': 'Action sandbox updated.',
+  'settings.agentAccess.actionDirEmptyError': 'Path cannot be empty.',
+  'settings.agentAccess.actionDirSaveError': 'Could not update the action sandbox.',
+  'settings.agentAccess.actionDirEnvOverrideError':
+    'OPENHUMAN_ACTION_DIR is set — unset the env var to edit this from Settings.',
+  'settings.agentAccess.actionDirEnvOverrideNote':
+    'Overridden by OPENHUMAN_ACTION_DIR — unset the env var to manage from Settings.',
   'settings.agentAccess.approvalHistory': 'Approval history',
   'settings.agentAccess.approvalHistoryDesc':
     'Review past Approve / Deny decisions the agent requested.',
@@ -4998,6 +5036,14 @@ const en: TranslationMap = {
   // Monthly cost badge
   'monthlyCost.badge': '${amount} this month',
   'monthlyCost.noData': 'No syncs this month',
+
+  // Security banner (approval-gate host-aware boot state)
+  'security.approvalGateDisabled.title': 'Approval gate disabled',
+  'security.approvalGateDisabled.body':
+    'OPENHUMAN_APPROVAL_GATE=0 is set in your environment. External-effect tools will run without asking for confirmation.',
+  'security.approvalGateOverrideIgnored.title': 'Override blocked',
+  'security.approvalGateOverrideIgnored.body':
+    'An OPENHUMAN_APPROVAL_GATE=0 override was detected but ignored: the desktop app always keeps the approval gate on.',
 
   // Run queue
   'runQueue.mode.interrupt': 'Interrupt',
