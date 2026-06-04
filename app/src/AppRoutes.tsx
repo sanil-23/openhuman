@@ -16,11 +16,11 @@ import Onboarding from './pages/onboarding/Onboarding';
 import Rewards from './pages/Rewards';
 import Routines from './pages/Routines';
 import Settings from './pages/Settings';
-import WorkflowNew from './pages/WorkflowNew';
 import Skills from './pages/Skills';
-import WorkflowsRun from './pages/WorkflowsRun';
 import WebCallbackPage from './pages/WebCallbackPage';
 import Welcome from './pages/Welcome';
+import WorkflowNew from './pages/WorkflowNew';
+import WorkflowsRun from './pages/WorkflowsRun';
 
 const AppRoutes = () => {
   // Mobile target (iOS or Android): pair → Human/Chat/Settings only.

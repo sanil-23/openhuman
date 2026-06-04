@@ -976,7 +976,6 @@ export default function Skills() {
           onClose={() => setComposioModalToolkit(null)}
         />
       )}
-
     </div>
   );
 }

@@ -43,7 +43,6 @@ import ScreenAwarenessDebugPanel from '../components/settings/panels/ScreenAware
 import ScreenIntelligencePanel from '../components/settings/panels/ScreenIntelligencePanel';
 import SearchPanel from '../components/settings/panels/SearchPanel';
 import SecurityPanel from '../components/settings/panels/SecurityPanel';
-import WorkflowRunnerPanel from '../components/settings/panels/WorkflowRunnerPanel';
 import TaskSourcesPanel from '../components/settings/panels/TaskSourcesPanel';
 import TeamInvitesPanel from '../components/settings/panels/TeamInvitesPanel';
 import TeamManagementPanel from '../components/settings/panels/TeamManagementPanel';
@@ -55,6 +54,7 @@ import VoiceDebugPanel from '../components/settings/panels/VoiceDebugPanel';
 import VoicePanel from '../components/settings/panels/VoicePanel';
 import WalletBalancesPanel from '../components/settings/panels/WalletBalancesPanel';
 import WebhooksDebugPanel from '../components/settings/panels/WebhooksDebugPanel';
+import WorkflowRunnerPanel from '../components/settings/panels/WorkflowRunnerPanel';
 import SettingsHome from '../components/settings/SettingsHome';
 import SettingsSectionPage from '../components/settings/SettingsSectionPage';
 import { useT } from '../lib/i18n/I18nContext';

@@ -22,11 +22,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { useT } from '../../lib/i18n/I18nContext';
 import { skillsApi, type SkillSummary } from '../../services/api/skillsApi';
 import type { ToastNotification } from '../../types/intelligence';
-import UnifiedSkillCard from '../skills/SkillCard';
 import CreateSkillModal from '../skills/CreateSkillModal';
 import InstallSkillDialog from '../skills/InstallSkillDialog';
-import { BUILT_IN_SKILL_ICONS } from '../skills/skillIcons';
+import UnifiedSkillCard from '../skills/SkillCard';
 import SkillDetailDrawer from '../skills/SkillDetailDrawer';
+import { BUILT_IN_SKILL_ICONS } from '../skills/skillIcons';
 import UninstallSkillConfirmDialog from '../skills/UninstallSkillConfirmDialog';
 import { ToastContainer } from './Toast';
 

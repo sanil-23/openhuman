@@ -107,11 +107,7 @@ export default function Intelligence() {
     comingSoon?: boolean;
     devOnly?: boolean;
   }[] = [
-    {
-      id: 'tasks',
-      label: t('memory.tab.tasks'),
-      description: t('memory.tab.tasksDescription'),
-    },
+    { id: 'tasks', label: t('memory.tab.tasks'), description: t('memory.tab.tasksDescription') },
     { id: 'memory', label: t('memory.tab.memory') },
     { id: 'subconscious', label: t('memory.tab.subconscious') },
     {
