@@ -16,7 +16,9 @@ describe('todosApi.setSessionThread', () => {
   it('links a card to its session thread via the RPC and returns the board', async () => {
     mockCallCoreRpc.mockResolvedValueOnce({
       threadId: 'user-tasks',
-      cards: [{ id: 'c1', title: 'T', status: 'todo', order: 0, updatedAt: '2026-01-01T00:00:00Z' }],
+      cards: [
+        { id: 'c1', title: 'T', status: 'todo', order: 0, updatedAt: '2026-01-01T00:00:00Z' },
+      ],
     });
 
     const board = await todosApi.setSessionThread('user-tasks', 'c1', 'task-abc');

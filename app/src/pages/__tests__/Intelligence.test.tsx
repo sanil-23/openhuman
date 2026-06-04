@@ -19,15 +19,11 @@ vi.mock('../../components/intelligence/ModelCouncilTab', () => ({
 }));
 vi.mock('../AgentWorkflows', () => ({ default: () => <div data-testid="tab-workflows" /> }));
 vi.mock('../../components/intelligence/Toast', () => ({ ToastContainer: () => null }));
-vi.mock('../../components/intelligence/ConfirmationModal', () => ({ ConfirmationModal: () => null }));
+vi.mock('../../components/intelligence/ConfirmationModal', () => ({
+  ConfirmationModal: () => null,
+}));
 vi.mock('../../components/PillTabBar', () => ({
-  default: ({
-    selected,
-    onChange,
-  }: {
-    selected: string;
-    onChange: (tab: string) => void;
-  }) => (
+  default: ({ selected, onChange }: { selected: string; onChange: (tab: string) => void }) => (
     <div data-testid="pilltabs">
       <span>selected:{selected}</span>
       {['memory', 'subconscious', 'tasks', 'workflows', 'council'].map(tab => (

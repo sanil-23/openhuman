@@ -201,7 +201,12 @@ describe('TaskKanbanBoard approval surface', () => {
     render(
       <TaskKanbanBoard
         board={board([
-          card({ id: 'c1', title: 'Worked card', status: 'in_progress', sessionThreadId: 'task-xyz' }),
+          card({
+            id: 'c1',
+            title: 'Worked card',
+            status: 'in_progress',
+            sessionThreadId: 'task-xyz',
+          }),
         ])}
         onViewSession={onViewSession}
       />
