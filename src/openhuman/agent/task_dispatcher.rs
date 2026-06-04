@@ -384,7 +384,13 @@ pub async fn dispatch_card(
     let reg_run_id = run_id.clone();
     let hb_cancel_for_task = hb_cancel_tx.clone();
     let task_thread = session_thread_id.clone();
+    // Gate the task on registration: a fast-finishing run could otherwise reach
+    // its terminal `take_active_run` before `register_active_run` below has run,
+    // see no entry, and skip `write_back` — leaving card/run state inconsistent.
+    // The task parks on `start_rx` until we release it after registration.
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel::<()>();
     let join = tokio::spawn(async move {
+        let _ = start_rx.await;
         let outcome = run_autonomous(config, &executor, &prompt, &run_id, session_thread_id).await;
         let _ = hb_cancel_for_task.send(true);
         // Race with a concurrent cancel: whoever removes the registry entry owns
@@ -413,6 +419,8 @@ pub async fn dispatch_card(
             },
         );
     }
+    // Registration (if any) is in place — release the task to start running.
+    let _ = start_tx.send(());
 
     Ok(DispatchOutcome::Running {
         run_id: run_id_for_return,

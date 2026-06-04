@@ -357,6 +357,11 @@ pub fn normalise_board(board: &mut TaskBoard) {
             .as_ref()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+        card.session_thread_id = card
+            .session_thread_id
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         if card.status == TaskCardStatus::Blocked && card.blocker.is_none() {
             card.blocker = card.notes.clone();
             tracing::trace!(
@@ -445,7 +450,7 @@ mod tests {
                     evidence: vec!["  cargo test  ".into()],
                     notes: Some("  note  ".into()),
                     blocker: None,
-                    session_thread_id: None,
+                    session_thread_id: Some("   ".into()),
                     source_metadata: None,
                     order: 99,
                     updated_at: String::new(),
@@ -487,6 +492,9 @@ mod tests {
         );
         assert_eq!(saved.cards[0].acceptance_criteria, vec!["tests pass"]);
         assert_eq!(saved.cards[0].evidence, vec!["cargo test"]);
+        // Whitespace-only session_thread_id normalises to None so the board
+        // never offers a blank "View session" jump target.
+        assert_eq!(saved.cards[0].session_thread_id, None);
         assert_eq!(saved.cards[0].order, 0);
         assert!(saved.cards[0].id.starts_with("task-"));
         assert_eq!(saved.cards[1].blocker.as_deref(), Some("waiting on user"));

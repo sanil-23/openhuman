@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   LuArrowLeft,
   LuArrowRight,
@@ -14,6 +13,7 @@ import {
   LuWrench,
   LuX,
 } from 'react-icons/lu';
+import { useNavigate } from 'react-router-dom';
 
 import { useT } from '../../../lib/i18n/I18nContext';
 import type { TaskBoard, TaskBoardCard, TaskBoardCardStatus } from '../../../types/turnState';

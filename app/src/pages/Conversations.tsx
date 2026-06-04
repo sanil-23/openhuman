@@ -376,9 +376,7 @@ const Conversations = ({
         // visibility filter so a task-labelled session thread can actually be
         // opened (the resume default below only considers General threads).
         const openThreadId = (location.state as { openThreadId?: string } | null)?.openThreadId;
-        const openThread = openThreadId
-          ? data.threads.find(t => t.id === openThreadId)
-          : undefined;
+        const openThread = openThreadId ? data.threads.find(t => t.id === openThreadId) : undefined;
         if (openThread) {
           // Switch the sidebar tab to the bucket that contains the opened
           // thread (e.g. Tasks for a task session) so it's visible/selected in
@@ -1613,8 +1611,11 @@ const Conversations = ({
                   }}
                   onViewSession={card => {
                     if (!card.sessionThreadId) return;
+                    // Navigation only — do NOT mark the thread active. activeThreadId
+                    // tracks a true in-flight turn (set on send, cleared on
+                    // done/error). A completed session never emits that lifecycle
+                    // event, so forcing it active would wedge the composer.
                     dispatch(setSelectedThread(card.sessionThreadId));
-                    dispatch(setActiveThread(card.sessionThreadId));
                     void dispatch(loadThreadMessages(card.sessionThreadId));
                   }}
                 />

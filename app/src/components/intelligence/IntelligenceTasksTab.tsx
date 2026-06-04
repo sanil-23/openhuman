@@ -568,8 +568,11 @@ export default function IntelligenceTasksTab() {
               // Open the exact session — mirror the manual "Work" path's
               // thread-open sequence so /chat lands on this thread, not just
               // the Conversations page.
+              // Navigation only — do NOT mark the thread active. activeThreadId
+              // tracks a true in-flight turn; a completed session never emits the
+              // done/error lifecycle that would clear it, so forcing it active
+              // would wedge the composer until then.
               dispatch(setSelectedThread(tid));
-              dispatch(setActiveThread(tid));
               void dispatch(loadThreads());
               void dispatch(loadThreadMessages(tid));
               // Pass the thread as an explicit open-intent so Conversations'

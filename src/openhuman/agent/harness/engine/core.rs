@@ -519,6 +519,20 @@ pub(crate) async fn run_turn_engine(
                     "[agent_loop] repeat-output circuit breaker tripped — identical response+tool-call repeated; halting with no-progress summary"
                 );
                 history.push(ChatMessage::assistant(assistant_history_content.clone()));
+                // Mirror the assistant turn to the observer like every other
+                // assistant-append path, so transcript/mirroring isn't skipped
+                // for the final repeated iteration on this early exit.
+                observer
+                    .on_assistant(
+                        &display_text,
+                        &response_text,
+                        reasoning_content.as_deref(),
+                        &native_tool_calls,
+                        &tool_calls,
+                        iteration,
+                        false,
+                    )
+                    .await;
                 observer.after_iteration(history, iteration);
                 progress.turn_completed((iteration + 1) as u32).await;
                 return Ok(TurnEngineOutcome {
