@@ -233,6 +233,54 @@ describe('workflowsApi.listWorkflows', () => {
     const result = await workflowsApi.listWorkflows();
     expect(result).toEqual([]);
   });
+
+  it('normalizes snake_case and legacy discovered workflow fields', async () => {
+    const { callCoreRpc } = await import('../../coreRpcClient');
+    vi.mocked(callCoreRpc).mockResolvedValueOnce({
+      workflows: [
+        {
+          id: 'hermes-demo',
+          name: 'Hermes Demo',
+          description: 'Reads Hermes metadata.',
+          version: '',
+          author: null,
+          tags: [],
+          related_skills: ['browser-automation'],
+          source_format: 'hermes',
+          tools: [],
+          prompts: [],
+          location: null,
+          resources: [],
+          scope: 'user',
+          legacy: false,
+          warnings: [],
+        },
+        {
+          id: 'legacy-demo',
+          name: 'Legacy Demo',
+          description: 'Old package.',
+          version: '',
+          author: null,
+          tags: [],
+          tools: [],
+          prompts: [],
+          location: null,
+          resources: [],
+          scope: 'user',
+          legacy: true,
+          warnings: [],
+        },
+      ],
+    });
+
+    const result = await workflowsApi.listWorkflows();
+
+    expect(callCoreRpc).toHaveBeenCalledWith({ method: 'openhuman.workflows_list' });
+    expect(result[0].relatedSkills).toEqual(['browser-automation']);
+    expect(result[0].sourceFormat).toBe('hermes');
+    expect(result[0].platforms).toEqual([]);
+    expect(result[1].sourceFormat).toBe('legacy');
+  });
 });
 
 describe('workflowsApi.readWorkflowResource', () => {

@@ -32,6 +32,12 @@ export interface WorkflowSummary {
   author: string | null;
   /** Tags declared in frontmatter metadata. */
   tags: string[];
+  /** Platform compatibility hints from SKILL.md frontmatter. */
+  platforms: string[];
+  /** Related skills declared by the originating ecosystem. */
+  relatedSkills: string[];
+  /** Normalized source format hint, e.g. openhuman, hermes, legacy. */
+  sourceFormat: string;
   /** Tool hint from `allowed-tools`. */
   tools: string[];
   /** Prompt files declared in the legacy manifest. */
@@ -49,8 +55,16 @@ export interface WorkflowSummary {
 }
 
 interface WorkflowsListResult {
-  workflows: WorkflowSummary[];
+  workflows: RawWorkflowSummary[];
 }
+
+type RawWorkflowSummary = Omit<WorkflowSummary, 'platforms' | 'relatedSkills' | 'sourceFormat'> & {
+  platforms?: string[];
+  related_skills?: string[];
+  relatedSkills?: string[];
+  source_format?: string;
+  sourceFormat?: string;
+};
 
 /**
  * Result of `openhuman.workflows_read_resource`.
@@ -120,7 +134,7 @@ export interface CreateWorkflowInput {
 }
 
 interface RawWorkflowsCreateResult {
-  workflow: WorkflowSummary;
+  workflow: RawWorkflowSummary;
 }
 
 /**
@@ -190,6 +204,15 @@ function unwrapEnvelope<T>(response: Envelope<T> | T): T {
   return response as T;
 }
 
+function normalizeWorkflowSummary(raw: RawWorkflowSummary): WorkflowSummary {
+  return {
+    ...raw,
+    platforms: raw.platforms ?? [],
+    relatedSkills: raw.relatedSkills ?? raw.related_skills ?? [],
+    sourceFormat: raw.sourceFormat ?? raw.source_format ?? (raw.legacy ? 'legacy' : 'openhuman'),
+  };
+}
+
 export const workflowsApi = {
   /** Enumerate SKILL.md / legacy skills visible in the active workspace. */
   listWorkflows: async (): Promise<WorkflowSummary[]> => {
@@ -198,7 +221,7 @@ export const workflowsApi = {
       method: 'openhuman.workflows_list',
     });
     const result = unwrapEnvelope(response);
-    const workflows = result?.workflows ?? [];
+    const workflows = (result?.workflows ?? []).map(normalizeWorkflowSummary);
     log('listWorkflows: response count=%d', workflows.length);
     return workflows;
   },
@@ -261,8 +284,9 @@ export const workflowsApi = {
       },
     });
     const raw = unwrapEnvelope(response);
-    log('createWorkflow: response id=%s', raw.workflow.id);
-    return raw.workflow;
+    const workflow = normalizeWorkflowSummary(raw.workflow);
+    log('createWorkflow: response id=%s', workflow.id);
+    return workflow;
   },
 
   /**
@@ -292,8 +316,9 @@ export const workflowsApi = {
       },
     });
     const raw = unwrapEnvelope(response);
-    log('updateWorkflow: response id=%s', raw.workflow.id);
-    return raw.workflow;
+    const workflow = normalizeWorkflowSummary(raw.workflow);
+    log('updateWorkflow: response id=%s', workflow.id);
+    return workflow;
   },
 
   /**
