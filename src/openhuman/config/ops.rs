@@ -953,6 +953,23 @@ pub fn expand_tilde(path: &str) -> String {
     out.to_string_lossy().into_owned()
 }
 
+/// Redact a path for logging by replacing the user's home-directory prefix with
+/// `~`. Keeps the path *shape* (e.g. `~/OpenHuman/projects`) useful for
+/// diagnosis while not leaking the OS username / full home path (PII). Paths
+/// outside the home dir are returned unchanged.
+pub(crate) fn redact_home(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if let Some(home) = dirs::home_dir() {
+        let home = home.to_string_lossy();
+        if !home.is_empty() {
+            if let Some(rest) = s.strip_prefix(home.as_ref()) {
+                return format!("~{rest}");
+            }
+        }
+    }
+    s.into_owned()
+}
+
 /// Ensure the agent's action sandbox + default projects home exist and the
 /// projects dir is registered as a `ReadWrite` trusted root. Idempotent — safe
 /// to call from every boot path (web-chat-only `bootstrap_core_runtime` **and**
@@ -973,7 +990,7 @@ pub async fn ensure_agent_dirs(config: &mut Config) {
     let projects_dir = crate::openhuman::config::default_projects_dir();
     if let Err(e) = tokio::fs::create_dir_all(&projects_dir).await {
         tracing::warn!(
-            dir = %projects_dir.display(),
+            dir = %redact_home(&projects_dir),
             error = %e,
             "[startup] could not create default projects dir"
         );
@@ -995,14 +1012,14 @@ pub async fn ensure_agent_dirs(config: &mut Config) {
     let action_dir = config.action_dir.clone();
     if let Err(e) = tokio::fs::create_dir_all(&action_dir).await {
         tracing::warn!(
-            dir = %action_dir.display(),
+            dir = %redact_home(&action_dir),
             error = %e,
             "[startup] could not create action sandbox dir"
         );
     }
     tracing::info!(
-        workspace = %config.workspace_dir.display(),
-        action = %action_dir.display(),
+        workspace = %redact_home(&config.workspace_dir),
+        action = %redact_home(&action_dir),
         "[startup] workspace (internal state) and action sandbox (tool cwd) directories configured"
     );
 }
