@@ -123,6 +123,12 @@ pub async fn execute_in_sandbox(
     extra_env: HashMap<String, String>,
     timeout: Duration,
 ) -> anyhow::Result<SandboxExecResult> {
+    // Validate the working directory up front so a missing/bad action_dir
+    // surfaces an actionable, path-naming error here rather than an opaque OS
+    // error 267 (ERROR_DIRECTORY) at spawn time — parity with the unsandboxed
+    // `NativeRuntime::build_shell_command` guard. Applies to every backend.
+    // (#3353, Fix 2)
+    crate::openhuman::config::ensure_usable_cwd(working_dir)?;
     match policy.backend {
         SandboxBackendKind::None => {
             execute_unsandboxed(command, working_dir, &extra_env, timeout).await
