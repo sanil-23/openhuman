@@ -995,7 +995,7 @@ pub fn render_ambient_environment(ctx: &PromptContext<'_>) -> Result<String> {
 /// manufacture a full context when they only need the static text.
 fn empty_prompt_context_for_static_sections() -> PromptContext<'static> {
     static EMPTY_TOOLS: &[PromptTool<'static>] = &[];
-    static EMPTY_SKILLS: &[Workflow] = &[];
+    static EMPTY_WORKFLOWS: &[Workflow] = &[];
     static EMPTY_INTEGRATIONS: &[ConnectedIntegration] = &[];
     // SAFETY: the &HashSet reference must outlive the returned context;
     // a leaked OnceLock-style allocation gives us a permanent 'static
@@ -1007,7 +1007,7 @@ fn empty_prompt_context_for_static_sections() -> PromptContext<'static> {
         model_name: "",
         agent_id: "",
         tools: EMPTY_TOOLS,
-        skills: EMPTY_SKILLS,
+        workflows: EMPTY_WORKFLOWS,
         dispatcher_instructions: "",
         learned: LearnedContextData::default(),
         visible_tool_names: visible,

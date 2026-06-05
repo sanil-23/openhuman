@@ -94,7 +94,7 @@ impl AgentBuilder {
             temperature: None,
             workspace_dir: None,
             action_dir: None,
-            skills: None,
+            workflows: None,
             auto_save: None,
             post_turn_hooks: Vec::new(),
             learning_enabled: false,
@@ -205,9 +205,9 @@ impl AgentBuilder {
         self
     }
 
-    /// Sets the skills available to the agent.
-    pub fn skills(mut self, skills: Vec<crate::openhuman::workflows::Workflow>) -> Self {
-        self.skills = Some(skills);
+    /// Sets the workflows available to the agent.
+    pub fn workflows(mut self, workflows: Vec<crate::openhuman::workflows::Workflow>) -> Self {
+        self.workflows = Some(workflows);
         self
     }
 
@@ -557,7 +557,7 @@ impl AgentBuilder {
             temperature: self.temperature.unwrap_or(0.7),
             workspace_dir,
             action_dir,
-            skills: self.skills.unwrap_or_default(),
+            workflows: self.workflows.unwrap_or_default(),
             auto_save: self.auto_save.unwrap_or(false),
             last_memory_context: None,
             last_turn_citations: Vec::new(),
@@ -1570,7 +1570,7 @@ impl Agent {
             .temperature(effective_temperature)
             .workspace_dir(config.workspace_dir.clone())
             .action_dir(config.action_dir.clone())
-            .skills(crate::openhuman::workflows::load_workflow_metadata(
+            .workflows(crate::openhuman::workflows::load_workflow_metadata(
                 &config.workspace_dir,
             ))
             .auto_save(config.memory.auto_save)

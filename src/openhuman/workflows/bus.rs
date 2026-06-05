@@ -109,7 +109,7 @@ impl TriggeredWorkflowIndex {
                         let p = TriggerPattern::parse(t);
                         if p.is_none() {
                             log::warn!(
-                                "[skills::triggered] skill '{}': malformed trigger {:?} — skipping",
+                                "[workflows::triggered] skill '{}': malformed trigger {:?} — skipping",
                                 skill.name,
                                 t
                             );
@@ -184,7 +184,7 @@ impl EventHandler for TriggeredSkillSubscriber {
         tracing::debug!(
             domain = event.domain(),
             skills = ?matched,
-            "[skills::triggered] event matches {} skill trigger(s); \
+            "[workflows::triggered] event matches {} skill trigger(s); \
              activation handoff to integration layer pending",
             matched.len()
         );
@@ -213,7 +213,7 @@ pub fn register_triggered_workflow_subscriber(skills: &[Workflow]) -> Option<Sub
         return None;
     }
     log::info!(
-        "[skills::triggered] registering subscriber for {} skill(s) with event triggers (domains: {:?})",
+        "[workflows::triggered] registering subscriber for {} skill(s) with event triggers (domains: {:?})",
         index.len(),
         index.domains()
     );

@@ -398,11 +398,11 @@ impl Agent {
         // heuristic and size cap rationale.
         let enriched = {
             use crate::openhuman::workflows::inject;
-            let matches = inject::match_workflows(&self.skills, user_message);
+            let matches = inject::match_workflows(&self.workflows, user_message);
             if matches.is_empty() {
                 log::debug!(
-                    "[skills:inject] no skill matches for user message (skill_catalog_len={})",
-                    self.skills.len()
+                    "[workflows:inject] no skill matches for user message (skill_catalog_len={})",
+                    self.workflows.len()
                 );
                 enriched
             } else {
@@ -413,7 +413,7 @@ impl Agent {
                 );
                 let matched_count = injection.decisions.iter().filter(|d| d.matched).count();
                 log::info!(
-                    "[skills:inject] summary candidates={} matched={} injected_bytes={} truncated_any={}",
+                    "[workflows:inject] summary candidates={} matched={} injected_bytes={} truncated_any={}",
                     injection.decisions.len(),
                     matched_count,
                     injection.injected_bytes,
@@ -822,7 +822,7 @@ impl Agent {
             workspace_dir: self.workspace_dir.clone(),
             memory: Arc::clone(&self.memory),
             agent_config: self.config.clone(),
-            skills: Arc::new(self.skills.clone()),
+            workflows: Arc::new(self.workflows.clone()),
             memory_context: Arc::new(self.last_memory_context.clone()),
             session_id: self.event_session_id().to_string(),
             channel: self.event_channel().to_string(),
@@ -1459,7 +1459,7 @@ impl Agent {
             model_name: &self.model_name,
             agent_id: &self.agent_definition_name,
             tools: &prompt_tools,
-            skills: &self.skills,
+            workflows: &self.workflows,
             dispatcher_instructions: &instructions,
             learned,
             visible_tool_names: &prompt_visible_tool_names,
