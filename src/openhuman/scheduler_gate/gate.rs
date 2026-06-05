@@ -778,4 +778,60 @@ mod tests {
             .expect("parked waiter must wake promptly after notify_one")
             .expect("waiter task must not panic");
     }
+
+    /// #2831 wiring: a paused→running `update_config` transition and a
+    /// sign-in (`set_signed_out` true→false) each fire the resume notify.
+    ///
+    /// Seeds `STATE` directly (the test module can reach it) so `update_config`
+    /// / `set_signed_out` are live without spawning the real sampler. We drive
+    /// `Off → AlwaysOn`, which is deterministically `Paused → Aggressive`
+    /// regardless of any policy a prior test left behind, so the transition —
+    /// and thus the `notify_one()` — is guaranteed.
+    #[tokio::test]
+    async fn resume_transitions_fire_the_notify() {
+        use crate::openhuman::config::SchedulerGateMode;
+        let _g = lock();
+
+        // Ensure STATE is initialised. `set` is a no-op if an earlier test
+        // already promoted it — that's fine, we re-drive the transition below.
+        let cfg = SchedulerGateConfig {
+            mode: SchedulerGateMode::Off,
+            ..Default::default()
+        };
+        let signals = Signals::sample();
+        let policy = decide(&signals, &cfg);
+        let _ = STATE.set(Arc::new(RwLock::new(State {
+            cfg,
+            signals,
+            policy,
+        })));
+
+        // --- update_config: Paused -> running fires the notify ---
+        let waiter = resume_notify();
+        let parked = tokio::spawn(async move { waiter.notified().await });
+        tokio::task::yield_now().await;
+        update_config(SchedulerGateConfig {
+            mode: SchedulerGateMode::Off,
+            ..Default::default()
+        }); // -> Paused { UserDisabled }
+        update_config(SchedulerGateConfig {
+            mode: SchedulerGateMode::AlwaysOn,
+            ..Default::default()
+        }); // Paused -> Aggressive => resume fires
+        timeout(TokioDuration::from_secs(1), parked)
+            .await
+            .expect("update_config un-pause must wake the resume waiter")
+            .expect("waiter task must not panic");
+
+        // --- set_signed_out true -> false fires the notify ---
+        let waiter2 = resume_notify();
+        let parked2 = tokio::spawn(async move { waiter2.notified().await });
+        tokio::task::yield_now().await;
+        set_signed_out(true);
+        set_signed_out(false); // true -> false => resume fires
+        timeout(TokioDuration::from_secs(1), parked2)
+            .await
+            .expect("sign-in (signed_out true->false) must wake the resume waiter")
+            .expect("waiter task must not panic");
+    }
 }
