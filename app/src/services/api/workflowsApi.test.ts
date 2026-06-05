@@ -68,7 +68,7 @@ describe('workflowsApi', () => {
   });
 
   describe('readRunLog', () => {
-    it('calls skills_read_run_log with run_id', async () => {
+    it('calls workflows_read_run_log with run_id', async () => {
       mockCallCoreRpc.mockResolvedValue({
         bytes_read: 100,
         eof: false,

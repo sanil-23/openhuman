@@ -175,7 +175,7 @@ function defaultForType(type: string): InputValue {
 }
 
 /**
- * Project the form-state map back into the JSON inputs shape `skills_run`
+ * Project the form-state map back into the JSON inputs shape `workflows_run`
  * expects: trim strings, coerce integer-typed fields to numbers, drop
  * empty optional fields entirely (so the backend sees them as "not
  * provided" rather than `""`).
@@ -449,7 +449,7 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
     return () => clearTimeout(timer);
   }, [searchParams, selectedSkillId]);
 
-  // ── Initial load: skills_list ──────────────────────────────────────
+  // ── Initial load: workflows_list ──────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     setSkillsLoading(true);
@@ -477,7 +477,7 @@ export const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyPr
     };
   }, []);
 
-  // ── On selection: skills_describe ──────────────────────────────────
+  // ── On selection: workflows_describe ──────────────────────────────────
   useEffect(() => {
     if (!selectedSkillId) {
       setDescription(null);

@@ -10,7 +10,7 @@ describe('workflowsApi.createWorkflow', () => {
     vi.mocked(callCoreRpc).mockReset();
   });
 
-  it('forwards inputs to skills_create and rekeys allowedTools', async () => {
+  it('forwards inputs to workflows_create and rekeys allowedTools', async () => {
     const { callCoreRpc } = await import('../../coreRpcClient');
     vi.mocked(callCoreRpc).mockResolvedValueOnce({
       workflow: {
