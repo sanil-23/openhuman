@@ -10,7 +10,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use parking_lot::RwLock;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::openhuman::config::{Config, SchedulerGateConfig};
 use crate::openhuman::scheduler_gate::policy::{decide, PauseReason, Policy};
@@ -240,12 +240,50 @@ pub fn init_global(config: &Config) {
     });
 }
 
+/// Process-wide resume signal (#2831). Fired whenever the gate transitions
+/// **out of** a paused state — the user toggles Memory Tree back on
+/// ([`update_config`]) or signs back in ([`set_signed_out`]). Background loops
+/// (e.g. the Composio periodic scheduler) park on [`resume_notify`] so they can
+/// resume work within seconds instead of waiting out their next tick boundary.
+static RESUME_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
+
+/// Handle to the process-wide resume [`Notify`] (#2831).
+///
+/// Both the firing side (`update_config` / `set_signed_out`) and the waiting
+/// side (background loops) call this, so they share one instance. Use
+/// `notify_one()` to fire: if a loop is parked it wakes immediately; if it's
+/// mid-tick, a single permit is stored so the *next* `notified()` returns at
+/// once — a resume that arrives during a tick is never lost.
+///
+/// **Over-notifying is safe by design.** A spurious wake (e.g. Memory Tree
+/// toggled on while still signed out, so the effective policy is still paused)
+/// just causes one cheap gate-checked tick that re-reads [`current_policy`] and
+/// no-ops. We therefore fire on each individual un-pause transition rather than
+/// computing the precise combined (config × signed-out) edge.
+pub fn resume_notify() -> Arc<Notify> {
+    RESUME_NOTIFY
+        .get_or_init(|| Arc::new(Notify::new()))
+        .clone()
+}
+
 /// Update the gate's view of user config (e.g. after a settings change).
+///
+/// Fires [`resume_notify`] when this update moves the policy out of a paused
+/// state (e.g. Memory Tree toggled back on), so parked background loops resume
+/// promptly (#2831).
 pub fn update_config(cfg: SchedulerGateConfig) {
-    if let Some(state) = STATE.get() {
+    let Some(state) = STATE.get() else {
+        return;
+    };
+    let resumed = {
         let mut guard = state.write();
+        let was_paused = matches!(guard.policy, Policy::Paused { .. });
         guard.cfg = cfg;
         guard.policy = decide(&guard.signals, &guard.cfg);
+        was_paused && !matches!(guard.policy, Policy::Paused { .. })
+    };
+    if resumed {
+        resume_notify().notify_one();
     }
 }
 
@@ -311,6 +349,12 @@ pub fn set_signed_out(signed_out: bool) {
     let prev = SIGNED_OUT.swap(signed_out, Ordering::AcqRel);
     if prev != signed_out {
         log::info!("[scheduler_gate] signed_out {} -> {}", prev, signed_out);
+        // #2831: signing back in (true -> false) is a transition out of
+        // `Policy::Paused { SignedOut }`. Wake any periodic loop so background
+        // sync restarts immediately rather than at the next tick boundary.
+        if prev && !signed_out {
+            resume_notify().notify_one();
+        }
     }
 }
 
@@ -325,6 +369,11 @@ pub fn set_signed_out(signed_out: bool) {
     let prev = test_state::set_signed_out_for(id, signed_out);
     if prev != signed_out {
         log::info!("[scheduler_gate] signed_out {} -> {}", prev, signed_out);
+        // #2831: mirror the production sign-in wake so tests exercise the
+        // same resume-notify path (true -> false fires the loop wake).
+        if prev && !signed_out {
+            resume_notify().notify_one();
+        }
     }
 }
 
@@ -699,5 +748,34 @@ mod tests {
         // Now another should succeed.
         let p2 = try_acquire_llm_permit().expect("permit free after drop");
         drop(p2);
+    }
+
+    /// #2831: both the firing side (`update_config` / `set_signed_out`) and the
+    /// waiting side (the periodic loop) must observe the *same* `Notify`, so
+    /// `resume_notify` must hand back one process-wide instance.
+    #[tokio::test]
+    async fn resume_notify_is_a_stable_singleton() {
+        let _g = lock();
+        assert!(
+            Arc::ptr_eq(&resume_notify(), &resume_notify()),
+            "resume_notify must return one shared instance"
+        );
+    }
+
+    /// A `notify_one()` wakes a task parked on `notified()` — the mechanism the
+    /// periodic loop relies on to resume early. Proves the singleton wiring
+    /// end-to-end (fire on one handle, wake on another).
+    #[tokio::test]
+    async fn resume_notify_wakes_a_parked_waiter() {
+        let _g = lock();
+        let waiter = resume_notify();
+        let parked = tokio::spawn(async move { waiter.notified().await });
+        // Yield so the spawned task reaches `.notified()` before we fire.
+        tokio::task::yield_now().await;
+        resume_notify().notify_one();
+        timeout(TokioDuration::from_secs(1), parked)
+            .await
+            .expect("parked waiter must wake promptly after notify_one")
+            .expect("waiter task must not panic");
     }
 }
