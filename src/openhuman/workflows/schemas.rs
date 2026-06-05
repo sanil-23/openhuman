@@ -155,7 +155,7 @@ impl From<Workflow> for WorkflowSummary {
 
 #[derive(Debug, Serialize)]
 struct WorkflowsListResult {
-    skills: Vec<WorkflowSummary>,
+    workflows: Vec<WorkflowSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,7 +168,7 @@ struct WorkflowsReadResourceResult {
 
 #[derive(Debug, Serialize)]
 struct WorkflowsCreateResult {
-    skill: WorkflowSummary,
+    workflow: WorkflowSummary,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,7 +192,7 @@ struct WorkflowsInstallFromUrlResult {
     url: String,
     stdout: String,
     stderr: String,
-    new_skills: Vec<String>,
+    new_workflows: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -275,9 +275,9 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
             description: "List SKILL.md and legacy skills discovered in the user home and workspace.",
             inputs: vec![],
             outputs: vec![FieldSchema {
-                name: "skills",
+                name: "workflows",
                 ty: TypeSchema::Array(Box::new(TypeSchema::Ref("WorkflowSummary"))),
-                comment: "Discovered skills (sorted by name, project-scope shadows user-scope).",
+                comment: "Discovered workflows (sorted by name, project-scope shadows user-scope).",
                 required: true,
             }],
         },
@@ -457,9 +457,9 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
                 },
             ],
             outputs: vec![FieldSchema {
-                name: "skill",
+                name: "workflow",
                 ty: TypeSchema::Ref("WorkflowSummary"),
-                comment: "The newly created skill, re-discovered through the standard pipeline.",
+                comment: "The newly created workflow, re-discovered through the standard pipeline.",
                 required: true,
             }],
         },
@@ -510,9 +510,9 @@ pub fn workflows_schemas(function: &str) -> ControllerSchema {
                     required: true,
                 },
                 FieldSchema {
-                    name: "new_skills",
+                    name: "new_workflows",
                     ty: TypeSchema::Array(Box::new(TypeSchema::String)),
-                    comment: "Slugs of skills that appeared in the catalog as a result of the install.",
+                    comment: "Slugs of workflows that appeared in the catalog as a result of the install.",
                     required: true,
                 },
             ],
@@ -703,7 +703,9 @@ fn handle_workflows_list(params: Map<String, Value>) -> ControllerFuture {
         );
         let summaries = skills.into_iter().map(WorkflowSummary::from).collect();
         to_json(RpcOutcome::new(
-            WorkflowsListResult { skills: summaries },
+            WorkflowsListResult {
+                workflows: summaries,
+            },
             Vec::new(),
         ))
     })
@@ -1241,7 +1243,7 @@ fn handle_workflows_create(params: Map<String, Value>) -> ControllerFuture {
                 );
                 to_json(RpcOutcome::new(
                     WorkflowsCreateResult {
-                        skill: WorkflowSummary::from(skill),
+                        workflow: WorkflowSummary::from(skill),
                     },
                     Vec::new(),
                 ))
@@ -1271,7 +1273,7 @@ fn handle_workflows_update(params: Map<String, Value>) -> ControllerFuture {
         match create_workflow(workspace.as_path(), create_params) {
             Ok(skill) => to_json(RpcOutcome::new(
                 WorkflowsCreateResult {
-                    skill: WorkflowSummary::from(skill),
+                    workflow: WorkflowSummary::from(skill),
                 },
                 Vec::new(),
             )),
@@ -1306,7 +1308,7 @@ fn handle_workflows_install_from_url(params: Map<String, Value>) -> ControllerFu
                         url: outcome.url,
                         stdout: outcome.stdout,
                         stderr: outcome.stderr,
-                        new_skills: outcome.new_skills,
+                        new_workflows: outcome.new_skills,
                     },
                     Vec::new(),
                 ))
