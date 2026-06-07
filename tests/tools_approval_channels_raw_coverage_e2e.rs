@@ -311,6 +311,7 @@ fn coverage_connected_integration(
         tools: vec![],
         gated_tools: vec![],
         connected,
+        connections: Vec::new(),
         non_active_status: None,
     }
 }
@@ -2073,7 +2074,15 @@ async fn web_channel_public_paths_cover_event_delivery_and_validation_errors() {
 
     assert_eq!(
         openhuman_core::openhuman::channels::web::start_chat(
-            "", "thread-1", "hello", None, None, None, None, None,
+            "",
+            "thread-1",
+            "hello",
+            None,
+            None,
+            None,
+            None,
+            None,
+            openhuman_core::openhuman::channels::web::ChatRequestMetadata::default(),
         )
         .await
         .expect_err("blank client_id"),
@@ -2081,7 +2090,15 @@ async fn web_channel_public_paths_cover_event_delivery_and_validation_errors() {
     );
     assert_eq!(
         openhuman_core::openhuman::channels::web::start_chat(
-            "client-1", "", "hello", None, None, None, None, None,
+            "client-1",
+            "",
+            "hello",
+            None,
+            None,
+            None,
+            None,
+            None,
+            openhuman_core::openhuman::channels::web::ChatRequestMetadata::default(),
         )
         .await
         .expect_err("blank thread_id"),
@@ -2089,7 +2106,15 @@ async fn web_channel_public_paths_cover_event_delivery_and_validation_errors() {
     );
     assert_eq!(
         openhuman_core::openhuman::channels::web::start_chat(
-            "client-1", "thread-1", "   ", None, None, None, None, None,
+            "client-1",
+            "thread-1",
+            "   ",
+            None,
+            None,
+            None,
+            None,
+            None,
+            openhuman_core::openhuman::channels::web::ChatRequestMetadata::default(),
         )
         .await
         .expect_err("blank message"),

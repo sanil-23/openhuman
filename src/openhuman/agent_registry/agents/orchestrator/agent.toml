@@ -40,11 +40,8 @@ omit_memory_md = false
 # function-calling schema, so routing decisions happen at the tool-
 # selection layer rather than hidden inside a mega-tool's enum param.
 #
-# NOTE: `subagents = [...]` MUST appear before any `[table]` section
-# header — once a TOML table opens, subsequent top-level keys are
-# consumed by that table, and `subagents` would get parsed as
-# `tools.subagents` (which fails because `ToolScope` is an enum).
-subagents = [
+[subagents]
+allowlist = [
     "researcher",
     "planner",
     "code_executor",
@@ -63,6 +60,10 @@ subagents = [
     # "forget", profile/persona edits, learned facets, and people alias
     # management here.
     "profile_memory_agent",
+    # Hidden memory retrieval specialist reached through `call_memory_agent`.
+    # Keep it in the allowlist so direct memory lookups are subject to the
+    # same parent-context gate as explicit subagent delegation.
+    "agent_memory",
     # Account/admin specialist. Route billing, team membership/invites/roles,
     # OAuth/credential/session, and referral requests here.
     "account_admin_agent",
@@ -141,8 +142,7 @@ hint = "chat"
 # the orchestrator never calls composio_authorize / composio_list_tools
 # / composio_execute directly.
 named = [
-    "query_memory",
-    "memory_tree",
+    "call_memory_agent",
     "read_workspace_state",
     "ask_user_clarification",
     "spawn_worker_thread",

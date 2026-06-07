@@ -12,6 +12,7 @@ pub(crate) mod user_filter;
 pub(crate) mod implementations;
 
 pub use crate::openhuman::agent::tools::*;
+pub use crate::openhuman::agent_memory::tools::*;
 pub use crate::openhuman::agent_orchestration::tools::*;
 pub use crate::openhuman::artifacts::tools::*;
 pub use crate::openhuman::audio_toolkit::tools::*;
@@ -29,6 +30,8 @@ pub use crate::openhuman::integrations::tools::*;
 pub use crate::openhuman::learning::tools::*;
 pub use crate::openhuman::mcp_registry::tools::*;
 pub use crate::openhuman::memory::tools::*;
+pub use crate::openhuman::memory_diff::tools::*;
+pub use crate::openhuman::memory_search::*;
 pub use crate::openhuman::monitor::tools::*;
 pub use crate::openhuman::people::tools::*;
 pub use crate::openhuman::referral::tools::*;

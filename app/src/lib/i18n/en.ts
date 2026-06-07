@@ -10,6 +10,10 @@ const en: TranslationMap = {
   'nav.alerts': 'Alerts',
   'nav.rewards': 'Rewards',
   'nav.settings': 'Settings',
+  'nav.agentProfiles': 'Agent profiles',
+  'nav.switchAgentProfile': 'Switch agent profile',
+  'nav.defaultAgentProfile': 'Default agent',
+  'nav.noAgentProfiles': 'No agent profiles found',
 
   // Common
   'common.cancel': 'Cancel',
@@ -290,6 +294,22 @@ const en: TranslationMap = {
   'skills.explorer.subtitle':
     'Browse SKILL.md packages, including Hermes-style markdown, scripts, references, templates, examples, and prompts.',
   'skills.explorer.title': 'Skills explorer',
+  'skills.explorer.searchPlaceholder': 'Search skills...',
+  'skills.explorer.scopeUser': 'User',
+  'skills.explorer.scopeProject': 'Project',
+  'skills.explorer.scopeLegacy': 'Legacy',
+  'skills.explorer.noDescription': 'No description provided.',
+  'skills.explorer.uninstallSuccess': 'Skill uninstalled successfully.',
+  'skills.explorer.registryTab': 'Registry',
+  'skills.explorer.installedTab': 'Installed',
+  'skills.explorer.allFormats': 'All formats',
+  'skills.explorer.refreshRegistry': 'Refresh registry',
+  'skills.explorer.registryEmptyTitle': 'No registry entries',
+  'skills.explorer.registryEmptyDescription':
+    'Could not load the skill registry. Check your connection and try refreshing.',
+  'skills.explorer.installed': 'Installed',
+  'skills.explorer.install': 'Install',
+  'skills.explorer.installing': 'Installing…',
   'skills.integrations': 'Composio Integrations',
   'skills.integrationsSubtitle':
     'Cloud-based OAuth connections — sign in with your account and Composio brokers the tokens so agents can read and act on your behalf. No API keys to manage.',
@@ -300,6 +320,7 @@ const en: TranslationMap = {
   'skills.tabs.composio': 'Composio',
   'skills.tabs.channels': 'Channels',
   'skills.tabs.explorer': 'Skills',
+  'skills.tabs.meetings': 'Google Meet',
   'skills.tabs.mcp': 'MCP Servers',
   // Intelligence / Memory
   'memory.title': 'Memory',
@@ -308,10 +329,13 @@ const en: TranslationMap = {
   'memory.empty': 'No memories yet. Memories are created automatically as you interact.',
   'memory.tab.memory': 'Memory',
   'memory.tab.memoryTree': 'Memory Tree',
-  'memory.tab.tasks': 'Agent Tasks',
+  'memory.tab.tasks': 'Tasks',
   'memory.tab.tasksDescription':
     'Create and track tasks — your own to-dos plus the boards your agents build across conversations.',
   'memory.tab.subconscious': 'Subconscious',
+  'memory.tab.agents': 'Library',
+  'memory.tab.agentsDescription':
+    'Browse and run your available agents — each with its own tools, capabilities, and focus area.',
   'memory.tab.workflows': 'Workflows',
   'memory.tab.workflowsDescription':
     'Reusable, runnable procedures — a goal plus the steps to reach it. Create one, install from a URL, or open a workflow to run it.',
@@ -749,7 +773,7 @@ const en: TranslationMap = {
   'onboarding.runtimeChoice.custom.f3': 'Keep supported workloads on your machine',
   'onboarding.runtimeChoice.custom.f4': 'More setup, more knobs',
   'onboarding.runtimeChoice.custom.f5': 'Best for power users and developers',
-  'onboarding.runtimeChoice.cloud.creditHighlight': '$1 free credit to try it out',
+  'onboarding.runtimeChoice.cloud.creditHighlight': 'Free credits when you sign up',
   'onboarding.runtimeChoice.continueCloud': 'Continue with Simple',
   'onboarding.runtimeChoice.continueCustom': 'Continue with Custom',
   'onboarding.runtimeChoice.recommended': 'Recommended',
@@ -1154,6 +1178,19 @@ const en: TranslationMap = {
   'settings.costDashboard.utcNote': 'Days bucketed in UTC',
   'settings.costDashboard.stackedNote': 'Input + output stacked',
   'settings.costDashboard.modelBreakdownHint': 'Aggregated across the last 7 days.',
+  'settings.costDashboard.categoryDistribution': 'Spend by category',
+  'settings.costDashboard.categoryDistributionHint':
+    'Inferred from recent usage records across chat, embeddings, voice, image, and reranking calls.',
+  'settings.costDashboard.noCategories': 'No category spend recorded yet.',
+  'settings.costDashboard.categoryMeta': '{requests} requests • {tokens} tokens',
+  'settings.costDashboard.usageLog': 'Usage log',
+  'settings.costDashboard.usageLogHint':
+    'Newest records from the last {days} days, capped at {limit} rows.',
+  'settings.costDashboard.logTotal': '{requests} requests • {cost}',
+  'settings.costDashboard.noUsageLog': 'No usage records found for this period.',
+  'settings.costDashboard.when': 'When',
+  'settings.costDashboard.category': 'Category',
+  'settings.costDashboard.session': 'Session',
   'settings.costDashboard.noDataHint':
     'Send an agent message — token usage from the next provider call will populate the chart within ~10 seconds.',
   'settings.search.title': 'Search engine',
@@ -1898,6 +1935,30 @@ const en: TranslationMap = {
   'voice.externalProviders.apiKeyPlaceholder': 'sk-…',
   'voice.externalProviders.add': 'Add',
 
+  // Push-to-talk (PTT)
+  'pttSettings.title': 'Push-to-talk',
+  'pttSettings.description':
+    "Hold a key to talk to OpenHuman while you're in another app. Release the key to send; OpenHuman speaks the reply if 'Speak agent replies' is on.",
+  'pttSettings.shortcutLabel': 'Hotkey',
+  'pttSettings.shortcutPlaceholder': 'Press a key (e.g. F13)',
+  'pttSettings.shortcutUnsetHint': 'Push-to-talk is off — pick a hotkey to enable.',
+  'pttSettings.speakRepliesLabel': 'Speak agent replies',
+  'pttSettings.showOverlayLabel': 'Show overlay while held',
+  'pttSettings.errorConflictsWithDictation':
+    'This shortcut is already used by dictation. Pick a different key.',
+  'pttSettings.errorModifierOnly':
+    "Pick a regular key (e.g. F13) — modifier-only shortcuts don't work for push-to-talk.",
+  'pttSettings.errorEmpty': 'Pick a key to bind.',
+  'pttSettings.errorAccessibility':
+    'macOS needs Accessibility permission for this shortcut. Open System Settings → Privacy & Security → Accessibility and enable OpenHuman.',
+  'pttSettings.errorShortcutInUse': 'Another app already uses this shortcut. Pick a different one.',
+  'pttSettings.errorUnsupportedWayland':
+    "Wayland sessions don't support global shortcuts in OpenHuman yet — switch to an X11 session or use the in-app dictation toggle.",
+  'pttSettings.exclusiveFullscreenHint':
+    "In exclusive-fullscreen games the overlay won't render — you'll only hear the chime. Switch to borderless fullscreen for the overlay.",
+  'pttOverlay.listening': 'Listening…',
+  'pttOverlay.idle': 'Idle',
+
   // Autocomplete
   'autocomplete.title': 'Autocomplete',
   'autocomplete.settings': 'Settings',
@@ -2149,6 +2210,7 @@ const en: TranslationMap = {
   'chat.attachment.attach': 'Attach image',
   'chat.attachment.remove': 'Remove {name}',
   'chat.attachment.tooMany': 'Maximum {max} images per message',
+  'chat.attachment.tooManyFiles': 'Maximum {max} files per message',
   'chat.attachment.tooLarge': 'Image exceeds {max} size limit',
   'chat.attachment.unsupportedType': 'Unsupported file type. Use PNG, JPEG, WebP, GIF, or BMP.',
   'chat.attachment.readFailed': 'Could not read file',
@@ -2462,6 +2524,7 @@ const en: TranslationMap = {
   'memorySources.cssSelectorPlaceholder': 'article',
   'memorySources.searchQueryPlaceholder': 'from:user AI safety',
   'memorySources.kind.composio': 'Integration',
+  'memorySources.kind.conversation': 'Conversation',
   'memorySources.kind.folder': 'Local Folder',
   'memorySources.kind.github_repo': 'GitHub Repo',
   'memorySources.kind.twitter_query': 'Twitter Search',
@@ -2555,6 +2618,8 @@ const en: TranslationMap = {
   'subconscious.runNow': 'Run Now',
   'subconscious.providerUnavailableTitle': 'Subconscious is paused',
   'subconscious.providerSettings': 'AI settings',
+  'subconscious.scratchpadInfo':
+    'The subconscious maintains a persistent scratchpad of observations across ticks. Check Settings → Agent access to configure mode and frequency.',
   'subconscious.approvalNeeded': 'Approval Needed',
   'subconscious.requiresApproval': 'Requires approval',
   'subconscious.fixInConnections': 'Fix in Connections',
@@ -2811,8 +2876,9 @@ const en: TranslationMap = {
     'Your credentials stay on this device and are never shared.',
   'app.openhumanLink.billing.openDashboard': 'Open dashboard',
   'app.openhumanLink.billing.stayOnTrial': 'Stay on trial',
-  'app.openhumanLink.billing.trialCredit': 'Trial credit',
-  'app.openhumanLink.billing.trialDesc': 'Trial desc',
+  'app.openhumanLink.billing.trialCredit': 'Signup credits',
+  'app.openhumanLink.billing.trialDesc':
+    'Credit offers can vary by promotion and account eligibility.',
   'app.openhumanLink.defaultBody':
     "Not ready in the popup yet. Open the full settings page when you're done.",
   'app.openhumanLink.discord.intro': 'Join the OpenHuman community on Discord.',
@@ -3005,6 +3071,10 @@ const en: TranslationMap = {
   'composio.connect.atlassianSubdomainHint': 'acme',
   'composio.connect.atlassianSubdomainLabel': 'Atlassian subdomain',
   'composio.connect.connect': 'Connect',
+  'composio.connect.connectedAccounts': 'Connected accounts',
+  'composio.connect.defaultLabel': 'Default',
+  'composio.connect.disconnectAccount': 'Remove',
+  'composio.connect.addAnotherAccount': 'Add another account',
   'composio.connect.dynamicsOrgNameHint':
     'For example, "myorg" for myorg.crm.dynamics.com. Enter the short org name only, not the full URL.',
   'composio.connect.dynamicsOrgNameLabel': 'Dynamics 365 Organization Name',
@@ -4389,6 +4459,10 @@ const en: TranslationMap = {
   'settings.appearance.tabBarAlwaysShowLabels': 'Always show labels',
   'settings.appearance.tabBarAlwaysShowLabelsDesc':
     'When off, labels only appear on hover or for the active tab.',
+  'settings.appearance.chatHeading': 'Chat',
+  'settings.appearance.assistantTextMode': 'Plain assistant responses',
+  'settings.appearance.assistantTextModeDesc':
+    'Render assistant replies as unframed text while keeping your messages in bubbles.',
   'settings.mascot.active': 'Active',
   'settings.mascot.characterDesc': 'Choose your OpenHuman character.',
   'settings.mascot.characterHeading': 'Character',
@@ -4852,6 +4926,15 @@ const en: TranslationMap = {
   'conversations.taskKanban.ready': 'Ready',
   'conversations.taskKanban.rejected': 'Rejected',
   'conversations.taskKanban.inProgress': 'In progress',
+  'conversations.taskKanban.awaitingApprovalColumn': 'Awaiting Approval',
+  'conversations.taskKanban.blockedColumn': 'Blocked',
+  'conversations.taskKanban.evidenceBadge': 'Evidence ({count})',
+  'conversations.taskKanban.needsInput': 'These tasks need your input',
+  'conversations.taskKanban.emptyColumn': 'No tasks',
+  'conversations.taskKanban.dragHint': 'Drag to move between columns',
+  'conversations.taskKanban.movingCard': 'Moving…',
+  'conversations.taskKanban.statusBadge.ready': 'Ready to start',
+  'conversations.taskKanban.statusBadge.rejected': 'Rejected',
   'intelligence.memoryChunk.detail.copiedHint': 'copied',
   'settings.composio.notYetRouted': 'not yet routed',
   'settings.localModel.download.manageExternal': 'Manage this model in your external runtime.',
@@ -4981,7 +5064,10 @@ const en: TranslationMap = {
   'settings.taskSources.previewResult': '{count} task(s) match this filter',
   'settings.taskSources.fetchNow': 'Fetch now',
   'settings.taskSources.fetching': 'Fetching…',
-  'settings.taskSources.fetchResult': 'Routed {routed} of {fetched} task(s)',
+  'settings.taskSources.fetchResult':
+    'Routed {routed} of {fetched} task(s); removed {pruned} stale task(s)',
+  'settings.taskSources.syncAll': 'Sync all',
+  'settings.taskSources.syncing': 'Syncing…',
   'settings.taskSources.configured': 'Configured sources',
   'settings.taskSources.empty': 'No task sources configured yet.',
   'settings.taskSources.proactive': 'Proactive',

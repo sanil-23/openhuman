@@ -1419,8 +1419,9 @@ async fn json_rpc_agent_registry_manages_defaults_and_custom_agents() {
     assert_eq!(
         updated_custom_agent
             .get("subagents")
+            .and_then(|subagents| subagents.get("allowlist"))
             .and_then(Value::as_array)
-            .and_then(|subagents| subagents.first())
+            .and_then(|allowlist| allowlist.first())
             .and_then(Value::as_str),
         Some("researcher")
     );
@@ -1477,6 +1478,15 @@ async fn json_rpc_agent_registry_manages_defaults_and_custom_agents() {
     assert_eq!(
         full_upsert_agent.get("enabled").and_then(Value::as_bool),
         Some(false)
+    );
+    assert_eq!(
+        full_upsert_agent
+            .get("subagents")
+            .and_then(|subagents| subagents.get("allowlist"))
+            .and_then(Value::as_array)
+            .and_then(|allowlist| allowlist.first())
+            .and_then(Value::as_str),
+        Some("critic")
     );
 
     let visible_after_custom_disable = post_json_rpc(
@@ -10487,6 +10497,127 @@ async fn json_rpc_workflows_lifecycle_round_trip() {
     rpc_join.abort();
 }
 
+/// Task 4 / #3090: when a web-chat request is sent with
+/// `speak_reply: true`, `run_chat_task` should drive the agent's final text
+/// through `voice::reply_speech::synthesize_reply` after the turn completes.
+///
+/// We activate the [`reply_speech::test_seam`] short-circuit via the
+/// `OPENHUMAN_TEST_REPLY_SPEECH_SEAM` env var so the call is recorded
+/// without contacting the ElevenLabs proxy.
+#[tokio::test]
+async fn json_rpc_channel_web_chat_with_speak_reply_invokes_reply_speech() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+    // Activate the reply_speech test seam so synthesize_reply records and
+    // short-circuits instead of calling the hosted backend.
+    let _seam_guard = EnvVarGuard::set(
+        openhuman_core::openhuman::voice::reply_speech::TEST_SEAM_ENV,
+        "1",
+    );
+
+    openhuman_core::openhuman::voice::reply_speech::test_seam::clear();
+
+    let (mock_addr, mock_join) = serve_on_ephemeral(mock_upstream_router()).await;
+    let mock_origin = format!("http://{}", mock_addr);
+
+    write_min_config(&openhuman_home, &mock_origin);
+    let user_scoped_dir = openhuman_home.join("users").join("e2e-user");
+    write_min_config(&user_scoped_dir, &mock_origin);
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{}", rpc_addr);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Authenticate so the agent loop has a session token available.
+    let store = post_json_rpc(
+        &rpc_base,
+        9300,
+        "openhuman.auth_store_session",
+        json!({
+            "token": "e2e-test-jwt",
+            "user_id": "e2e-user"
+        }),
+    )
+    .await;
+    assert_no_jsonrpc_error(&store, "store_session");
+
+    let client_id = "ptt-e2e-client";
+    let thread_id = "ptt-e2e-thread";
+    let events_url = format!("{}/events?client_id={}", rpc_base, client_id);
+    let sse_task = tokio::spawn(async move { read_terminal_web_chat_event(&events_url).await });
+
+    // PTT-style chat send: speak_reply=true, source=ptt, session_id=1.
+    let web_chat = post_json_rpc(
+        &rpc_base,
+        9301,
+        "openhuman.channel_web_chat",
+        json!({
+            "client_id": client_id,
+            "thread_id": thread_id,
+            "message": "Hello from PTT",
+            "model_override": "e2e-mock-model",
+            "speak_reply": true,
+            "source": "ptt",
+            "session_id": 1,
+        }),
+    )
+    .await;
+    let web_chat_result = assert_no_jsonrpc_error(&web_chat, "channel_web_chat");
+    assert_eq!(
+        web_chat_result
+            .get("result")
+            .and_then(|v| v.get("accepted")),
+        Some(&json!(true))
+    );
+
+    let sse_event = tokio::time::timeout(Duration::from_secs(12), sse_task)
+        .await
+        .expect("timed out waiting for chat_done with speak_reply=true")
+        .expect("sse task join should succeed");
+    assert_eq!(
+        sse_event.get("event").and_then(Value::as_str),
+        Some("chat_done")
+    );
+
+    // The bridge should have buffered the streamed assistant text and
+    // routed it through synthesize_reply on TurnCompleted. Poll briefly
+    // because the bridge task may finish slightly after chat_done.
+    let mut observed: Vec<String> = Vec::new();
+    for _ in 0..50 {
+        observed = openhuman_core::openhuman::voice::reply_speech::test_seam::observed();
+        if !observed.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        !observed.is_empty(),
+        "expected reply_speech::synthesize_reply to be invoked when speak_reply=true; observed={observed:?}"
+    );
+    assert!(
+        observed.iter().any(|t| !t.trim().is_empty()),
+        "expected at least one non-empty text passed to synthesize_reply; observed={observed:?}"
+    );
+    assert!(
+        observed
+            .iter()
+            .any(|t| t.contains("Hello from e2e mock agent")),
+        "expected the observed seam text to include the mock reply phrase; got {observed:?}"
+    );
+
+    mock_join.abort();
+    rpc_join.abort();
+}
+
+// ── Model resolution + agent profile switching ──────────────────────────
+
 /// E2E: voice-server settings round-trip over JSON-RPC — Phase 2 always-on
 /// toggle + "Hey Tiny" wake word. Regression guard for the bug where the
 /// Settings toggle silently did nothing because `always_on_enabled` was absent
@@ -10750,6 +10881,136 @@ async fn json_rpc_memory_sync_settings_env_override_is_reflected() {
         result.get("is_default").and_then(Value::as_bool),
         Some(false),
         "an env-provided value is not the default, envelope: {outer}"
+    );
+
+    rpc_join.abort();
+}
+
+#[tokio::test]
+async fn json_rpc_memory_sources_conversation_crud() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _ws_guard = EnvVarGuard::set_to_path("OPENHUMAN_WORKSPACE", home);
+    let _action_guard = EnvVarGuard::set_to_path("OPENHUMAN_ACTION_DIR", home);
+    let _backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{rpc_addr}");
+
+    // 1. Add a conversation source
+    let add_resp = post_json_rpc(
+        &rpc_base,
+        9501,
+        "openhuman.memory_sources_add",
+        json!({
+            "kind": "conversation",
+            "label": "Agent Conversations",
+            "enabled": true
+        }),
+    )
+    .await;
+    let add_result = assert_no_jsonrpc_error(&add_resp, "memory_sources_add conversation");
+    let source = add_result
+        .get("source")
+        .expect("add should return source object");
+    let source_id = source
+        .get("id")
+        .and_then(Value::as_str)
+        .expect("source must have id");
+    assert_eq!(
+        source.get("kind").and_then(Value::as_str),
+        Some("conversation")
+    );
+    assert_eq!(
+        source.get("label").and_then(Value::as_str),
+        Some("Agent Conversations")
+    );
+    assert_eq!(source.get("enabled").and_then(Value::as_bool), Some(true));
+
+    // 2. List sources — should contain our conversation source
+    let list_resp =
+        post_json_rpc(&rpc_base, 9502, "openhuman.memory_sources_list", json!({})).await;
+    let list_result = assert_no_jsonrpc_error(&list_resp, "memory_sources_list");
+    let sources = list_result
+        .get("sources")
+        .and_then(Value::as_array)
+        .expect("list should return sources array");
+    let conversation_sources: Vec<&Value> = sources
+        .iter()
+        .filter(|s| s.get("kind").and_then(Value::as_str) == Some("conversation"))
+        .collect();
+    assert_eq!(
+        conversation_sources.len(),
+        1,
+        "exactly one conversation source after add"
+    );
+
+    // 3. Get the source by id
+    let get_resp = post_json_rpc(
+        &rpc_base,
+        9503,
+        "openhuman.memory_sources_get",
+        json!({ "id": source_id }),
+    )
+    .await;
+    let get_result = assert_no_jsonrpc_error(&get_resp, "memory_sources_get");
+    assert_eq!(
+        get_result
+            .get("source")
+            .and_then(|s| s.get("kind"))
+            .and_then(Value::as_str),
+        Some("conversation")
+    );
+
+    // 4. Update — disable the source
+    let update_resp = post_json_rpc(
+        &rpc_base,
+        9504,
+        "openhuman.memory_sources_update",
+        json!({ "id": source_id, "enabled": false }),
+    )
+    .await;
+    let update_result = assert_no_jsonrpc_error(&update_resp, "memory_sources_update");
+    assert_eq!(
+        update_result
+            .get("source")
+            .and_then(|s| s.get("enabled"))
+            .and_then(Value::as_bool),
+        Some(false),
+        "source should be disabled after update"
+    );
+
+    // 5. Remove the source
+    let remove_resp = post_json_rpc(
+        &rpc_base,
+        9505,
+        "openhuman.memory_sources_remove",
+        json!({ "id": source_id }),
+    )
+    .await;
+    let remove_result = assert_no_jsonrpc_error(&remove_resp, "memory_sources_remove");
+    assert_eq!(
+        remove_result.get("removed").and_then(Value::as_bool),
+        Some(true)
+    );
+
+    // 6. List again — empty
+    let list2_resp =
+        post_json_rpc(&rpc_base, 9506, "openhuman.memory_sources_list", json!({})).await;
+    let list2_result = assert_no_jsonrpc_error(&list2_resp, "memory_sources_list after remove");
+    let sources2 = list2_result
+        .get("sources")
+        .and_then(Value::as_array)
+        .expect("list should return sources array");
+    let conv_remaining: Vec<&Value> = sources2
+        .iter()
+        .filter(|s| s.get("kind").and_then(Value::as_str) == Some("conversation"))
+        .collect();
+    assert!(
+        conv_remaining.is_empty(),
+        "no conversation sources after remove"
     );
 
     rpc_join.abort();
