@@ -25,6 +25,21 @@
 //! - [`DomainEvent::ChannelMessageReceived`]
 //! - [`DomainEvent::ChannelMessageProcessed`]
 
+/// Voice-domain events.
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub enum VoiceEvent {
+    /// A PTT session committed a transcript to a thread. Carries only
+    /// length/timing — never the raw text, per the PII-safe logging rule.
+    PttTranscriptCommitted {
+        thread_id: String,
+        session_id: u64,
+        text_len: usize,
+        held_ms: u64,
+        finalized_by_watchdog: bool,
+    },
+}
+
 /// Top-level domain event. Non-exhaustive so new variants can be added
 /// without breaking existing match arms.
 #[non_exhaustive]
@@ -235,6 +250,25 @@ pub enum DomainEvent {
         success: bool,
         elapsed_ms: u64,
         queue_depth: usize,
+    },
+
+    // ── Memory Diff ─────────────────────────────────────────────────────
+    /// A snapshot of a memory source's chunk state was captured.
+    MemoryDiffSnapshotTaken {
+        snapshot_id: String,
+        source_id: String,
+        source_kind: String,
+        item_count: usize,
+        trigger: String,
+    },
+    /// A diff was computed between two snapshots.
+    MemoryDiffComputed {
+        source_id: String,
+        from_snapshot_id: Option<String>,
+        to_snapshot_id: String,
+        added: usize,
+        removed: usize,
+        modified: usize,
     },
 
     // ── Channels ────────────────────────────────────────────────────────
@@ -896,6 +930,10 @@ pub enum DomainEvent {
     /// never to Sentry or the UI verbatim.
     SessionExpired { source: String, reason: String },
 
+    // ── Voice ────────────────────────────────────────────────────────────
+    /// A voice domain event (PTT, transcription lifecycle, etc.).
+    Voice(VoiceEvent),
+
     // ── Task sources ─────────────────────────────────────────────────────
     /// A task source completed a fetch pass.
     TaskSourceFetched {
@@ -1001,7 +1039,9 @@ impl DomainEvent {
             | Self::MemorySyncStageChanged { .. }
             | Self::MemoryIngestionStarted { .. }
             | Self::MemoryIngestionCompleted { .. }
-            | Self::DocumentCanonicalized { .. } => "memory",
+            | Self::DocumentCanonicalized { .. }
+            | Self::MemoryDiffSnapshotTaken { .. }
+            | Self::MemoryDiffComputed { .. } => "memory",
 
             Self::CacheRebuilt { .. } => "learning",
 
@@ -1079,6 +1119,8 @@ impl DomainEvent {
 
             Self::TaskPlanAwaitingApproval { .. } | Self::TaskRunReclaimed { .. } => "agent",
 
+            Self::Voice(_) => "voice",
+
             Self::ApprovalRequested { .. }
             | Self::ApprovalDecided { .. }
             | Self::ApprovalGateOverrideIgnored { .. }
@@ -1131,6 +1173,8 @@ impl DomainEvent {
             Self::MemoryIngestionStarted { .. } => "MemoryIngestionStarted",
             Self::MemoryIngestionCompleted { .. } => "MemoryIngestionCompleted",
             Self::DocumentCanonicalized { .. } => "DocumentCanonicalized",
+            Self::MemoryDiffSnapshotTaken { .. } => "MemoryDiffSnapshotTaken",
+            Self::MemoryDiffComputed { .. } => "MemoryDiffComputed",
             Self::CacheRebuilt { .. } => "CacheRebuilt",
             Self::ChannelInboundMessage { .. } => "ChannelInboundMessage",
             Self::ChannelMessageReceived { .. } => "ChannelMessageReceived",
@@ -1214,6 +1258,7 @@ impl DomainEvent {
             Self::BackendMeetHarness { .. } => "BackendMeetHarness",
             Self::BackendMeetTranscript { .. } => "BackendMeetTranscript",
             Self::BackendMeetError { .. } => "BackendMeetError",
+            Self::Voice(_) => "Voice",
         }
     }
 
