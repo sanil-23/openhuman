@@ -1898,6 +1898,8 @@ const messages: TranslationMap = {
   'chat.attachment.tooLarge': 'Bild überschreitet die Größenbeschränkung von {max}',
   'chat.attachment.unsupportedType':
     'Nicht unterstützter Dateityp. Verwenden Sie PNG, JPEG, WebP, GIF oder BMP.',
+  'chat.attachment.imageNotSupported':
+    'Dieses Modell kann keine Bilder lesen. Hängen Sie stattdessen eine PDF-, Word- oder Markdown-Datei an.',
   'chat.attachment.readFailed': 'Datei konnte nicht gelesen werden',
   'memory.searchAria': 'Speicher durchsuchen',
   'memory.searchPlaceholder': 'Speichereinträge durchsuchen...',
@@ -3176,6 +3178,9 @@ const messages: TranslationMap = {
   'settings.ai.temperatureOverrideValue': 'Temperatur-Override (Wert)',
   'settings.ai.temperatureOverrideDesc':
     'Niedriger = deterministischer. Deaktivieren Sie diese Option, um den Anbieterstandard zu verwenden.',
+  'settings.ai.modelVision': 'Unterstützt Bildeingabe (Vision)',
+  'settings.ai.modelVisionDesc':
+    'Aktivieren, wenn dieses Modell Bilder akzeptiert. Ermöglicht das Anhängen von Bildern im Chat, wenn dieses Modell ausgewählt ist.',
   'settings.ai.testFailed': 'Test fehlgeschlagen.',
   'settings.ai.testingModel': 'Modell wird getestet...',
   'settings.ai.modelResponse': 'Modellantwort',

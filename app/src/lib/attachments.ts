@@ -63,6 +63,7 @@ export type AttachmentError =
   | { code: 'unsupported_type'; mimeType: string }
   | { code: 'too_large'; sizeBytes: number; maxBytes: number }
   | { code: 'too_many'; kind: AttachmentKind; max: number }
+  | { code: 'image_not_supported' }
   | { code: 'read_failed'; reason: string };
 
 export function isAllowedMimeType(mime: string): mime is AllowedImageMimeType {
@@ -148,13 +149,20 @@ async function buildAttachmentDataUri(
 export async function validateAndReadFile(
   file: File,
   existingCount: number,
-  existingFileCount = 0
+  existingFileCount = 0,
+  // When `false` (the active chat model isn't vision-capable), image files are
+  // rejected; documents (PDF/Word/etc.) still flow. Defaults `true` so non-chat
+  // callers are unaffected.
+  allowImages = true
 ): Promise<{ attachment: Attachment } | { error: AttachmentError }> {
   if (!isAllowedAttachmentMimeType(file.type)) {
     return { error: { code: 'unsupported_type', mimeType: file.type || 'unknown' } };
   }
 
   const kind = attachmentKindForMime(file.type);
+  if (!allowImages && kind === 'image') {
+    return { error: { code: 'image_not_supported' } };
+  }
   const maxCount = kind === 'image' ? ATTACHMENT_MAX_IMAGES : ATTACHMENT_MAX_FILES;
   const count = kind === 'image' ? existingCount : existingFileCount;
   if (count >= maxCount) {

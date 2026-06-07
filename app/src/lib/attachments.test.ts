@@ -85,6 +85,21 @@ describe('validateAndReadFile', () => {
     }
   });
 
+  it('rejects an image when allowImages is false (non-vision model)', async () => {
+    const result = await validateAndReadFile(makeFile('p.png', 'image/png', 8), 0, 0, false);
+    expect('error' in result && result.error.code).toBe('image_not_supported');
+  });
+
+  it('still accepts a document when allowImages is false', async () => {
+    const result = await validateAndReadFile(makeFile('d.pdf', 'application/pdf', 8), 0, 0, false);
+    expect('attachment' in result && result.attachment.kind === 'file').toBe(true);
+  });
+
+  it('accepts an image when allowImages is true (vision model)', async () => {
+    const result = await validateAndReadFile(makeFile('p.png', 'image/png', 8), 0, 0, true);
+    expect('attachment' in result && result.attachment.kind === 'image').toBe(true);
+  });
+
   it('rejects files that exceed the file size limit', async () => {
     const oversizedFile = makeFile(
       'big.pdf',

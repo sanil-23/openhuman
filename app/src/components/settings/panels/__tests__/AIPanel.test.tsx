@@ -45,6 +45,8 @@ vi.mock('../../../../services/api/aiSettingsApi', () => ({
   saveAISettings: vi.fn(),
   loadLocalProviderSnapshot: vi.fn(),
   testProviderModel: vi.fn(),
+  modelRegistryVision: vi.fn(() => false),
+  upsertModelRegistryVision: vi.fn((registry: unknown[]) => registry),
   setCloudProviderKey: vi.fn().mockResolvedValue(undefined),
   clearCloudProviderKey: vi.fn().mockResolvedValue(undefined),
   serializeProviderRef: vi.fn((r: { kind: string; providerSlug?: string; model?: string }) =>
@@ -123,6 +125,7 @@ const baseSettings = {
     learning: { kind: 'openhuman' as const },
     subconscious: { kind: 'openhuman' as const },
   },
+  modelRegistry: [],
 };
 
 const baseLocalSnapshot = { status: null, diagnostics: null, presets: null, installedModels: [] };
@@ -333,6 +336,7 @@ describe('AIPanel', () => {
         learning: { kind: 'openhuman' as const },
         subconscious: { kind: 'openhuman' as const },
       },
+      modelRegistry: [],
     };
 
     vi.mocked(loadAISettings).mockResolvedValue(settingsWithAnthropic);
@@ -554,6 +558,7 @@ describe('AIPanel', () => {
         learning: { kind: 'openhuman' as const },
         subconscious: { kind: 'openhuman' as const },
       },
+      modelRegistry: [],
     };
     vi.mocked(loadAISettings).mockResolvedValue(settingsWithOpenAI);
     vi.mocked(saveAISettings).mockResolvedValue(undefined);
@@ -609,6 +614,7 @@ describe('AIPanel', () => {
         learning: { kind: 'openhuman' as const },
         subconscious: { kind: 'openhuman' as const },
       },
+      modelRegistry: [],
     };
     vi.mocked(loadAISettings).mockResolvedValue(settingsWithOllama);
     vi.mocked(saveAISettings).mockResolvedValue(undefined);
@@ -983,6 +989,7 @@ describe('AIPanel', () => {
           has_api_key: false,
         },
       ],
+      modelRegistry: [],
     };
     vi.mocked(loadAISettings).mockResolvedValue(settingsWithOllama);
     renderWithProviders(<AIPanel />);
@@ -1005,6 +1012,7 @@ describe('AIPanel', () => {
           has_api_key: false,
         },
       ],
+      modelRegistry: [],
     };
     vi.mocked(loadAISettings).mockResolvedValue(settingsWithOllama);
     renderWithProviders(<AIPanel />);
@@ -1044,6 +1052,7 @@ describe('AIPanel', () => {
         ...baseSettings.routing,
         reasoning: { kind: 'cloud' as const, providerSlug: 'openai', model: 'gpt-4o' },
       },
+      modelRegistry: [],
     };
     vi.mocked(loadAISettings).mockResolvedValue(settingsWithOpenAI);
     vi.mocked(saveAISettings).mockResolvedValue(undefined);
@@ -1100,6 +1109,7 @@ describe('AIPanel', () => {
         ...baseSettings.routing,
         reasoning: { kind: 'cloud' as const, providerSlug: 'openai', model: 'gpt-4o' },
       },
+      modelRegistry: [],
     };
     vi.mocked(loadAISettings).mockResolvedValue(settingsWithOpenAI);
     vi.mocked(listProviderModels).mockResolvedValue([{ id: 'gpt-4o' }, { id: 'gpt-4o-mini' }]);
@@ -1143,6 +1153,7 @@ describe('AIPanel', () => {
         ...baseSettings.routing,
         reasoning: { kind: 'cloud' as const, providerSlug: 'openai', model: 'gpt-4o' },
       },
+      modelRegistry: [],
     };
     vi.mocked(loadAISettings).mockResolvedValue(settingsWithOpenAI);
     vi.mocked(listProviderModels).mockResolvedValue([{ id: 'gpt-4o' }]);
@@ -1187,6 +1198,7 @@ describe('AIPanel', () => {
         ...baseSettings.routing,
         reasoning: { kind: 'cloud' as const, providerSlug: 'openai', model: 'gpt-4o' },
       },
+      modelRegistry: [],
     };
     vi.mocked(loadAISettings).mockResolvedValue(settingsWithOpenAI);
     vi.mocked(listProviderModels).mockResolvedValue([{ id: 'gpt-4o' }]);

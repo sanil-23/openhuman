@@ -140,6 +140,18 @@ vi.mock('../../features/autocomplete/useAutocompleteSkillStatus', () => ({
 
 vi.mock('../../utils/openUrl', () => ({ openUrl: vi.fn() }));
 
+// The composer gates image attachments on the resolved model's vision capability
+// (inference_resolve_model). These tests exercise image attachments, so resolve
+// the active model as vision-capable.
+vi.mock('../../services/coreRpcClient', () => ({
+  callCoreRpc: vi.fn(async ({ method }: { method: string }) =>
+    method === 'openhuman.inference_resolve_model'
+      ? { model: 'test-vision-model', vision: true }
+      : {}
+  ),
+  CoreRpcError: class CoreRpcError extends Error {},
+}));
+
 vi.mock('../../lib/coreState/store', () => ({
   getCoreStateSnapshot: vi.fn(() => ({
     isBootstrapping: false,

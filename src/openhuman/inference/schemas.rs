@@ -80,6 +80,8 @@ struct InferenceUpdateModelSettingsParams {
     default_temperature: Option<f64>,
     model_routes: Option<Vec<InferenceModelRouteUpdate>>,
     cloud_providers: Option<Vec<InferenceCloudProviderUpdate>>,
+    #[serde(default)]
+    model_registry: Option<Vec<crate::openhuman::config::schema::ModelRegistryEntry>>,
     primary_cloud: Option<String>,
     chat_provider: Option<String>,
     reasoning_provider: Option<String>,
@@ -283,6 +285,7 @@ pub fn schemas(function: &str) -> ControllerSchema {
                 optional_f64("default_temperature", "Optional default temperature override."),
                 optional_json("model_routes", "Optional full replacement for legacy model routes."),
                 optional_json("cloud_providers", "Optional full replacement for configured cloud providers."),
+                optional_json("model_registry", "Optional full replacement for the per-model registry (carries each model's `vision` flag)."),
                 optional_string("primary_cloud", "Optional primary cloud provider id."),
                 optional_string("chat_provider", "Optional chat workload provider string."),
                 optional_string("reasoning_provider", "Optional reasoning workload provider string."),
@@ -557,8 +560,17 @@ fn handle_inference_resolve_model(params: Map<String, Value>) -> ControllerFutur
         let resolved = crate::openhuman::inference::provider::factory::resolve_model_for_hint(
             &p.hint, &config,
         );
+        // Whether the resolved model accepts image input — drives the chat UI's
+        // image-attachment affordance. Managed OpenHuman tiers route to the
+        // multimodal backend (`vision: true`); custom/BYOK models are covered by
+        // the user's per-model `model_registry.vision` flag.
+        let vision =
+            crate::openhuman::inference::provider::factory::is_known_openhuman_tier(&resolved)
+                || crate::openhuman::inference::model_context::model_vision_enabled(
+                    &resolved, &config,
+                );
         to_json(RpcOutcome::new(
-            serde_json::json!({ "model": resolved }),
+            serde_json::json!({ "model": resolved, "vision": vision }),
             vec![],
         ))
     })
@@ -676,6 +688,7 @@ fn handle_inference_update_model_settings(params: Map<String, Value>) -> Control
                         .collect::<Result<Vec<_>, String>>()
                 })
                 .transpose()?,
+            model_registry: update.model_registry,
             primary_cloud: update.primary_cloud,
             chat_provider: update.chat_provider,
             reasoning_provider: update.reasoning_provider,
