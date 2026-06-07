@@ -804,6 +804,52 @@ mod tests {
         assert!(want_items.is_some());
     }
 
+    /// Multi-account regression (#3443 added multiple account connections per
+    /// toolkit): two live connections of the *same* toolkit must be gated
+    /// **independently** by their own per-`connection_id` source rows. This
+    /// pins the loop's connection-id keying — re-keying the lookup by toolkit
+    /// would collapse the two accounts and is the regression this guards.
+    #[test]
+    fn per_connection_gate_is_independent_across_accounts_of_same_toolkit() {
+        // gmail account A: enabled with caps; gmail account B: disabled.
+        let mut a = composio_source(true, Some(10), Some(5));
+        a.connection_id = Some("conn-A".to_string());
+        a.toolkit = Some("gmail".to_string());
+        let mut b = composio_source(false, Some(99), Some(99));
+        b.connection_id = Some("conn-B".to_string());
+        b.toolkit = Some("gmail".to_string());
+
+        // Build the same connection_id → entry index the live tick builds.
+        let index: HashMap<String, MemorySourceEntry> = [a, b]
+            .into_iter()
+            .filter_map(|s| s.connection_id.clone().map(|id| (id, s)))
+            .collect();
+
+        // Account A (enabled) syncs with its own caps...
+        assert_eq!(
+            decide_periodic_source(index.get("conn-A"), "gmail"),
+            PeriodicSourceDecision::Sync {
+                max_items: Some(10),
+                sync_depth_days: Some(5),
+            }
+        );
+        // ...account B (disabled) is skipped, even though it shares the toolkit.
+        assert_eq!(
+            decide_periodic_source(index.get("conn-B"), "gmail"),
+            PeriodicSourceDecision::Skip
+        );
+        // A third, not-yet-registered account of the same toolkit falls back to
+        // bounded defaults (never skipped, never uncapped).
+        let (def_items, def_depth) = memory_sync_defaults_for_toolkit("gmail");
+        assert_eq!(
+            decide_periodic_source(index.get("conn-C"), "gmail"),
+            PeriodicSourceDecision::Sync {
+                max_items: def_items,
+                sync_depth_days: def_depth,
+            }
+        );
+    }
+
     /// End-to-end simulation of the scheduler's per-connection decision: prove
     /// that **changing the global setting changes when the next sync fires**
     /// (issue #3302 acceptance criterion). We drive the same two pure helpers
