@@ -114,10 +114,15 @@ test.describe('Chat management functional coverage', () => {
 
     await page.getByPlaceholder('How can I help you today?').fill('Describe this image');
     await page.getByTestId('send-message-button').click();
-    await expect(page.getByText('Attachment received by the assistant.')).toBeVisible({
+    // Wait for the settled (chat_done) state first: re-enabling the composer
+    // also tears down the transient font-mono streaming-preview bubble, which
+    // otherwise duplicates the response text and makes a bare getByText() throw
+    // a strict-mode violation. Then assert on the final message specifically
+    // (.first() — the preview renders after the message list in the DOM).
+    await expect(page.getByPlaceholder('How can I help you today?')).toBeEnabled({
       timeout: 30_000,
     });
-    await expect(page.getByPlaceholder('How can I help you today?')).toBeEnabled();
+    await expect(page.getByText('Attachment received by the assistant.').first()).toBeVisible();
 
     await expect
       .poll(
