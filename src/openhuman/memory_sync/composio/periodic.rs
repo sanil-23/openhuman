@@ -53,7 +53,7 @@ use tokio::time::interval;
 use crate::openhuman::config::rpc as config_rpc;
 use crate::openhuman::config::DEFAULT_MEMORY_SYNC_INTERVAL_SECS;
 use crate::openhuman::memory_sources::{
-    list_sources, memory_sync_defaults_for_toolkit, MemorySourceEntry, SourceKind,
+    memory_sync_defaults_for_toolkit, MemorySourceEntry, SourceKind,
 };
 use crate::openhuman::scheduler_gate::gate::{current_policy, resume_notify};
 use crate::openhuman::scheduler_gate::policy::PauseReason;
@@ -457,17 +457,22 @@ pub(crate) async fn run_one_tick() -> Result<(), String> {
     // per-source `enabled` toggle so a source the user switched off stops
     // syncing in the background — matching the manual paths
     // (`memory_sources::sync_source`, `memory_sources_sync_all`), which already
-    // early-return on `!enabled`. We fetch **all** Composio sources (enabled
-    // and disabled) once per tick and index by connection id; the
-    // per-connection branch below resolves skip/caps via `decide_periodic_source`.
-    // Fetching once (rather than per connection, as the old caps-only lookup
-    // did) also avoids reloading config for every connection.
-    let composio_sources: HashMap<String, MemorySourceEntry> = list_sources()
-        .await
-        .unwrap_or_default()
-        .into_iter()
+    // early-return on `!enabled`. Index every Composio source (enabled and
+    // disabled) by connection id; the per-connection branch below resolves
+    // skip/caps via `decide_periodic_source`.
+    //
+    // Built from the **already-loaded** `config` snapshot (Step 1), not a second
+    // `list_sources()` read. A separate read whose error we swallowed to an
+    // empty map would make every disabled source fall through to the
+    // `decide_periodic_source(None, ..)` default-caps path — silently
+    // re-enabling background sync for sources the user switched off on a
+    // transient config-read failure. Reusing the tick's snapshot is fail-closed
+    // (a disabled row stays disabled) and avoids the extra read entirely.
+    let composio_sources: HashMap<String, MemorySourceEntry> = config
+        .memory_sources
+        .iter()
         .filter(|s| s.kind == SourceKind::Composio)
-        .filter_map(|s| s.connection_id.clone().map(|id| (id, s)))
+        .filter_map(|s| s.connection_id.clone().map(|id| (id, s.clone())))
         .collect();
 
     let mut considered = 0usize;
