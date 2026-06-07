@@ -172,7 +172,8 @@ use openhuman_core::openhuman::inference::voice::local_speech::{synthesize_piper
 use openhuman_core::openhuman::inference::voice::postprocess::cleanup_transcription;
 use openhuman_core::openhuman::inference::{
     all_inference_controller_schemas, all_inference_registered_controllers,
-    all_local_ai_controller_schemas, all_local_ai_registered_controllers, DeviceProfile,
+    all_local_inference_controller_schemas, all_local_inference_registered_controllers,
+    DeviceProfile,
 };
 use openhuman_core::openhuman::memory::{Memory, MemoryCategory, MemoryEntry, RecallOpts};
 use openhuman_core::openhuman::security::SecurityPolicy;
@@ -1577,6 +1578,7 @@ named = ["todo", "plan_exit"]
         timeout_secs: None,
         sandbox_mode: SandboxMode::None,
         background: false,
+        trigger_memory_agent: Default::default(),
         subagents: Vec::new(),
         delegate_name: None,
         agent_tier: AgentTier::Worker,
@@ -3017,13 +3019,13 @@ async fn inference_local_controllers_and_presets_cover_public_paths() {
     let _ollama_bin_guard = EnvVarGuard::set("OLLAMA_BIN", &mock_ollama);
     let _ollama_base_guard = EnvVarGuard::set("OPENHUMAN_OLLAMA_BASE_URL", &provider_base);
 
-    let local_schemas = all_local_ai_controller_schemas();
-    let local_registered = all_local_ai_registered_controllers();
+    let local_schemas = all_local_inference_controller_schemas();
+    let local_registered = all_local_inference_registered_controllers();
     assert_eq!(local_schemas.len(), local_registered.len());
     assert!(local_registered.iter().all(|controller| {
         controller
             .rpc_method_name()
-            .starts_with("openhuman.local_ai_")
+            .starts_with("openhuman.inference_")
     }));
 
     let reachable = call(
