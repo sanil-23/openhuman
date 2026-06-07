@@ -11252,3 +11252,80 @@ async fn json_rpc_memory_sources_list_shows_all_when_scan_unavailable() {
 
     rpc_join.abort();
 }
+
+/// Mock Composio v3 `/connected_accounts` returning **two** distinct ACTIVE
+/// Gmail connections — exercises multiple-account-per-toolkit support (#3443).
+fn mock_composio_two_gmail_accounts_router() -> Router {
+    async fn connected_accounts() -> Json<Value> {
+        Json(json!({
+            "items": [
+                { "id": "conn_gmail_one", "status": "ACTIVE", "toolkit": "gmail", "created_at": "2026-01-01T00:00:00Z" },
+                { "id": "conn_gmail_two", "status": "ACTIVE", "toolkit": "gmail", "created_at": "2026-01-02T00:00:00Z" }
+            ]
+        }))
+    }
+    Router::new().route("/connected_accounts", get(connected_accounts))
+}
+
+/// Regression for #3443 (multiple account connections per toolkit): two
+/// *distinct* active connections of the same toolkit (two Gmail accounts) must
+/// **both** be listed. Our filter keys on `connection_id`, never on toolkit, so
+/// it must not collapse them — while a third, stale Gmail connection (absent
+/// from the active scan) is still hidden.
+#[tokio::test]
+async fn json_rpc_memory_sources_list_keeps_multiple_active_connections_per_toolkit() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+
+    // Scan reports two active Gmail accounts (distinct connection_ids).
+    let (composio_addr, composio_join) =
+        serve_on_ephemeral(mock_composio_two_gmail_accounts_router()).await;
+    let composio_base = format!("http://{composio_addr}");
+    let _v2_guard = EnvVarGuard::set("OPENHUMAN_COMPOSIO_DIRECT_BASE_V2", &composio_base);
+    let _v3_guard = EnvVarGuard::set("OPENHUMAN_COMPOSIO_DIRECT_BASE_V3", &composio_base);
+
+    write_composio_direct_config(&openhuman_home, "http://127.0.0.1:1");
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{rpc_addr}");
+
+    // Two active Gmail accounts + one stale Gmail connection (not in the scan).
+    add_composio_memory_source(&rpc_base, 8951, "Gmail · one", "gmail", "conn_gmail_one").await;
+    add_composio_memory_source(&rpc_base, 8952, "Gmail · two", "gmail", "conn_gmail_two").await;
+    add_composio_memory_source(
+        &rpc_base,
+        8953,
+        "Gmail · stale",
+        "gmail",
+        "conn_gmail_stale",
+    )
+    .await;
+
+    let list = post_json_rpc(&rpc_base, 8954, "openhuman.memory_sources_list", json!({})).await;
+    let result = assert_no_jsonrpc_error(&list, "memory_sources_list").clone();
+    let sources = memory_sources_from_list(&result);
+
+    let mut gmail_conn_ids: Vec<&str> = sources
+        .iter()
+        .filter(|s| s.get("kind").and_then(Value::as_str) == Some("composio"))
+        .filter_map(|s| s.get("connection_id").and_then(Value::as_str))
+        .collect();
+    gmail_conn_ids.sort_unstable();
+
+    // Both active accounts kept (not collapsed by toolkit); stale one hidden.
+    assert_eq!(
+        gmail_conn_ids,
+        vec!["conn_gmail_one", "conn_gmail_two"],
+        "both active connections of the same toolkit must list; stale hidden; got sources={sources:?}"
+    );
+
+    rpc_join.abort();
+    composio_join.abort();
+}
