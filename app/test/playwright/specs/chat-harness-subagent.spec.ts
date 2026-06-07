@@ -142,12 +142,7 @@ async function sendMessage(page: Page, prompt: string): Promise<void> {
 
 test.describe('Chat Harness - Subagent', () => {
   test('delegates to a subagent and persists the final orchestrator text', async ({ page }) => {
-    // This exercises a three-round LLM chain (orchestrator → subagent →
-    // orchestrator), each round streamed at 10ms/char. On a loaded CI runner
-    // the third completion can land just after the old 90s poll budget, so the
-    // count assertion flaked at 2/3. Give the chain headroom well inside the
-    // (raised) test timeout.
-    test.setTimeout(210_000);
+    test.setTimeout(150_000);
 
     await resetMock();
     await setMockBehavior('llmForcedResponses', '');
@@ -158,7 +153,7 @@ test.describe('Chat Harness - Subagent', () => {
     const threadId = await createNewThread(page);
     await sendMessage(page, PROMPT);
 
-    await expect.poll(completionRequestCount, { timeout: 150_000 }).toBeGreaterThanOrEqual(3);
+    await expect.poll(completionRequestCount, { timeout: 90_000 }).toBeGreaterThanOrEqual(3);
     await expect(page.getByText(CANARY_FINAL)).toBeVisible({ timeout: 30_000 });
 
     const runtime = await page.evaluate(currentThreadId => {
