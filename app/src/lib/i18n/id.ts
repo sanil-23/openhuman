@@ -4433,6 +4433,7 @@ const messages: TranslationMap = {
   'chat.agentProfile.label': 'Profil agen',
   'chat.agentProfile.quick': 'Cepat',
   'chat.agentProfile.reasoning': 'Penalaran',
+  'chat.agentProfile.proReasoning': 'Penalaran Pro',
   'chat.agentProfile.namePlaceholder': 'Nama profil',
   'chat.agentProfile.promptStylePlaceholder': 'Gaya perintah',
   'chat.agentProfile.allowedToolsPlaceholder': 'Alat yang diizinkan',

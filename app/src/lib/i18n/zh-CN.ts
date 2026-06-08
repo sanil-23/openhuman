@@ -4199,6 +4199,7 @@ const messages: TranslationMap = {
   'chat.agentProfile.label': '代理简介',
   'chat.agentProfile.quick': '快速',
   'chat.agentProfile.reasoning': '推理',
+  'chat.agentProfile.proReasoning': '专业推理',
   'chat.agentProfile.namePlaceholder': '个人资料名称',
   'chat.agentProfile.promptStylePlaceholder': '提示风格',
   'chat.agentProfile.allowedToolsPlaceholder': '允许使用的工具',

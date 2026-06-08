@@ -4452,6 +4452,7 @@ const messages: TranslationMap = {
   'chat.agentProfile.label': 'Профиль агента',
   'chat.agentProfile.quick': 'Быстрый',
   'chat.agentProfile.reasoning': 'Рассуждение',
+  'chat.agentProfile.proReasoning': 'Про-рассуждение',
   'chat.agentProfile.namePlaceholder': 'Имя профиля',
   'chat.agentProfile.promptStylePlaceholder': 'Стиль подсказки',
   'chat.agentProfile.allowedToolsPlaceholder': 'Разрешенные инструменты',

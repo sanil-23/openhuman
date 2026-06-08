@@ -4516,6 +4516,7 @@ const messages: TranslationMap = {
   'chat.agentProfile.label': "Profil d'agent",
   'chat.agentProfile.quick': 'Rapide',
   'chat.agentProfile.reasoning': 'Raisonnement',
+  'chat.agentProfile.proReasoning': 'Pro-raisonnement',
   'chat.agentProfile.namePlaceholder': 'Nom du profil',
   'chat.agentProfile.promptStylePlaceholder': 'Style de prompt',
   'chat.agentProfile.allowedToolsPlaceholder': 'Outils autorisés',

@@ -4530,6 +4530,7 @@ const messages: TranslationMap = {
   'chat.agentProfile.label': 'Agentenprofil',
   'chat.agentProfile.quick': 'Schnell',
   'chat.agentProfile.reasoning': 'Denkmodus',
+  'chat.agentProfile.proReasoning': 'Pro-Denkmodus',
   'chat.agentProfile.namePlaceholder': 'Profilname',
   'chat.agentProfile.promptStylePlaceholder': 'Eingabeaufforderungsstil',
   'chat.agentProfile.allowedToolsPlaceholder': 'Zulässige Tools',

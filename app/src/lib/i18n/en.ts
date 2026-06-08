@@ -4948,6 +4948,7 @@ const en: TranslationMap = {
   'chat.agentProfile.label': 'Agent profile',
   'chat.agentProfile.quick': 'Quick',
   'chat.agentProfile.reasoning': 'Reasoning',
+  'chat.agentProfile.proReasoning': 'Pro-reasoning',
   'chat.agentProfile.namePlaceholder': 'Profile name',
   'chat.agentProfile.promptStylePlaceholder': 'Prompt style',
   'chat.agentProfile.allowedToolsPlaceholder': 'Allowed tools',

@@ -4374,6 +4374,7 @@ const messages: TranslationMap = {
   'chat.agentProfile.label': '에이전트 프로필',
   'chat.agentProfile.quick': '빠름',
   'chat.agentProfile.reasoning': '추론',
+  'chat.agentProfile.proReasoning': '프로 추론',
   'chat.agentProfile.namePlaceholder': '프로필 이름',
   'chat.agentProfile.promptStylePlaceholder': '프롬프트 스타일',
   'chat.agentProfile.allowedToolsPlaceholder': '허용된 도구',

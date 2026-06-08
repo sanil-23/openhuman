@@ -4413,6 +4413,7 @@ const messages: TranslationMap = {
   'chat.agentProfile.label': 'এজেন্ট প্রোফাইল',
   'chat.agentProfile.quick': 'দ্রুত',
   'chat.agentProfile.reasoning': 'যুক্তি',
+  'chat.agentProfile.proReasoning': 'প্রো যুক্তি',
   'chat.agentProfile.namePlaceholder': 'প্রোফাইল নাম',
   'chat.agentProfile.promptStylePlaceholder': 'প্রম্পট স্টাইল',
   'chat.agentProfile.allowedToolsPlaceholder': 'অনুমোদিত টুল',

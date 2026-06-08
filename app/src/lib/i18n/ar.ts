@@ -4330,6 +4330,7 @@ const messages: TranslationMap = {
   'chat.agentProfile.label': 'ملف تعريف الوكيل',
   'chat.agentProfile.quick': 'سريع',
   'chat.agentProfile.reasoning': 'تفكير',
+  'chat.agentProfile.proReasoning': 'تفكير احترافي',
   'chat.agentProfile.namePlaceholder': 'اسم ملف التعريف',
   'chat.agentProfile.promptStylePlaceholder': 'نمط المطالبة',
   'chat.agentProfile.allowedToolsPlaceholder': 'الأدوات المسموح بها',
