@@ -317,8 +317,17 @@ fn classify_by_backend_error_code(
     fallback_available: Option<bool>,
 ) -> Option<ClassifiedError> {
     use crate::openhuman::inference::provider::{
-        body_flags_malformed, extract_backend_error_code, BackendErrorCode,
+        body_flags_malformed, extract_backend_error_code, is_managed_backend_envelope,
+        BackendErrorCode,
     };
+
+    // Managed-vs-BYO gate: an `errorCode` is only trustworthy on a
+    // managed-backend envelope. A BYO / direct-provider body that merely
+    // contains an `errorCode`-shaped field must fall through to the substring
+    // ladder (CodeRabbit), keeping its user-actionable copy intact.
+    if !is_managed_backend_envelope(err) {
+        return None;
+    }
 
     let code = extract_backend_error_code(err)?;
 

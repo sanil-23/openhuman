@@ -336,6 +336,8 @@ fn skips_sentry_report_for_transient_upstream_statuses() {
 
 #[test]
 fn backend_error_code_owned_gates_managed_errors_except_malformed_bad_request() {
+    use crate::openhuman::inference::provider::openhuman_backend::PROVIDER_LABEL;
+
     // F2/F4: any managed-backend body carrying an errorCode is backend-owned
     // and must NOT page the provider HTTP layer.
     for code in [
@@ -349,7 +351,7 @@ fn backend_error_code_owned_gates_managed_errors_except_malformed_bad_request() 
     ] {
         let body = format!("{{\"error\":{{\"errorCode\":\"{code}\",\"message\":\"x\"}}}}");
         assert!(
-            is_backend_error_code_owned(&body),
+            is_backend_error_code_owned(PROVIDER_LABEL, &body),
             "errorCode={code} must be backend-owned (no provider-layer Sentry)"
         );
     }
@@ -357,19 +359,30 @@ fn backend_error_code_owned_gates_managed_errors_except_malformed_bad_request() 
     // A user-param BAD_REQUEST is still backend-owned (F8 only carves out the
     // malformed variant).
     assert!(is_backend_error_code_owned(
+        PROVIDER_LABEL,
         "{\"error\":{\"errorCode\":\"BAD_REQUEST\",\"message\":\"bad param\"}}"
     ));
 
     // F8: a backend-flagged malformed BAD_REQUEST is the one case the FE still
     // pages — the gate must NOT claim it.
     assert!(!is_backend_error_code_owned(
+        PROVIDER_LABEL,
         "{\"error\":{\"errorCode\":\"BAD_REQUEST\",\"malformed\":true}}"
     ));
 
     // BYO (no errorCode) is never claimed by this gate — it falls through to
     // the status-based decision.
     assert!(!is_backend_error_code_owned(
+        PROVIDER_LABEL,
         "{\"error\":{\"message\":\"Incorrect API key provided\"}}"
+    ));
+
+    // CodeRabbit: a BYO / direct provider whose body merely contains an
+    // `errorCode`-shaped field must NOT be claimed as backend-owned — the
+    // provider gate keeps it reaching Sentry via the status decision.
+    assert!(!is_backend_error_code_owned(
+        "custom_openai",
+        "{\"error\":{\"errorCode\":\"RATE_LIMITED\"}}"
     ));
 }
 

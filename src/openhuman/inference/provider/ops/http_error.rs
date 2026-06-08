@@ -98,14 +98,20 @@ pub fn log_custom_openai_upstream_bad_request_http_400(
 /// Whether this provider response carries a managed-backend `errorCode` (#870)
 /// that the backend already owns — so the FE must not double-report (F2/F4).
 ///
+/// Gated on `provider == `[`openhuman_backend::PROVIDER_LABEL`]: an `errorCode`
+/// is only trustworthy on the **managed backend**. A BYO / direct-provider body
+/// that merely contains an `errorCode`-shaped field must NOT be treated as
+/// backend-owned (CodeRabbit) — those keep reaching Sentry via the status gate.
+///
 /// Returns `false` for a backend-flagged **malformed** `BAD_REQUEST`: that one
 /// `errorCode` case is a client-built payload the backend couldn't parse, and
 /// the FE *does* page for it (F8). Delegates to the single-source decision in
 /// [`crate::openhuman::inference::provider::backend_error_code_skips_sentry`]
 /// so the provider layer, the higher-layer re-report classifier, and the
 /// Sentry `before_send` filter can't drift.
-pub fn is_backend_error_code_owned(body: &str) -> bool {
-    crate::openhuman::inference::provider::backend_error_code_skips_sentry(body)
+pub fn is_backend_error_code_owned(provider: &str, body: &str) -> bool {
+    provider == openhuman_backend::PROVIDER_LABEL
+        && crate::openhuman::inference::provider::backend_error_code_skips_sentry(body)
 }
 
 pub fn log_backend_error_code_owned(
@@ -411,7 +417,7 @@ pub async fn api_error(provider: &str, response: reqwest::Response) -> anyhow::E
     // must not double-report. The one exception (malformed `BAD_REQUEST`) is
     // excluded by `is_backend_error_code_owned` and falls through to the
     // status gate below, which reports it (status 400 is non-transient) — F8.
-    let is_backend_error_code_owned = is_backend_error_code_owned(&body);
+    let is_backend_error_code_owned = is_backend_error_code_owned(provider, &body);
 
     if is_auth_failure && is_backend {
         // Single source of truth for backend session-expiry handling (warn +

@@ -294,9 +294,12 @@ pub fn expected_error_kind(message: &str) -> Option<ExpectedErrorKind> {
     // Trust it FIRST, before the substring matchers, so a managed 500
     // `INTERNAL_ERROR` (which no substring matcher below would otherwise demote)
     // stops double-reporting. The one exception — a backend-flagged malformed
-    // `BAD_REQUEST` — is excluded by `backend_error_code_skips_sentry` and
-    // falls through to the matchers / capture so the FE still pages (F8).
-    if crate::openhuman::inference::provider::backend_error_code_skips_sentry(message) {
+    // `BAD_REQUEST` — is excluded by `managed_error_skips_sentry` and falls
+    // through to the matchers / capture so the FE still pages (F8). The
+    // decision is gated on the managed-backend envelope so a BYO payload
+    // carrying an `errorCode`-shaped field is not wrongly suppressed
+    // (CodeRabbit).
+    if crate::openhuman::inference::provider::managed_error_skips_sentry(message) {
         return Some(ExpectedErrorKind::BackendErrorCodeOwned);
     }
     // Check the Codex-CLI import envelope first: it is highly specific
@@ -1777,8 +1780,9 @@ pub fn is_transient_provider_http_failure(event: &sentry::protocol::Event<'_>) -
 /// classifier (`expected_error_kind` → [`ExpectedErrorKind::BackendErrorCodeOwned`]).
 /// This catches any future call site that re-emits the same flattened error
 /// without routing through those funnels. Delegates the decision to the
-/// single-source [`crate::openhuman::inference::provider::backend_error_code_skips_sentry`]
-/// so the layers can't drift.
+/// single-source [`crate::openhuman::inference::provider::managed_error_skips_sentry`]
+/// (managed-envelope gated, so a BYO payload carrying an `errorCode`-shaped
+/// field is not wrongly dropped) so the layers can't drift.
 pub fn is_backend_error_code_event(event: &sentry::protocol::Event<'_>) -> bool {
     let direct = event.message.as_deref();
     let from_logentry = event.logentry.as_ref().map(|log| log.message.as_str());
@@ -1786,7 +1790,7 @@ pub fn is_backend_error_code_event(event: &sentry::protocol::Event<'_>) -> bool 
     [direct, from_logentry, from_exception]
         .into_iter()
         .flatten()
-        .any(crate::openhuman::inference::provider::backend_error_code_skips_sentry)
+        .any(crate::openhuman::inference::provider::managed_error_skips_sentry)
 }
 
 /// Defense-in-depth `before_send` filter for transient streaming **transport**
@@ -1800,12 +1804,24 @@ pub fn is_backend_error_code_event(event: &sentry::protocol::Event<'_>) -> bool 
 /// Primary gate lives at the two streaming emit sites in
 /// `compatible_provider_impl.rs` (`stream_chat` / `stream_chat_history`); this
 /// catches any future site that reports the same shape without gating.
+///
+/// Scoped to the **streaming** operations on purpose (CodeRabbit): only the
+/// `stream_chat` / `stream_chat_history` transport emits are meant to be
+/// suppressed. A non-streaming `domain=llm_provider, failure=transport` event
+/// carries a different `operation` tag and must keep paging, so the
+/// observability blind spot stays as narrow as F7 intends.
 pub fn is_transient_provider_transport_failure(event: &sentry::protocol::Event<'_>) -> bool {
     let tags = &event.tags;
     if tags.get("domain").map(String::as_str) != Some("llm_provider") {
         return false;
     }
     if tags.get("failure").map(String::as_str) != Some("transport") {
+        return false;
+    }
+    if !matches!(
+        tags.get("operation").map(String::as_str),
+        Some("stream_chat") | Some("stream_chat_history")
+    ) {
         return false;
     }
     event_has_transient_transport_phrase(event)
@@ -5351,6 +5367,24 @@ mod tests {
     }
 
     #[test]
+    fn expected_kind_ignores_byo_errors_that_carry_an_error_code_token() {
+        // CodeRabbit: a BYO / direct-provider envelope whose body happens to
+        // carry an `errorCode`-shaped field must NOT be demoted — the
+        // managed-envelope gate keeps it reaching Sentry.
+        let body = "custom_openai API error (500 Internal Server Error): \
+             {\"error\":{\"errorCode\":\"INTERNAL_ERROR\"}}";
+        assert_ne!(
+            expected_error_kind(body),
+            Some(ExpectedErrorKind::BackendErrorCodeOwned)
+        );
+        let event = event_with_message(body);
+        assert!(
+            !is_backend_error_code_event(&event),
+            "BYO body with an errorCode token must not be dropped by before_send"
+        );
+    }
+
+    #[test]
     fn before_send_filter_drops_backend_owned_error_code_events() {
         for code in [
             "RATE_LIMITED",
@@ -5397,14 +5431,20 @@ mod tests {
             "connection reset by peer",
             "tls handshake eof",
         ] {
-            let event = event_with_tags_and_message(
-                &[("domain", "llm_provider"), ("failure", "transport")],
-                phrase,
-            );
-            assert!(
-                is_transient_provider_transport_failure(&event),
-                "transient transport phrase must be dropped: {phrase}"
-            );
+            for operation in ["stream_chat", "stream_chat_history"] {
+                let event = event_with_tags_and_message(
+                    &[
+                        ("domain", "llm_provider"),
+                        ("failure", "transport"),
+                        ("operation", operation),
+                    ],
+                    phrase,
+                );
+                assert!(
+                    is_transient_provider_transport_failure(&event),
+                    "transient transport phrase must be dropped: {phrase} ({operation})"
+                );
+            }
         }
     }
 
@@ -5413,10 +5453,40 @@ mod tests {
         // A genuine, non-transient transport failure (e.g. an unexpected
         // protocol error) is NOT a flaky-network blip — keep paging.
         let event = event_with_tags_and_message(
-            &[("domain", "llm_provider"), ("failure", "transport")],
+            &[
+                ("domain", "llm_provider"),
+                ("failure", "transport"),
+                ("operation", "stream_chat"),
+            ],
             "invalid URL scheme: unsupported protocol",
         );
         assert!(!is_transient_provider_transport_failure(&event));
+    }
+
+    #[test]
+    fn transient_provider_transport_filter_scoped_to_streaming_operations() {
+        // CodeRabbit: a NON-streaming llm_provider transport failure with the
+        // same domain/failure tags but a different operation must keep paging
+        // — the filter is intentionally scoped to the streaming emits.
+        let event = event_with_tags_and_message(
+            &[
+                ("domain", "llm_provider"),
+                ("failure", "transport"),
+                ("operation", "chat_completions"),
+            ],
+            "operation timed out",
+        );
+        assert!(
+            !is_transient_provider_transport_failure(&event),
+            "non-streaming llm_provider transport must not be suppressed"
+        );
+
+        // And with no operation tag at all (older/foreign emit) — keep paging.
+        let no_op = event_with_tags_and_message(
+            &[("domain", "llm_provider"), ("failure", "transport")],
+            "operation timed out",
+        );
+        assert!(!is_transient_provider_transport_failure(&no_op));
     }
 
     #[test]
@@ -5424,7 +5494,11 @@ mod tests {
         // Same shape under a different domain must not be claimed by this
         // provider-scoped filter.
         let event = event_with_tags_and_message(
-            &[("domain", "backend_api"), ("failure", "transport")],
+            &[
+                ("domain", "backend_api"),
+                ("failure", "transport"),
+                ("operation", "stream_chat"),
+            ],
             "operation timed out",
         );
         assert!(!is_transient_provider_transport_failure(&event));

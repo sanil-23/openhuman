@@ -31,6 +31,8 @@
 //! error is collapsed to a `String` at the native-bus boundary before it
 //! reaches the channel classifier or the higher-layer re-report sites.
 
+use super::openhuman_backend;
+
 /// A recognised backend `errorCode` token (PR #870).
 ///
 /// Unknown / future tokens are intentionally NOT represented here — they are
@@ -89,8 +91,14 @@ pub fn extract_backend_error_code_token(err: &str) -> Option<String> {
     const KEY: &str = "\"errorcode\"";
     let key_idx = lower.find(KEY)?;
     let after_key = &err[key_idx + KEY.len()..];
-    // Skip the colon + whitespace to the opening quote of the value.
-    let after_colon = after_key.trim_start_matches(|c: char| c != '"');
+    // Skip ONLY the JSON separators (whitespace + the colon) and then require a
+    // quoted string value. A non-string value (`"errorCode":null` / a number)
+    // must NOT be treated as a present code — otherwise the old
+    // `trim_start_matches(|c| c != '"')` skipped past the `null` and latched
+    // onto the *next* key's opening quote, returning a bogus token and wrongly
+    // marking the error backend-owned (CodeRabbit). `strip_prefix('"')` returns
+    // `None` for a non-string value, so we bail correctly.
+    let after_colon = after_key.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == ':');
     let stripped = after_colon.strip_prefix('"')?;
     let end = stripped.find('"')?;
     let token = stripped[..end].trim().to_ascii_uppercase();
@@ -99,6 +107,33 @@ pub fn extract_backend_error_code_token(err: &str) -> Option<String> {
     } else {
         Some(token)
     }
+}
+
+/// Whether the flattened error string is a **managed-backend** envelope (the
+/// `errorCode` contract only holds for errors that came through the OpenHuman
+/// managed backend, `"OpenHuman API error (...)"` /
+/// `"OpenHuman streaming API error (...)"`).
+///
+/// Load-bearing for the managed-vs-BYO distinction: a BYO / direct-provider
+/// body that merely happens to carry an `errorCode`-shaped field must NOT be
+/// treated as backend-owned (CodeRabbit). The provider HTTP emit sites gate on
+/// the known `provider` value instead; this helper is for the string-only
+/// downstream sites (`expected_error_kind`, `before_send`) that no longer carry
+/// the typed provider.
+pub fn is_managed_backend_envelope(err: &str) -> bool {
+    let label = openhuman_backend::PROVIDER_LABEL.to_ascii_lowercase();
+    let lower = err.to_ascii_lowercase();
+    lower.contains(&format!("{label} api error"))
+        || lower.contains(&format!("{label} streaming api error"))
+}
+
+/// Managed-backend Sentry-ownership decision for **string-only** call sites:
+/// the error must both be a managed-backend envelope AND carry a backend
+/// `errorCode` the backend owns. Wraps [`backend_error_code_skips_sentry`] with
+/// the [`is_managed_backend_envelope`] gate so a BYO payload that contains an
+/// `errorCode` token can't suppress FE Sentry.
+pub fn managed_error_skips_sentry(err: &str) -> bool {
+    is_managed_backend_envelope(err) && backend_error_code_skips_sentry(err)
 }
 
 /// Parse a recognised [`BackendErrorCode`] out of a flattened error string.
@@ -118,7 +153,16 @@ pub fn extract_backend_error_code(err: &str) -> Option<BackendErrorCode> {
 /// double-report.
 pub fn body_flags_malformed(err: &str) -> bool {
     let lower = err.to_ascii_lowercase();
-    lower.contains("\"malformed\":true") || lower.contains("\"malformed\": true")
+    const KEY: &str = "\"malformed\"";
+    let Some(key_idx) = lower.find(KEY) else {
+        return false;
+    };
+    // Whitespace-tolerant: accept `"malformed":true`, `"malformed": true`, and
+    // pretty-printed `"malformed" : true` (CodeRabbit) — skip arbitrary
+    // whitespace and the colon before matching the boolean literal.
+    let after_key = &lower[key_idx + KEY.len()..];
+    let after_colon = after_key.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == ':');
+    after_colon.starts_with("true")
 }
 
 /// Whether the error is a backend-flagged malformed `BAD_REQUEST` — the single
@@ -212,5 +256,43 @@ mod tests {
         let body = r#"{"errorCode":"INTERNAL_ERROR","malformed":true}"#;
         assert!(!is_backend_malformed_bad_request(body));
         assert!(backend_error_code_skips_sentry(body));
+    }
+
+    #[test]
+    fn non_string_error_code_is_not_treated_as_present_code() {
+        // `"errorCode":null` (or a numeric value) must NOT latch onto the next
+        // quoted key and return a bogus token (CodeRabbit).
+        let body = r#"{"error":{"errorCode":null,"message":"x"}}"#;
+        assert_eq!(extract_backend_error_code_token(body), None);
+        assert!(!backend_error_code_skips_sentry(body));
+    }
+
+    #[test]
+    fn malformed_flag_with_spaced_colon_is_detected() {
+        // Pretty-printed JSON `"malformed" : true` must still flag malformed.
+        let body = r#"OpenHuman API error (400 Bad Request): {"errorCode":"BAD_REQUEST","malformed" : true}"#;
+        assert!(is_backend_malformed_bad_request(body));
+        assert!(!managed_error_skips_sentry(body));
+    }
+
+    #[test]
+    fn managed_envelope_gate_rejects_byo_payload_carrying_error_code() {
+        // A BYO / direct-provider envelope that merely contains an
+        // `errorCode`-shaped field must NOT be treated as backend-owned —
+        // otherwise it would wrongly suppress FE Sentry.
+        let byo = r#"custom_openai API error (429 Too Many Requests): {"error":{"errorCode":"RATE_LIMITED"}}"#;
+        assert!(!is_managed_backend_envelope(byo));
+        assert!(!managed_error_skips_sentry(byo));
+
+        // The same body under the managed envelope IS backend-owned.
+        let managed = r#"OpenHuman API error (429 Too Many Requests): {"error":{"errorCode":"RATE_LIMITED"}}"#;
+        assert!(is_managed_backend_envelope(managed));
+        assert!(managed_error_skips_sentry(managed));
+
+        // The streaming envelope variant is also recognised.
+        let managed_stream =
+            r#"OpenHuman streaming API error (500): {"errorCode":"INTERNAL_ERROR"}"#;
+        assert!(is_managed_backend_envelope(managed_stream));
+        assert!(managed_error_skips_sentry(managed_stream));
     }
 }

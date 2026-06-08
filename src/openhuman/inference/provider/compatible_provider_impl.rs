@@ -920,6 +920,7 @@ impl Provider for OpenAiCompatibleProvider {
                         status,
                     );
                 } else if crate::openhuman::inference::provider::is_backend_error_code_owned(
+                    provider_name.as_str(),
                     &raw_error,
                 ) {
                     // F4/F2: managed-backend errorCode (#870) — backend-owned;
@@ -1125,6 +1126,7 @@ impl Provider for OpenAiCompatibleProvider {
                         status,
                     );
                 } else if crate::openhuman::inference::provider::is_backend_error_code_owned(
+                    provider_name.as_str(),
                     &raw_error,
                 ) {
                     // F4/F2: managed-backend errorCode (#870) — backend-owned;
