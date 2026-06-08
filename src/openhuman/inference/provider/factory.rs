@@ -93,7 +93,10 @@ pub fn auth_key_for_slug(slug: &str) -> String {
 pub fn resolve_model_for_hint(hint_or_tier: &str, config: &Config) -> String {
     let hint_to_tier: &[(&str, &str)] = &[
         ("reasoning", crate::openhuman::config::MODEL_REASONING_V1),
-        ("pro-reasoning", crate::openhuman::config::MODEL_PRO_REASONING_V1),
+        (
+            "pro-reasoning",
+            crate::openhuman::config::MODEL_PRO_REASONING_V1,
+        ),
         ("chat", crate::openhuman::config::MODEL_CHAT_V1),
         ("agentic", crate::openhuman::config::MODEL_AGENTIC_V1),
         ("coding", crate::openhuman::config::MODEL_CODING_V1),
@@ -103,7 +106,10 @@ pub fn resolve_model_for_hint(hint_or_tier: &str, config: &Config) -> String {
         (crate::openhuman::config::MODEL_REASONING_V1, "reasoning"),
         // Dedicated role so `provider_for_role` can force the managed backend —
         // pro-reasoning must never inherit a BYOK/cloud chat provider.
-        (crate::openhuman::config::MODEL_PRO_REASONING_V1, "pro-reasoning"),
+        (
+            crate::openhuman::config::MODEL_PRO_REASONING_V1,
+            "pro-reasoning",
+        ),
         (crate::openhuman::config::MODEL_CHAT_V1, "chat"),
         (crate::openhuman::config::MODEL_REASONING_QUICK_V1, "chat"),
         (crate::openhuman::config::MODEL_AGENTIC_V1, "agentic"),
@@ -743,6 +749,7 @@ fn make_openhuman_backend(config: &Config) -> anyhow::Result<(Box<dyn Provider>,
     // "deepseek-v4-pro", "claude-opus-4-7") fall back to the platform default.
     let model = match model.strip_prefix("hint:") {
         Some("reasoning") => crate::openhuman::config::MODEL_REASONING_V1.to_string(),
+        Some("pro-reasoning") => crate::openhuman::config::MODEL_PRO_REASONING_V1.to_string(),
         Some("chat") => crate::openhuman::config::MODEL_CHAT_V1.to_string(),
         Some("agentic") => crate::openhuman::config::MODEL_AGENTIC_V1.to_string(),
         Some("coding") => crate::openhuman::config::MODEL_CODING_V1.to_string(),
