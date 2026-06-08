@@ -62,14 +62,15 @@ pub const BYOK_INCOMPLETE_SENTINEL: &str = "__byok_incomplete__";
 
 fn is_abstract_tier_model(model: &str) -> bool {
     use crate::openhuman::config::{
-        MODEL_AGENTIC_V1, MODEL_CHAT_V1, MODEL_CODING_V1, MODEL_REASONING_QUICK_V1,
-        MODEL_REASONING_V1,
+        MODEL_AGENTIC_V1, MODEL_CHAT_V1, MODEL_CODING_V1, MODEL_PRO_REASONING_V1,
+        MODEL_REASONING_QUICK_V1, MODEL_REASONING_V1,
     };
     // No dedicated constant for the summarization tier yet; keep the literal
     // in sync with the tier name used by the summarizer sub-agent.
     const MODEL_SUMMARIZATION_V1: &str = "summarization-v1";
     let trimmed = model.trim();
     trimmed == MODEL_REASONING_V1
+        || trimmed == MODEL_PRO_REASONING_V1
         || trimmed == MODEL_REASONING_QUICK_V1
         || trimmed == MODEL_CHAT_V1
         || trimmed == MODEL_AGENTIC_V1

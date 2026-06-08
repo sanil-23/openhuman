@@ -909,6 +909,15 @@ fn pro_reasoning_is_vision_capable() {
     assert!(oh_tier_supports_vision("hint:pro-reasoning"));
 }
 
+#[test]
+fn pro_reasoning_is_classified_as_abstract_tier() {
+    // Must be detected as an abstract managed tier alongside the others so
+    // custom/BYOK routes remap/reject it instead of forwarding it as a
+    // provider-native model id.
+    assert!(is_abstract_tier_model("pro-reasoning-v1"));
+    assert!(is_abstract_tier_model("  pro-reasoning-v1  "));
+}
+
 // ── pro-reasoning is always managed ──────────────────────────────────────────
 
 #[test]
