@@ -1849,9 +1849,9 @@ const messages: TranslationMap = {
   'chat.attachment.tooManyFiles': 'प्रति संदेश अधिकतम {max} फ़ाइलें',
   'chat.attachment.tooLarge': 'छवि {max} आकार सीमा से अधिक है',
   'chat.attachment.unsupportedType':
-    'असमर्थित फ़ाइल प्रकार। PNG, JPEG, WebP, GIF, या BMP का उपयोग करें।',
+    'असमर्थित फ़ाइल प्रकार। कोई छवि (PNG, JPEG, WebP, GIF, BMP) या PDF, TXT, या Markdown फ़ाइल का उपयोग करें।',
   'chat.attachment.imageNotSupported':
-    'यह मॉडल छवियाँ नहीं पढ़ सकता। इसके बजाय कोई PDF, Word या Markdown फ़ाइल संलग्न करें।',
+    'यह मॉडल छवियाँ नहीं पढ़ सकता। इसके बजाय कोई PDF, TXT या Markdown फ़ाइल संलग्न करें।',
   'chat.attachment.readFailed': 'फ़ाइल पढ़ नहीं सकी',
   'memory.searchAria': 'मेमोरी सर्च करें',
   'memory.searchPlaceholder': 'मेमोरी एंट्रीज़ सर्च करें...',

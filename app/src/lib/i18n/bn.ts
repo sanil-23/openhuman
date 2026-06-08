@@ -1850,9 +1850,9 @@ const messages: TranslationMap = {
   'chat.attachment.tooManyFiles': 'প্রতি বার্তায় সর্বোচ্চ {max}টি ফাইল',
   'chat.attachment.tooLarge': 'ছবি {max} আকারের সীমা অতিক্রম করেছে',
   'chat.attachment.unsupportedType':
-    'অসমর্থিত ফাইল প্রকার। PNG, JPEG, WebP, GIF, বা BMP ব্যবহার করুন।',
+    'অসমর্থিত ফাইল প্রকার। একটি ছবি (PNG, JPEG, WebP, GIF, BMP) অথবা একটি PDF, TXT, বা Markdown ফাইল ব্যবহার করুন।',
   'chat.attachment.imageNotSupported':
-    'এই মডেলটি ছবি পড়তে পারে না। পরিবর্তে একটি PDF, Word, বা Markdown ফাইল সংযুক্ত করুন।',
+    'এই মডেলটি ছবি পড়তে পারে না। পরিবর্তে একটি PDF, TXT, বা Markdown ফাইল সংযুক্ত করুন।',
   'chat.attachment.readFailed': 'ফাইল পড়া যায়নি',
   'memory.searchAria': 'মেমোরি খুঁজুন',
   'memory.searchPlaceholder': 'মেমোরি এন্ট্রি খুঁজুন...',

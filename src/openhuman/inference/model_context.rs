@@ -163,6 +163,20 @@ pub fn model_vision_enabled(model: &str, config: &crate::openhuman::config::Conf
     enabled
 }
 
+/// Whether a resolved model accepts image input. The single predicate shared by
+/// the chat UI resolve and the server-side session/sub-agent gates.
+///
+/// - **Managed OpenHuman tiers** consult the hardcoded per-tier map
+///   ([`crate::openhuman::inference::provider::factory::oh_tier_supports_vision`]) —
+///   the remote backend does not advertise per-tier capability, so the core owns
+///   it. Currently every managed tier is `false`.
+/// - **Custom/BYOK models** consult the user-set `model_registry.vision` flag
+///   ([`model_vision_enabled`]).
+pub fn model_supports_vision(model: &str, config: &crate::openhuman::config::Config) -> bool {
+    crate::openhuman::inference::provider::factory::oh_tier_supports_vision(model)
+        || model_vision_enabled(model, config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,6 +272,26 @@ mod tests {
         assert!(!model_vision_enabled("text-only", &config));
         assert!(!model_vision_enabled("unlisted", &config));
         assert!(!model_vision_enabled("   ", &config));
+    }
+
+    #[test]
+    fn model_supports_vision_combines_tier_map_and_registry() {
+        use crate::openhuman::config::schema::ModelRegistryEntry;
+        let mut config = crate::openhuman::config::Config::default();
+        config.model_registry = vec![ModelRegistryEntry {
+            id: "my-llava".into(),
+            provider: "openai".into(),
+            cost_per_1m_output: 0.0,
+            vision: true,
+        }];
+        // Managed tiers are non-vision (the per-tier map is all `false` today).
+        assert!(!model_supports_vision("chat-v1", &config));
+        assert!(!model_supports_vision("reasoning-v1", &config));
+        assert!(!model_supports_vision("hint:chat", &config));
+        // BYOK model flagged in the registry is vision-capable.
+        assert!(model_supports_vision("my-llava", &config));
+        // Unlisted custom model is not.
+        assert!(!model_supports_vision("gpt-5", &config));
     }
 
     #[test]

@@ -150,7 +150,16 @@ pub async fn apply_model_settings(
             "[config] apply_model_settings: replacing model_registry ({} entries)",
             registry.len()
         );
-        config.model_registry = registry;
+        // Normalize ids: `model_vision_enabled` matches the resolved model id
+        // exactly, so stray surrounding whitespace would silently disable vision
+        // for an otherwise valid model.
+        config.model_registry = registry
+            .into_iter()
+            .map(|mut entry| {
+                entry.id = entry.id.trim().to_string();
+                entry
+            })
+            .collect();
     }
     if let Some(providers) = update.cloud_providers {
         use crate::openhuman::config::schema::cloud_providers::is_slug_reserved;

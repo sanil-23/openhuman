@@ -1852,9 +1852,9 @@ const messages: TranslationMap = {
   'chat.attachment.tooManyFiles': 'Maksimal {max} file per pesan',
   'chat.attachment.tooLarge': 'Gambar melebihi batas ukuran {max}',
   'chat.attachment.unsupportedType':
-    'Jenis file tidak didukung. Gunakan PNG, JPEG, WebP, GIF, atau BMP.',
+    'Jenis file tidak didukung. Gunakan gambar (PNG, JPEG, WebP, GIF, BMP) atau file PDF, TXT, atau Markdown.',
   'chat.attachment.imageNotSupported':
-    'Model ini tidak dapat membaca gambar. Lampirkan file PDF, Word, atau Markdown sebagai gantinya.',
+    'Model ini tidak dapat membaca gambar. Lampirkan file PDF, TXT, atau Markdown sebagai gantinya.',
   'chat.attachment.readFailed': 'Tidak dapat membaca file',
   'memory.searchAria': 'Cari memori',
   'memory.searchPlaceholder': 'Cari entri memori...',

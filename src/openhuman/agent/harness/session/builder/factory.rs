@@ -446,7 +446,7 @@ impl Agent {
         // the provider can't introspect). Computed with `&model_name` since it's
         // moved into the builder below.
         let model_vision =
-            crate::openhuman::inference::model_context::model_vision_enabled(&model_name, config);
+            crate::openhuman::inference::model_context::model_supports_vision(&model_name, config);
 
         // Dispatcher selection is deferred until after the tool list is
         // finalised (orchestrator tools are appended below). We capture

@@ -147,12 +147,17 @@ const BUILTIN_PROVIDER_META: Record<string, { tone: string; label: string }> = {
 };
 
 const WORKLOADS: Workload[] = [
-  { id: 'chat', group: 'chat', label: 'Chat', description: 'Direct conversational back-and-forth' },
+  {
+    id: 'chat',
+    group: 'chat',
+    label: 'Chat',
+    description: 'Direct conversational back-and-forth — “Quick” mode in Conversations',
+  },
   {
     id: 'reasoning',
     group: 'chat',
     label: 'Reasoning',
-    description: 'Main chat agent, meeting summarizer',
+    description: 'Main chat agent, meeting summarizer — “Reasoning” mode in Conversations',
   },
   {
     id: 'agentic',
@@ -2425,6 +2430,7 @@ const GlobalOwnModelSelector = ({
   cloudProviders,
   localModels,
   ollamaRunning,
+  modelRegistry,
   onApply,
 }: {
   current: ProviderRef | null;
@@ -2432,7 +2438,8 @@ const GlobalOwnModelSelector = ({
   cloudProviders: CloudProvider[];
   localModels: OllamaModel[];
   ollamaRunning: boolean;
-  onApply: (next: ProviderRef) => Promise<void>;
+  modelRegistry: ModelRegistryEntry[];
+  onApply: (next: ProviderRef, vision: boolean) => Promise<void>;
 }) => {
   const { t } = useT();
   const customCloud = cloudProviders.filter(p => p.slug !== 'openhuman');
@@ -2453,6 +2460,29 @@ const GlobalOwnModelSelector = ({
   const [model, setModel] = useState<string>(
     current?.kind === 'cloud' || current?.kind === 'local' ? current.model : ''
   );
+  // Registry slug for the selected source — keys the per-model vision flag.
+  const registrySlug =
+    source?.kind === 'cloud'
+      ? source.providerSlug
+      : source?.kind === 'local'
+        ? 'ollama'
+        : source?.kind === 'claude-code'
+          ? 'claude-code'
+          : null;
+  const [vision, setVision] = useState<boolean>(() =>
+    registrySlug && model.trim()
+      ? modelRegistryVision(modelRegistry, registrySlug, model.trim())
+      : false
+  );
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setVision(
+      registrySlug && model.trim()
+        ? modelRegistryVision(modelRegistry, registrySlug, model.trim())
+        : false
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registrySlug, model]);
   const [cloudModels, setCloudModels] = useState<ModelInfo[]>([]);
   const [cloudModelsLoading, setCloudModelsLoading] = useState(false);
   const [cloudModelsError, setCloudModelsError] = useState<string | null>(null);
@@ -2521,15 +2551,14 @@ const GlobalOwnModelSelector = ({
     setSaving(true);
     try {
       if (nextSource.kind === 'local') {
-        await onApply({ kind: 'local', model: nextModel.trim() });
+        await onApply({ kind: 'local', model: nextModel.trim() }, vision);
       } else if (nextSource.kind === 'claude-code') {
-        await onApply({ kind: 'claude-code', model: nextModel.trim() });
+        await onApply({ kind: 'claude-code', model: nextModel.trim() }, vision);
       } else {
-        await onApply({
-          kind: 'cloud',
-          providerSlug: nextSource.providerSlug,
-          model: nextModel.trim(),
-        });
+        await onApply(
+          { kind: 'cloud', providerSlug: nextSource.providerSlug, model: nextModel.trim() },
+          vision
+        );
       }
     } finally {
       setSaving(false);
@@ -2634,6 +2663,23 @@ const GlobalOwnModelSelector = ({
               ) : null}
             </div>
           </div>
+          {registrySlug && model.trim().length > 0 && (
+            <label className="flex items-start gap-2 text-xs font-medium text-stone-700 dark:text-neutral-200">
+              <input
+                type="checkbox"
+                checked={vision}
+                onChange={e => setVision(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5 rounded border-stone-300 dark:border-neutral-700 text-primary-500 focus:ring-primary-500"
+              />
+              <span>
+                {t('settings.ai.modelVision')}
+                <span className="block font-normal text-[11px] text-stone-400 dark:text-neutral-500">
+                  {t('settings.ai.modelVisionDesc')}
+                </span>
+              </span>
+            </label>
+          )}
+
           <div className="rounded-lg bg-stone-50 dark:bg-neutral-800/60 px-3 py-2 text-xs text-stone-500 dark:text-neutral-400">
             {t('settings.ai.globalModel.appliesToAll')}
           </div>
@@ -3171,8 +3217,23 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
                 cloudProviders={draft.cloudProviders}
                 localModels={installed}
                 ollamaRunning={ollama.state === 'running'}
-                onApply={async next => {
-                  await persist({ ...draft, routing: routingWithAllWorkloads(next) });
+                modelRegistry={draft.modelRegistry}
+                onApply={async (next, vision) => {
+                  const reg =
+                    next.kind === 'cloud'
+                      ? { slug: next.providerSlug, model: next.model }
+                      : next.kind === 'local'
+                        ? { slug: 'ollama', model: next.model }
+                        : next.kind === 'claude-code'
+                          ? { slug: 'claude-code', model: next.model }
+                          : null;
+                  await persist({
+                    ...draft,
+                    routing: routingWithAllWorkloads(next),
+                    modelRegistry: reg
+                      ? upsertModelRegistryVision(draft.modelRegistry, reg.slug, reg.model, vision)
+                      : draft.modelRegistry,
+                  });
                 }}
               />
             ) : null}

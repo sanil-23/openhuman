@@ -257,7 +257,13 @@ pub fn schemas(function: &str) -> ControllerSchema {
             function: "resolve_model",
             description: "Resolve a model hint or tier name to the concrete model the provider router would use.",
             inputs: vec![required_string("hint", "Model hint (e.g. hint:reasoning) or tier name (e.g. reasoning-v1).")],
-            outputs: vec![json_output("model", "Resolved concrete model id.")],
+            outputs: vec![
+                json_output("model", "Resolved concrete model id."),
+                json_output(
+                    "vision",
+                    "Whether the resolved model accepts image input (vision-capable).",
+                ),
+            ],
         },
         "status" => ControllerSchema {
             namespace: "inference",
@@ -561,14 +567,11 @@ fn handle_inference_resolve_model(params: Map<String, Value>) -> ControllerFutur
             &p.hint, &config,
         );
         // Whether the resolved model accepts image input — drives the chat UI's
-        // image-attachment affordance. Managed OpenHuman tiers route to the
-        // multimodal backend (`vision: true`); custom/BYOK models are covered by
-        // the user's per-model `model_registry.vision` flag.
+        // image-attachment affordance. Managed OpenHuman tiers consult the
+        // core-owned per-tier map (currently all `false`); custom/BYOK models are
+        // covered by the user's per-model `model_registry.vision` flag.
         let vision =
-            crate::openhuman::inference::provider::factory::is_known_openhuman_tier(&resolved)
-                || crate::openhuman::inference::model_context::model_vision_enabled(
-                    &resolved, &config,
-                );
+            crate::openhuman::inference::model_context::model_supports_vision(&resolved, &config);
         to_json(RpcOutcome::new(
             serde_json::json!({ "model": resolved, "vision": vision }),
             vec![],

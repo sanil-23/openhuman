@@ -1864,9 +1864,9 @@ const messages: TranslationMap = {
   'chat.attachment.tooManyFiles': 'Максимум {max} файлов на сообщение',
   'chat.attachment.tooLarge': 'Изображение превышает ограничение размера {max}',
   'chat.attachment.unsupportedType':
-    'Неподдерживаемый тип файла. Используйте PNG, JPEG, WebP, GIF или BMP.',
+    'Неподдерживаемый тип файла. Используйте изображение (PNG, JPEG, WebP, GIF, BMP) или файл PDF, TXT либо Markdown.',
   'chat.attachment.imageNotSupported':
-    'Эта модель не может читать изображения. Вместо этого прикрепите файл PDF, Word или Markdown.',
+    'Эта модель не может читать изображения. Вместо этого прикрепите файл PDF, TXT или Markdown.',
   'chat.attachment.readFailed': 'Не удалось прочитать файл',
   'memory.searchAria': 'Поиск в памяти',
   'memory.searchPlaceholder': 'Поиск записей памяти...',

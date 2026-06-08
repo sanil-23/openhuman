@@ -651,8 +651,14 @@ async fn run_typed_mode(
     let model_vision = crate::openhuman::config::Config::load_or_init()
         .await
         .ok()
-        .map(|cfg| crate::openhuman::inference::model_context::model_vision_enabled(&model, &cfg))
+        .map(|cfg| crate::openhuman::inference::model_context::model_supports_vision(&model, &cfg))
         .unwrap_or(false);
+    tracing::debug!(
+        target: "subagent_runner",
+        model = %model,
+        model_vision,
+        "[subagent_runner] resolved sub-agent model vision capability"
+    );
     let (output, iterations, _agg_usage, early_exit_tool) = Box::pin(run_inner_loop(
         subagent_provider.as_ref(),
         &mut history,

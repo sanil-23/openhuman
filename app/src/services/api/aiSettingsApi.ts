@@ -144,13 +144,14 @@ export interface AISettings {
 /** Re-export so callers (e.g. the AI panel) can reference the entry type. */
 export type { ModelRegistryEntry };
 
-/** Find a model's vision flag in the registry, matching by (provider, id). */
+/** Find a model's vision flag in the registry, matching by (provider, id).
+ *  Tolerates an undefined registry (older snapshots / transient load state). */
 export function modelRegistryVision(
-  registry: ModelRegistryEntry[],
+  registry: ModelRegistryEntry[] | undefined,
   provider: string,
   id: string
 ): boolean {
-  return registry.some(e => e.provider === provider && e.id === id && e.vision);
+  return (registry ?? []).some(e => e.provider === provider && e.id === id && e.vision);
 }
 
 /**
@@ -158,16 +159,17 @@ export function modelRegistryVision(
  * `(provider, id)`; a `vision: false` entry is removed (absence ⇒ no vision).
  */
 export function upsertModelRegistryVision(
-  registry: ModelRegistryEntry[],
+  registry: ModelRegistryEntry[] | undefined,
   provider: string,
   id: string,
   vision: boolean
 ): ModelRegistryEntry[] {
-  const without = registry.filter(e => !(e.provider === provider && e.id === id));
+  const base = registry ?? [];
+  const without = base.filter(e => !(e.provider === provider && e.id === id));
   if (!vision) {
     return without;
   }
-  const existing = registry.find(e => e.provider === provider && e.id === id);
+  const existing = base.find(e => e.provider === provider && e.id === id);
   return [
     ...without,
     { id, provider, cost_per_1m_output: existing?.cost_per_1m_output ?? 0, vision: true },

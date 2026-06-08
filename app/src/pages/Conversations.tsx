@@ -17,8 +17,6 @@ import MicComposer from '../features/human/MicComposer';
 import { useStickToBottom } from '../hooks/useStickToBottom';
 import { useUsageState } from '../hooks/useUsageState';
 import {
-  ALLOWED_ATTACHMENT_MIME_TYPES,
-  ALLOWED_FILE_MIME_TYPES,
   type Attachment,
   ATTACHMENT_MAX_FILES,
   ATTACHMENT_MAX_IMAGES,
@@ -1745,6 +1743,18 @@ const Conversations = ({
                                 ? (msg.extraMetadata.attachmentDataUris as string[])
                                 : parseMessageImages(msg.content ?? '').dataUris;
                               const hasImages = dataUris.length > 0;
+                              // Document attachments carry no image data-URI (only
+                              // images do); surface them as filename chips from the
+                              // persisted attachmentKinds/attachmentNames metadata.
+                              const kinds = Array.isArray(msg.extraMetadata?.attachmentKinds)
+                                ? (msg.extraMetadata.attachmentKinds as string[])
+                                : [];
+                              const names = Array.isArray(msg.extraMetadata?.attachmentNames)
+                                ? (msg.extraMetadata.attachmentNames as string[])
+                                : [];
+                              const fileNames = kinds
+                                .map((k, i) => (k === 'file' ? names[i] : null))
+                                .filter((n): n is string => Boolean(n));
                               const showTime = latestVisibleMessage?.id === msg.id;
                               return (
                                 <>
@@ -1757,6 +1767,35 @@ const Conversations = ({
                                           alt=""
                                           className="max-w-[200px] max-h-[200px] rounded-2xl object-cover"
                                         />
+                                      ))}
+                                    </div>
+                                  )}
+                                  {fileNames.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5 justify-end">
+                                      {fileNames.map((name, i) => (
+                                        <div
+                                          key={i}
+                                          className="flex items-center gap-2 rounded-lg border border-stone-200 dark:border-neutral-700 bg-stone-50 dark:bg-neutral-800 px-2.5 py-1.5 text-xs text-stone-700 dark:text-neutral-300 max-w-[220px]">
+                                          <svg
+                                            className="w-4 h-4 flex-shrink-0 text-stone-500 dark:text-neutral-400"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            viewBox="0 0 24 24">
+                                            <path
+                                              strokeLinecap="round"
+                                              strokeLinejoin="round"
+                                              strokeWidth={1.8}
+                                              d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
+                                            />
+                                            <path
+                                              strokeLinecap="round"
+                                              strokeLinejoin="round"
+                                              strokeWidth={1.8}
+                                              d="M14 2v6h6"
+                                            />
+                                          </svg>
+                                          <span className="truncate font-medium">{name}</span>
+                                        </div>
                                       ))}
                                     </div>
                                   )}
@@ -2234,9 +2273,10 @@ const Conversations = ({
               inlineCompletionSuffix={inlineCompletionSuffix}
               isComposingTextRef={isComposingTextRef}
               maxAttachments={ATTACHMENT_MAX_IMAGES + ATTACHMENT_MAX_FILES}
-              allowedMimeTypes={
-                modelSupportsVision ? ALLOWED_ATTACHMENT_MIME_TYPES : ALLOWED_FILE_MIME_TYPES
-              }
+              // Empty → no native `accept` filter (it greys valid files on
+              // macOS/CEF). Type enforcement happens in handleAttachFiles via
+              // validateAndReadFile, which honors modelSupportsVision.
+              allowedMimeTypes={[]}
               attachmentsEnabled={CHAT_ATTACHMENTS_ENABLED}
             />
           ) : (

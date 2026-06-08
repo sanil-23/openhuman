@@ -15,6 +15,7 @@ import {
   setCloudProviderKey,
   startOpenAiCodexOAuth,
   testProviderModel,
+  upsertModelRegistryVision,
 } from '../../../../services/api/aiSettingsApi';
 import { creditsApi } from '../../../../services/api/creditsApi';
 import { renderWithProviders } from '../../../../test/test-utils';
@@ -305,6 +306,52 @@ describe('AIPanel', () => {
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+  });
+
+  // ─── per-model vision flag (BYOK) ───────────────────────────────────────────
+
+  it('flags a custom BYOK model as vision-capable via the Own-model selector', async () => {
+    vi.mocked(loadAISettings).mockResolvedValue({
+      ...baseSettings,
+      cloudProviders: [
+        ...baseSettings.cloudProviders,
+        {
+          id: 'p_custom_openai',
+          slug: 'openai',
+          label: 'OpenAI',
+          endpoint: 'https://api.openai.com/v1',
+          auth_style: 'bearer' as const,
+          has_api_key: true,
+        },
+      ],
+    });
+    renderWithProviders(<AIPanel />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Use Your Own Models/i })).toBeInTheDocument()
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Use Your Own Models/i }));
+
+    // Enter a model id → the per-model "Supports vision" checkbox appears.
+    const modelInput = await screen.findByPlaceholderText('Enter model id');
+    fireEvent.change(modelInput, { target: { value: 'gpt-4o' } });
+
+    const visionCheckbox = await screen.findByRole('checkbox', { name: /Supports vision/i });
+    expect(visionCheckbox).not.toBeChecked();
+    fireEvent.click(visionCheckbox);
+    expect(visionCheckbox).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    // The vision flag is threaded through to the registry upsert + persisted.
+    await waitFor(() =>
+      expect(vi.mocked(upsertModelRegistryVision)).toHaveBeenCalledWith(
+        expect.anything(),
+        'openai',
+        'gpt-4o',
+        true
+      )
+    );
+    expect(saveAISettings).toHaveBeenCalled();
   });
 
   // ─── auth_style preservation ────────────────────────────────────────────────

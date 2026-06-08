@@ -1746,9 +1746,9 @@ const messages: TranslationMap = {
   'chat.attachment.tooMany': '每条消息最多 {max} 张图片',
   'chat.attachment.tooManyFiles': '每条消息最多 {max} 个文件',
   'chat.attachment.tooLarge': '图片超过 {max} 大小限制',
-  'chat.attachment.unsupportedType': '不支持的文件类型。请使用 PNG、JPEG、WebP、GIF 或 BMP。',
-  'chat.attachment.imageNotSupported':
-    '此模型无法读取图像。请改为附加 PDF、Word 或 Markdown 文件。',
+  'chat.attachment.unsupportedType':
+    '不支持的文件类型。请使用图片（PNG、JPEG、WebP、GIF、BMP）或 PDF、TXT、Markdown 文件。',
+  'chat.attachment.imageNotSupported': '此模型无法读取图像。请改为附加 PDF、TXT 或 Markdown 文件。',
   'chat.attachment.readFailed': '无法读取文件',
   'memory.searchAria': '搜索记忆',
   'memory.searchPlaceholder': '搜索记忆条目...',
