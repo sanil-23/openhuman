@@ -1905,7 +1905,7 @@ const messages: TranslationMap = {
   'chat.attachment.unsupportedType':
     'Tipo de arquivo não suportado. Use uma imagem (PNG, JPEG, WebP, GIF, BMP) ou um arquivo PDF, TXT ou Markdown.',
   'chat.attachment.imageNotSupported':
-    'Este modelo não consegue ler imagens. Anexe um arquivo PDF, TXT ou Markdown.',
+    'Este modelo não consegue ler imagens. Mude para Pro-raciocínio para anexar sua imagem.',
   'chat.attachment.readFailed': 'Não foi possível ler o arquivo',
   'memory.searchAria': 'Pesquisar memória',
   'memory.searchPlaceholder': 'Pesquisar entradas de memória...',

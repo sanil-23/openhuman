@@ -1846,7 +1846,7 @@ const messages: TranslationMap = {
   'chat.attachment.unsupportedType':
     '지원되지 않는 파일 형식입니다. 이미지(PNG, JPEG, WebP, GIF, BMP) 또는 PDF, TXT, Markdown 파일을 사용하세요.',
   'chat.attachment.imageNotSupported':
-    '이 모델은 이미지를 읽을 수 없습니다. 대신 PDF, TXT 또는 Markdown 파일을 첨부하세요.',
+    '이 모델은 이미지를 읽을 수 없습니다. 이미지를 첨부하려면 프로 추론으로 전환하세요.',
   'chat.attachment.readFailed': '파일을 읽을 수 없습니다',
   'memory.searchAria': '메모리 검색',
   'memory.searchPlaceholder': '메모리 항목 검색...',

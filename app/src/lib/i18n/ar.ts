@@ -1825,7 +1825,7 @@ const messages: TranslationMap = {
   'chat.attachment.unsupportedType':
     'نوع ملف غير مدعوم. استخدم صورة (PNG أو JPEG أو WebP أو GIF أو BMP) أو ملف PDF أو TXT أو Markdown.',
   'chat.attachment.imageNotSupported':
-    'لا يمكن لهذا النموذج قراءة الصور. أرفق ملف PDF أو TXT أو Markdown بدلاً من ذلك.',
+    'لا يمكن لهذا النموذج قراءة الصور. بدّل إلى تفكير احترافي لإرفاق صورتك.',
   'chat.attachment.readFailed': 'تعذر قراءة الملف',
   'memory.searchAria': 'البحث في الذاكرة',
   'memory.searchPlaceholder': 'البحث في إدخالات الذاكرة...',
