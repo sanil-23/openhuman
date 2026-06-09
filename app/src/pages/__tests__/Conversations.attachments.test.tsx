@@ -417,6 +417,26 @@ describe('Conversations — attachment feature', () => {
     expect(mockSelectAgentProfile).not.toHaveBeenCalled();
   });
 
+  it('selects the Pro-reasoning tier from the chat-header toggle', async () => {
+    await renderWithSelectedThread();
+
+    const proButton = await screen.findByRole('radio', { name: 'Pro-reasoning' });
+    expect(proButton).toHaveAttribute('aria-checked', 'false');
+
+    await act(async () => {
+      fireEvent.click(proButton);
+    });
+
+    await waitFor(() => {
+      expect(mockSelectAgentProfile).toHaveBeenCalledWith('pro-reasoning');
+      // Store updates to the new active profile → toggle reflects the selection.
+      expect(screen.getByRole('radio', { name: 'Pro-reasoning' })).toHaveAttribute(
+        'aria-checked',
+        'true'
+      );
+    });
+  });
+
   it('rejects an image and shows the advisory when the model lacks vision', async () => {
     mockVisionState.vision = false;
     await renderWithSelectedThread();
