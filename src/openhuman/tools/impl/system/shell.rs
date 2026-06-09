@@ -303,9 +303,18 @@ impl ShellTool {
         // in a sandboxed, readable location instead of the world-shared /tmp.
         let scratch_dir = crate::openhuman::security::openhuman_scratch_dir();
         if scratch_dir.is_dir() {
+            tracing::debug!(
+                scratch_dir = %scratch_dir.display(),
+                "[shell] overriding TMPDIR/TMP/TEMP to the openhuman scratch dir"
+            );
             cmd.env("TMPDIR", scratch_dir.as_os_str());
             cmd.env("TMP", scratch_dir.as_os_str());
             cmd.env("TEMP", scratch_dir.as_os_str());
+        } else {
+            tracing::debug!(
+                scratch_dir = %scratch_dir.display(),
+                "[shell] scratch dir missing — leaving TMPDIR/TMP/TEMP as inherited"
+            );
         }
 
         match self.runtime_path_for_command(command).await {

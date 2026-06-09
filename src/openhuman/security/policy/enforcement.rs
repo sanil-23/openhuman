@@ -115,13 +115,29 @@ impl SecurityPolicy {
         // is ever trusted — never `/tmp` itself. Created here with restrictive
         // perms and refused if it exists as a symlink (TOCTOU hardening, since
         // `/tmp` is world-writable and the name is predictable).
-        if let Some(scratch) = ensure_openhuman_scratch_dir() {
-            let scratch_str = scratch.to_string_lossy().to_string();
-            if !trusted_roots.iter().any(|r| r.path == scratch_str) {
-                trusted_roots.push(TrustedRoot {
-                    path: scratch_str,
-                    access: TrustedAccess::ReadWrite,
-                });
+        match ensure_openhuman_scratch_dir() {
+            Some(scratch) => {
+                let scratch_str = scratch.to_string_lossy().to_string();
+                if trusted_roots.iter().any(|r| r.path == scratch_str) {
+                    tracing::debug!(
+                        path = %scratch_str,
+                        "[policy][scratch] scratch dir already a trusted root — skipping grant"
+                    );
+                } else {
+                    tracing::debug!(
+                        path = %scratch_str,
+                        "[policy][scratch] granting scratch dir as ReadWrite trusted root"
+                    );
+                    trusted_roots.push(TrustedRoot {
+                        path: scratch_str,
+                        access: TrustedAccess::ReadWrite,
+                    });
+                }
+            }
+            None => {
+                tracing::debug!(
+                    "[policy][scratch] scratch dir unavailable (create/validation failed) — not granting"
+                );
             }
         }
 
@@ -166,24 +182,38 @@ pub fn openhuman_scratch_dir() -> std::path::PathBuf {
 /// the name is predictable. Idempotent: safe to call on every policy build.
 pub fn ensure_openhuman_scratch_dir() -> Option<std::path::PathBuf> {
     let dir = openhuman_scratch_dir();
-    if let Ok(meta) = std::fs::symlink_metadata(&dir) {
-        if meta.file_type().is_symlink() {
-            tracing::warn!(
-                path = %dir.display(),
-                "[security] scratch dir exists as a symlink — refusing to grant it as a trusted root"
-            );
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(path = %dir.display(), error = %e, "[security][scratch] failed to create scratch dir");
+        return None;
+    }
+    // Re-validate AFTER creation, and fail closed. `/tmp` is world-writable, so a
+    // local user could have raced or pre-created `/tmp/openhuman` (e.g. as a
+    // symlink) before we got here; a pre-create check alone can still hand back
+    // an unsafe path. `symlink_metadata` does not follow the final component, so
+    // a symlink is detected here even if its target is a real directory.
+    let meta = match std::fs::symlink_metadata(&dir) {
+        Ok(meta) => meta,
+        Err(e) => {
+            tracing::warn!(path = %dir.display(), error = %e, "[security][scratch] failed to stat scratch dir — refusing to grant");
             return None;
         }
-    }
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        tracing::warn!(path = %dir.display(), error = %e, "[security] failed to create scratch dir");
+    };
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        tracing::warn!(
+            path = %dir.display(),
+            "[security][scratch] scratch path is a symlink or not a directory — refusing to grant it as a trusted root"
+        );
         return None;
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        if let Err(e) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)) {
+            tracing::warn!(path = %dir.display(), error = %e, "[security][scratch] failed to harden scratch dir perms — refusing to grant");
+            return None;
+        }
     }
+    tracing::debug!(path = %dir.display(), "[security][scratch] scratch dir ensured (0700, real dir)");
     Some(dir)
 }
 
