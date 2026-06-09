@@ -400,10 +400,27 @@ impl PromptSection for WorkspaceSection {
         "workspace"
     }
 
-    fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
+    fn build(&self, _ctx: &PromptContext<'_>) -> Result<String> {
+        // Intentionally does NOT print a hardcoded path: `shell` and the file
+        // tools resolve relative paths against the agent's *action directory*,
+        // which is not `workspace_dir`. Printing `workspace_dir` here used to
+        // point agents at a directory the file tools are sandboxed *out of*,
+        // causing write→read mismatches. Instead, tell the agent to discover
+        // its real working directory at runtime and keep writes/reads there.
+        let scratch = crate::openhuman::security::openhuman_scratch_dir();
         Ok(format!(
-            "## Workspace\n\nWorking directory: `{}`",
-            ctx.workspace_dir.display()
+            "## Workspace\n\n\
+             Run `pwd` to confirm your working directory — that is where `shell` runs and \
+             where `file_read`/`file_write` resolve relative paths. Create files in that \
+             directory and read them back from the same place (use the relative path, or \
+             confirm the absolute path with `pwd`). Reads and writes outside this directory \
+             are blocked by the security sandbox, so keep intermediate files inside it.\n\n\
+             Prefer printing results to stdout. Only when output is too large for stdout, \
+             write it to a file in your working directory and read that file back.\n\n\
+             For scratch or temporary files, use the directory `{}` (a granted scratch \
+             space) or your `$TMPDIR` / `%TEMP%` — never a hardcoded `/tmp/<name>` (Linux/macOS) \
+             or `C:\\Temp\\<name>` (Windows) path, which is blocked.",
+            scratch.display()
         ))
     }
 }
