@@ -124,6 +124,10 @@ impl Tool for GlobTool {
             Err(e) => return Ok(ToolResult::error(format!("Invalid glob pattern: {e}"))),
         };
 
+        log::debug!(
+            "[tools:glob] search start: pattern='{pattern_str}' path='{search_path}' max_results={max_results}"
+        );
+
         // Resolve + authorize the search root through the readers' validation
         // seam. A disallowed or missing root yields a clear, path-naming error
         // instead of the opaque "No such file or directory" the old workspace_dir
@@ -131,11 +135,17 @@ impl Tool for GlobTool {
         let base = match self.security.validate_path(search_path).await {
             Ok(p) => p,
             Err(e) => {
+                log::debug!("[tools:glob] search path rejected: path='{search_path}' error={e}");
                 return Ok(ToolResult::error(format!(
                     "glob search path '{search_path}' is not accessible: {e}"
-                )))
+                )));
             }
         };
+        log::debug!(
+            "[tools:glob] resolved search root: '{}' (action_dir='{}')",
+            base.display(),
+            self.security.action_dir.display()
+        );
 
         // Canonical action sandbox, used to decide whether a hit is rendered
         // relative (inside the sandbox → directly file_read-able by relative
@@ -152,6 +162,11 @@ impl Tool for GlobTool {
         .map_err(|e| anyhow::anyhow!("scan task failed: {e}"))?;
 
         let (paths, truncated) = result;
+        log::debug!(
+            "[tools:glob] scan complete: {} match(es) truncated={}",
+            paths.len(),
+            truncated
+        );
         let header = if truncated {
             format!("{} match(es) (truncated at {max_results})", paths.len())
         } else {
@@ -217,6 +232,7 @@ fn collect_matches(
 
         // Fail-closed: only surface paths the readers would also accept.
         if !security.is_path_string_allowed(&display) {
+            log::trace!("[tools:glob] path filtered by policy: '{display}'");
             continue;
         }
 
