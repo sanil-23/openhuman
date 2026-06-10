@@ -299,9 +299,23 @@ pub(crate) async fn run_turn_engine(
         // (no `[IMAGE:` markers ⇒ the capability gate above never fires, and no
         // multi-MB payload is sent). The rehydrated copy is provider-only and is
         // never persisted back to `history`.
-        let rehydrated_history = if has_vision && multimodal::has_image_placeholders(history) {
+        let has_image_placeholders = multimodal::has_image_placeholders(history);
+        let rehydrated_history = if has_vision && has_image_placeholders {
+            tracing::debug!(
+                target: "multimodal",
+                has_vision,
+                history_len = history.len(),
+                "[image-sidecar] rehydrating image placeholders for vision-capable provider"
+            );
             Some(multimodal::rehydrate_image_placeholders(history))
         } else {
+            if has_image_placeholders {
+                tracing::debug!(
+                    target: "multimodal",
+                    has_vision,
+                    "[image-sidecar] image placeholders present but provider is non-vision — keeping text placeholders"
+                );
+            }
             None
         };
         let provider_history: &[_] = match rehydrated_history.as_ref() {

@@ -91,26 +91,27 @@ pub async fn start_chat(
     // Images are rehydrated to a data URI at provider dispatch for vision-capable
     // models only (engine::core).
     let message = if message.contains("[FILE:") || message.contains("[IMAGE:") {
-        match crate::openhuman::config::rpc::load_config_with_timeout().await {
-            Ok(cfg) => {
-                let extracted = crate::openhuman::agent::multimodal::inline_file_attachments(
-                    &message,
-                    &cfg.multimodal_files,
-                )
-                .await;
-                crate::openhuman::agent::multimodal::stash_image_attachments(
-                    &extracted,
-                    &cfg.multimodal,
-                )
-                .await
-            }
+        // Fail CLOSED on a config-load error: process with default limits rather
+        // than passing the raw `[FILE:data:…]`/`[IMAGE:data:…]` blob through —
+        // otherwise the injection scan, history/JSONL persistence, and memory
+        // autosave all see the multi-MB data URI again, reopening the flood path.
+        let (file_cfg, image_cfg) = match crate::openhuman::config::rpc::load_config_with_timeout()
+            .await
+        {
+            Ok(cfg) => (cfg.multimodal_files, cfg.multimodal),
             Err(err) => {
                 log::warn!(
-                    "[web-channel] could not load config for ingress attachment processing; sending message unmodified: {err}"
-                );
-                message
+                        "[web-channel] config load failed for ingress attachment processing; using default limits (fail-closed): {err}"
+                    );
+                (
+                    crate::openhuman::config::MultimodalFileConfig::default(),
+                    crate::openhuman::config::MultimodalConfig::default(),
+                )
             }
-        }
+        };
+        let extracted =
+            crate::openhuman::agent::multimodal::inline_file_attachments(&message, &file_cfg).await;
+        crate::openhuman::agent::multimodal::stash_image_attachments(&extracted, &image_cfg).await
     } else {
         message
     };

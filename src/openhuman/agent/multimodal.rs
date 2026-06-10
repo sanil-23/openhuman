@@ -6,7 +6,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use flate2::read::GzDecoder;
 use reqwest::Client;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Read;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -399,12 +399,30 @@ pub async fn inline_file_attachments(message: &str, file_config: &MultimodalFile
     if file_refs.is_empty() {
         return message.to_string();
     }
-    let (_max_files, max_file_size_mb, max_extracted_text_chars) = file_config.effective_limits();
+    let (max_files, max_file_size_mb, max_extracted_text_chars) = file_config.effective_limits();
     let max_file_bytes = max_file_size_mb.saturating_mul(1024 * 1024);
+    // Enforce the per-turn file cap at ingress (rewriting the markers removes
+    // the count check that `prepare_messages_for_provider` would otherwise do).
+    // `max_files == 0` is the hard-disable sentinel: read nothing. Over-cap refs
+    // degrade to a content-less placeholder rather than being normalized/read.
+    let read_cap = if file_config.max_files == 0 {
+        0
+    } else {
+        max_files
+    };
     let client = build_runtime_proxy_client_with_timeouts("provider.ollama", 30, 10);
 
     let mut payloads = Vec::with_capacity(file_refs.len());
-    for reference in &file_refs {
+    for (idx, reference) in file_refs.iter().enumerate() {
+        if idx >= read_cap {
+            payloads.push(FilePayload::Reference {
+                name: "attachment (over file limit)".to_string(),
+                mime: "application/octet-stream".to_string(),
+                size_bytes: 0,
+                sha256_prefix: "skipped".to_string(),
+            });
+            continue;
+        }
         match normalize_file_reference(
             reference,
             file_config,
@@ -458,14 +476,51 @@ const IMAGE_PLACEHOLDER_PREFIX: &str = "[Image:";
 /// Separator before the stash content-hash id inside a placeholder.
 const IMAGE_STASH_REF: &str = "#att:";
 
-/// Process-global stash of inbound image attachments keyed by content hash.
-/// In-memory only: lost on restart (a follow-up turn after a restart sees the
-/// text placeholder). Disk-backing under `<workspace>/attachments/` is the
-/// production hardening; the persistence-pollution fix holds either way.
-static IMAGE_STASH: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+/// Upper bounds on the in-memory image stash so it can't grow without limit
+/// over the process lifetime (the data URI is out of history, but still on heap
+/// until evicted). Whichever bound trips first evicts oldest-first (FIFO).
+const IMAGE_STASH_MAX_ENTRIES: usize = 32;
+const IMAGE_STASH_MAX_BYTES: usize = 64 * 1024 * 1024;
 
-fn image_stash() -> &'static Mutex<HashMap<String, String>> {
-    IMAGE_STASH.get_or_init(|| Mutex::new(HashMap::new()))
+/// Bounded, content-addressed stash of inbound image data URIs. FIFO eviction
+/// keeps resident memory capped; entries are keyed by content hash so identical
+/// images dedupe. In-memory only — lost on restart (a follow-up turn then sees
+/// the text placeholder). Disk-backing under `<workspace>/attachments/` is the
+/// production hardening; the persistence-pollution fix holds either way.
+#[derive(Default)]
+struct ImageStash {
+    map: HashMap<String, String>,
+    order: VecDeque<String>,
+    bytes: usize,
+}
+
+impl ImageStash {
+    fn insert(&mut self, id: String, uri: String) {
+        if self.map.contains_key(&id) {
+            return; // content-addressed: already present, keep its FIFO position
+        }
+        self.bytes = self.bytes.saturating_add(uri.len());
+        self.order.push_back(id.clone());
+        self.map.insert(id, uri);
+        while self.map.len() > IMAGE_STASH_MAX_ENTRIES || self.bytes > IMAGE_STASH_MAX_BYTES {
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(v) = self.map.remove(&old) {
+                self.bytes = self.bytes.saturating_sub(v.len());
+            }
+        }
+    }
+
+    fn get(&self, id: &str) -> Option<&String> {
+        self.map.get(id)
+    }
+}
+
+static IMAGE_STASH: OnceLock<Mutex<ImageStash>> = OnceLock::new();
+
+fn image_stash() -> &'static Mutex<ImageStash> {
+    IMAGE_STASH.get_or_init(|| Mutex::new(ImageStash::default()))
 }
 
 /// Ingress-time image stashing. Replaces every `[IMAGE:data:…]` marker with a
@@ -479,12 +534,20 @@ pub async fn stash_image_attachments(message: &str, image_config: &MultimodalCon
     if image_refs.is_empty() {
         return message.to_string();
     }
-    let (_max_images, max_image_size_mb) = image_config.effective_limits();
+    let (max_images, max_image_size_mb) = image_config.effective_limits();
     let max_image_bytes = max_image_size_mb.saturating_mul(1024 * 1024);
     let client = build_runtime_proxy_client_with_timeouts("provider.ollama", 30, 10);
 
     let mut placeholders = Vec::with_capacity(image_refs.len());
-    for reference in &image_refs {
+    for (idx, reference) in image_refs.iter().enumerate() {
+        // Enforce the per-turn image cap at ingress: over-cap markers degrade to
+        // a text placeholder and are never normalized/read or stashed (rewriting
+        // the markers removes the count check `prepare_messages_for_provider`
+        // would otherwise apply, and bounds stash growth per message).
+        if idx >= max_images {
+            placeholders.push("[Image: (over image limit)]".to_string());
+            continue;
+        }
         match normalize_image_reference(reference, image_config, max_image_bytes, &client).await {
             Ok(data_uri) => {
                 let id = sha256_prefix(data_uri.as_bytes());
@@ -555,7 +618,7 @@ pub fn rehydrate_image_placeholders(messages: &[ChatMessage]) -> Vec<ChatMessage
 
 /// Replace each `[Image: <name> #att:<id>]` placeholder in `text` with
 /// `[IMAGE:<data-uri>]` when the id is in `stash`; leave it verbatim otherwise.
-fn rehydrate_placeholders_in_text(text: &str, stash: &HashMap<String, String>) -> String {
+fn rehydrate_placeholders_in_text(text: &str, stash: &ImageStash) -> String {
     let mut out = String::with_capacity(text.len());
     let mut cursor = 0;
     while let Some(rel) = text[cursor..].find(IMAGE_PLACEHOLDER_PREFIX) {

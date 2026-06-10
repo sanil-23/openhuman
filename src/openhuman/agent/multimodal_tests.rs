@@ -909,3 +909,54 @@ fn rehydrate_missing_stash_id_keeps_placeholder_text() {
         .contains("[Image: image #att:deadbeefdeadbeef]"));
     assert!(!out[0].content.contains("[IMAGE:data:"));
 }
+
+#[tokio::test]
+async fn inline_file_attachments_caps_at_max_files() {
+    // base64("a")=YQ==, base64("b")=Yg==
+    let msg = "[FILE:data:text/plain;base64,YQ==] [FILE:data:text/plain;base64,Yg==]";
+    let cfg = MultimodalFileConfig {
+        max_files: 1,
+        ..MultimodalFileConfig::default()
+    };
+    let out = inline_file_attachments(msg, &cfg).await;
+    // First file is extracted; the second is over the cap → placeholder, unread.
+    assert!(
+        out.contains("[FILE-EXTRACTED"),
+        "first file extracted: {out}"
+    );
+    assert!(out.contains("over file limit"), "second file capped: {out}");
+}
+
+#[tokio::test]
+async fn stash_image_attachments_caps_at_max_images() {
+    let msg = format!("[IMAGE:{TINY_PNG_DATA_URI}]\n[IMAGE:{TINY_PNG_DATA_URI}]");
+    let cfg = MultimodalConfig {
+        max_images: 1,
+        ..MultimodalConfig::default()
+    };
+    let out = stash_image_attachments(&msg, &cfg).await;
+    assert!(out.contains("#att:"), "first image stashed: {out}");
+    assert!(
+        out.contains("over image limit"),
+        "second image capped: {out}"
+    );
+}
+
+#[test]
+fn image_stash_evicts_oldest_over_capacity() {
+    let mut stash = ImageStash::default();
+    for i in 0..(IMAGE_STASH_MAX_ENTRIES + 5) {
+        stash.insert(format!("id{i}"), format!("uri-{i}"));
+    }
+    assert!(
+        stash.map.len() <= IMAGE_STASH_MAX_ENTRIES,
+        "bounded entries"
+    );
+    assert!(stash.get("id0").is_none(), "oldest evicted");
+    assert!(
+        stash
+            .get(&format!("id{}", IMAGE_STASH_MAX_ENTRIES + 4))
+            .is_some(),
+        "newest retained"
+    );
+}
