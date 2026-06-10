@@ -5330,8 +5330,6 @@ mod tests {
             ("402", "USER_INSUFFICIENT_CREDITS"),
             ("503", "UPSTREAM_UNAVAILABLE"),
             ("404", "MODEL_UNAVAILABLE"),
-            ("413", "PAYLOAD_TOO_LARGE"),
-            ("400", "CONTEXT_LENGTH_EXCEEDED"),
             ("400", "BAD_REQUEST"),
             ("500", "INTERNAL_ERROR"),
         ] {
@@ -5340,6 +5338,20 @@ mod tests {
                 expected_error_kind(&body),
                 Some(ExpectedErrorKind::BackendErrorCodeOwned),
                 "errorCode={code} must be backend-owned (no FE Sentry)"
+            );
+        }
+
+        // Client-guard-leak codes are NOT demoted — the client enforces these
+        // limits pre-send, so a backend rejection is a guard leak that pages.
+        for (status, code) in [
+            ("413", "PAYLOAD_TOO_LARGE"),
+            ("400", "CONTEXT_LENGTH_EXCEEDED"),
+        ] {
+            let body = managed_body(status, code);
+            assert_ne!(
+                expected_error_kind(&body),
+                Some(ExpectedErrorKind::BackendErrorCodeOwned),
+                "errorCode={code} is a client guard leak and must page"
             );
         }
     }
@@ -5390,7 +5402,6 @@ mod tests {
             "RATE_LIMITED",
             "UPSTREAM_UNAVAILABLE",
             "MODEL_UNAVAILABLE",
-            "PAYLOAD_TOO_LARGE",
             "INTERNAL_ERROR",
             "BAD_REQUEST",
         ] {
@@ -5398,6 +5409,16 @@ mod tests {
             assert!(
                 is_backend_error_code_event(&event),
                 "errorCode={code} event must be dropped by before_send"
+            );
+        }
+
+        // Client-guard-leak codes survive before_send and page (the client
+        // should have caught the limit before sending).
+        for code in ["PAYLOAD_TOO_LARGE", "CONTEXT_LENGTH_EXCEEDED"] {
+            let event = event_with_message(&managed_body("413", code));
+            assert!(
+                !is_backend_error_code_event(&event),
+                "errorCode={code} is a client guard leak and must survive before_send"
             );
         }
     }
