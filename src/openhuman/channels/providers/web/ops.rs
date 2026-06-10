@@ -82,6 +82,39 @@ pub async fn start_chat(
         return Err("message is required".to_string());
     }
 
+    // [pdf/image-attach fix] Process attachments at ingress, BEFORE the message is
+    // injection-scanned, persisted to history/JSONL, or auto-saved to the memory
+    // store. Otherwise a multi-MB base64 data URI floods every upstream stage
+    // (N-chunk embed → Voyage 400, cross-thread index) and stalls the turn.
+    //   [FILE:data:…]  → [FILE-EXTRACTED]text (or [FILE-ATTACHED] placeholder)
+    //   [IMAGE:data:…] → [Image: … #att:<id>] placeholder + out-of-band stash
+    // Images are rehydrated to a data URI at provider dispatch for vision-capable
+    // models only (engine::core).
+    let message = if message.contains("[FILE:") || message.contains("[IMAGE:") {
+        match crate::openhuman::config::rpc::load_config_with_timeout().await {
+            Ok(cfg) => {
+                let extracted = crate::openhuman::agent::multimodal::inline_file_attachments(
+                    &message,
+                    &cfg.multimodal_files,
+                )
+                .await;
+                crate::openhuman::agent::multimodal::stash_image_attachments(
+                    &extracted,
+                    &cfg.multimodal,
+                )
+                .await
+            }
+            Err(err) => {
+                log::warn!(
+                    "[web-channel] could not load config for ingress attachment processing; sending message unmodified: {err}"
+                );
+                message
+            }
+        }
+    } else {
+        message
+    };
+
     let request_id = Uuid::new_v4().to_string();
     let prompt_decision = enforce_prompt_input(
         &message,

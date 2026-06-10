@@ -827,3 +827,85 @@ async fn prepare_messages_under_untrusted_channel_config_passes_plain_text_throu
     assert!(!prepared.contains_images);
     assert_eq!(prepared.messages.len(), 1);
 }
+
+// ── Ingress attachment processing: file extraction + image sidecar ───────────
+
+#[tokio::test]
+async fn inline_file_attachments_replaces_marker_with_extracted_text() {
+    // base64("hello world") = aGVsbG8gd29ybGQ=
+    let msg = "summarize [FILE:data:text/plain;base64,aGVsbG8gd29ybGQ=]";
+    let out = inline_file_attachments(msg, &MultimodalFileConfig::default()).await;
+    assert!(
+        out.contains("[FILE-EXTRACTED"),
+        "extracted block present: {out}"
+    );
+    assert!(out.contains("hello world"), "extracted text inlined: {out}");
+    assert!(
+        !out.contains("[FILE:data:"),
+        "raw data-uri marker must be gone: {out}"
+    );
+    assert!(out.contains("summarize"), "user text preserved: {out}");
+}
+
+#[tokio::test]
+async fn inline_file_attachments_noop_without_marker() {
+    let msg = "just a normal message";
+    let out = inline_file_attachments(msg, &MultimodalFileConfig::default()).await;
+    assert_eq!(out, msg);
+}
+
+const TINY_PNG_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+#[tokio::test]
+async fn stash_image_attachments_replaces_marker_with_placeholder() {
+    let msg = format!("whats this [IMAGE:{TINY_PNG_DATA_URI}]");
+    let out = stash_image_attachments(&msg, &MultimodalConfig::default()).await;
+    assert!(out.contains("[Image:"), "placeholder present: {out}");
+    assert!(out.contains("#att:"), "stash ref present: {out}");
+    assert!(
+        !out.contains("[IMAGE:data:"),
+        "raw image marker must be gone: {out}"
+    );
+    assert!(
+        !out.contains("base64"),
+        "no base64 left in persisted form: {out}"
+    );
+    assert!(out.contains("whats this"), "user text preserved: {out}");
+}
+
+#[tokio::test]
+async fn image_placeholder_rehydrates_to_inline_marker_for_provider() {
+    // Ingress: stash the image and leave a placeholder.
+    let msg = format!("describe [IMAGE:{TINY_PNG_DATA_URI}]");
+    let placeholdered = stash_image_attachments(&msg, &MultimodalConfig::default()).await;
+    let messages = vec![ChatMessage::user(placeholdered)];
+    assert!(has_image_placeholders(&messages), "placeholder detected");
+
+    // Dispatch (vision model): rehydrate back to an inline [IMAGE:data:...] marker.
+    let rehydrated = rehydrate_image_placeholders(&messages);
+    assert_eq!(rehydrated.len(), 1);
+    assert!(
+        rehydrated[0].content.contains("[IMAGE:data:image/png"),
+        "rehydrated inline image: {}",
+        rehydrated[0].content
+    );
+    assert!(
+        !rehydrated[0].content.contains("#att:"),
+        "placeholder consumed: {}",
+        rehydrated[0].content
+    );
+}
+
+#[test]
+fn rehydrate_missing_stash_id_keeps_placeholder_text() {
+    // A placeholder whose id is absent from the stash (e.g. after a restart) is
+    // left verbatim rather than dropped — the model still sees a text mention.
+    let messages = vec![ChatMessage::user(
+        "see [Image: image #att:deadbeefdeadbeef]".to_string(),
+    )];
+    let out = rehydrate_image_placeholders(&messages);
+    assert!(out[0]
+        .content
+        .contains("[Image: image #att:deadbeefdeadbeef]"));
+    assert!(!out[0].content.contains("[IMAGE:data:"));
+}

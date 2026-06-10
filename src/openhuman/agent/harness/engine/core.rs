@@ -293,8 +293,24 @@ pub(crate) async fn run_turn_engine(
             return Err(cap_err.into());
         }
 
+        // [image sidecar] Rehydrate `[Image: … #att:<id>]` placeholders back to
+        // inline `[IMAGE:data:…]` from the process stash — but ONLY for
+        // vision-capable models. Non-vision models keep the text placeholder
+        // (no `[IMAGE:` markers ⇒ the capability gate above never fires, and no
+        // multi-MB payload is sent). The rehydrated copy is provider-only and is
+        // never persisted back to `history`.
+        let rehydrated_history = if has_vision && multimodal::has_image_placeholders(history) {
+            Some(multimodal::rehydrate_image_placeholders(history))
+        } else {
+            None
+        };
+        let provider_history: &[_] = match rehydrated_history.as_ref() {
+            Some(v) => v,
+            None => history,
+        };
+
         let prepared_messages = multimodal::prepare_messages_for_provider(
-            history,
+            provider_history,
             multimodal_config,
             multimodal_file_config,
         )
