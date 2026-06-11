@@ -171,6 +171,10 @@ impl Tool for GlobTool {
         // Canonical action sandbox, used to decide whether a hit is rendered
         // relative (inside the sandbox → directly file_read-able by relative
         // path) or absolute (in a granted trusted root → file_read-able as-is).
+        // `base` is already canonical (validate_path canonicalizes), so if this
+        // fallback fires the two roots become asymmetric and strip_prefix below
+        // may miss for an in-sandbox hit, rendering it absolute. Harmless: the
+        // absolute path is still readable and the per-hit filter still applies.
         let action_root = tokio::fs::canonicalize(&self.security.action_dir)
             .await
             .unwrap_or_else(|e| {
@@ -221,6 +225,10 @@ impl Tool for GlobTool {
 /// - Every hit is filtered through [`SecurityPolicy::is_path_string_allowed`]
 ///   on that exact returned string, so `glob` never surfaces a path the readers
 ///   would reject (internal state, forbidden trees, symlink escapes).
+///
+/// `max_results` bounds the returned list, not the walk: the full tree under
+/// `base` is always traversed and only the output is truncated (pre-existing
+/// behavior — the cap caps results, not work).
 fn collect_matches(
     base: &Path,
     action_root: &Path,
@@ -492,6 +500,60 @@ mod tests {
             result.output().contains("not accessible"),
             "{}",
             result.output()
+        );
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// Security backstop: a symlink inside the sandbox pointing OUTSIDE it must
+    /// never leak the target. Two layers cover this and this test exercises
+    /// both: the walk runs with `follow_links(false)`, so the symlink entry is
+    /// dropped by the `is_file()` gate (a symlink is not a regular file) and is
+    /// never descended; and `is_path_string_allowed` is the fail-closed per-hit
+    /// backstop — assert directly that it rejects the escape's resolved string,
+    /// since that is the check `collect_matches` leans on if the walk gate is
+    /// ever bypassed. A legitimate in-sandbox file is still found.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn glob_does_not_leak_symlink_escape() {
+        let root = std::env::temp_dir().join("openhuman_test_glob_symlink");
+        let action = root.join("action");
+        let workspace = root.join("workspace");
+        let outside = root.join("outside");
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        tokio::fs::create_dir_all(action.join("sub")).await.unwrap();
+        tokio::fs::create_dir_all(&workspace).await.unwrap();
+        tokio::fs::create_dir_all(&outside).await.unwrap();
+        tokio::fs::write(action.join("sub/ok.txt"), "ok")
+            .await
+            .unwrap();
+        tokio::fs::write(outside.join("secret.txt"), "secret")
+            .await
+            .unwrap();
+        // Symlink inside the sandbox pointing at the outside (untrusted) tree.
+        std::os::unix::fs::symlink(&outside, action.join("escape")).unwrap();
+
+        // `outside` is deliberately NOT registered as a trusted root.
+        let security = test_security_split(action.clone(), workspace.clone(), vec![]);
+        let tool = GlobTool::new(security.clone());
+        let result = tool.execute(json!({"pattern": "**/*.txt"})).await.unwrap();
+        assert!(!result.is_error, "{}", result.output());
+        let output = result.output();
+        // The in-sandbox file is found, the escape target is not enumerated.
+        assert!(
+            output.contains("ok.txt"),
+            "missing in-sandbox file: {output}"
+        );
+        assert!(
+            !output.contains("secret"),
+            "leaked symlink-escape target: {output}"
+        );
+        // The fail-closed backstop, exercised directly: the resolved escape
+        // path is rejected as a string regardless of how it was reached.
+        let escaped = outside.join("secret.txt").to_string_lossy().to_string();
+        assert!(
+            !security.is_path_string_allowed(&escaped),
+            "policy must reject the escape target string: {escaped}"
         );
 
         let _ = tokio::fs::remove_dir_all(&root).await;
