@@ -170,16 +170,29 @@ impl Agent {
         }
 
         if self.auto_save {
-            let _ = self
-                .memory
-                .store(
-                    "",
-                    "user_msg",
-                    user_message,
-                    MemoryCategory::Conversation,
-                    None,
-                )
-                .await;
+            // Fire-and-forget: persisting the user message to the memory store
+            // does an embedding round-trip (Voyage) + memory-tree write. Awaiting
+            // it here delayed the start of *every* turn before recall/LLM even
+            // began. Spawn it so the chat continues immediately. Recall for the
+            // current turn (below) intentionally does NOT need the just-sent
+            // message — recalling your own current message is undesirable — so
+            // letting the save race the turn is safe and actually cleaner.
+            let memory = self.memory.clone();
+            let user_msg = user_message.to_string();
+            tokio::spawn(async move {
+                if let Err(err) = memory
+                    .store(
+                        "",
+                        "user_msg",
+                        &user_msg,
+                        MemoryCategory::Conversation,
+                        None,
+                    )
+                    .await
+                {
+                    log::warn!("[agent_loop] async user-message memory autosave failed: {err}");
+                }
+            });
         }
 
         log::info!("[agent] loading memory context for user message");
