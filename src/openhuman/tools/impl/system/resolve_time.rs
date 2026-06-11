@@ -12,9 +12,12 @@
 //!
 //! Read-only, no side effects. Accepts:
 //!   - `"now"`
-//!   - relative durations: `"24h ago"`, `"last 24 hours"`, `"-7d"`, `"30d"`,
-//!     `"15m"`, `"2 weeks ago"` (units: s/m/h/d/w)
-//!   - day anchors: `"today"`, `"yesterday"` (civil midnight in the resolved zone)
+//!   - past relative durations: `"24h ago"`, `"last 24 hours"`, `"-7d"`,
+//!     `"30d"`, `"15m"`, `"2 weeks ago"` (units: s/m/h/d/w)
+//!   - future relative durations (for scheduling): `"in 10 minutes"`,
+//!     `"30m from now"`, `"+2h"`, `"next 7d"`
+//!   - day anchors: `"today"`, `"yesterday"`, `"tomorrow"` (civil midnight in
+//!     the resolved zone)
 //!   - absolute: RFC-3339 (`"2026-06-09T19:12:00Z"`), bare date (`"2026-06-09"`),
 //!     or `"YYYY-MM-DD HH:MM:SS"`
 //!
@@ -47,20 +50,49 @@ impl Default for ResolveTimeTool {
     }
 }
 
-/// Parse a relative-duration expression like `"24h ago"`, `"last 24 hours"`,
-/// `"-7d"`, `"30d"`, `"2 weeks"` into a [`Duration`] to subtract from now.
-/// Returns `None` if the input isn't a recognized relative duration.
+/// Parse a relative-duration expression into a **signed** [`Duration`] offset
+/// from now: negative = the past, positive = the future.
+///
+/// Direction comes from explicit markers — `"… ago"`, `"last "`, `"past "`, or
+/// a leading `-` mean the past; `"in "`, `"next "`, `"… from now"`, or a
+/// leading `+` mean the future. A bare duration (`"24h"`, `"7d"`) defaults to
+/// the **past**, since the dominant caller is "recent / last N" history
+/// lookups. Returns `None` if the input isn't a recognized relative duration.
+///
+/// Getting the sign right matters: `scheduler_agent` passes future phrasing
+/// like `"in 10 minutes"`, which must resolve forward, not backward.
 fn parse_relative_duration(raw: &str) -> Option<Duration> {
     let mut s = raw.trim().to_ascii_lowercase();
-    // Strip filler so "last 24 hours ago" / "in 24h" / "-24h" all normalize.
-    for prefix in ["last ", "in ", "past ", "+", "-"] {
-        if let Some(rest) = s.strip_prefix(prefix) {
-            s = rest.trim().to_string();
-        }
-    }
+    let mut future = false;
+
+    // Suffix direction markers.
     if let Some(rest) = s.strip_suffix(" ago") {
         s = rest.trim().to_string();
+    } else if let Some(rest) = s.strip_suffix(" from now") {
+        future = true;
+        s = rest.trim().to_string();
     }
+    // Prefix direction markers (first match wins).
+    for (prefix, is_future) in [
+        ("in ", true),
+        ("next ", true),
+        ("last ", false),
+        ("past ", false),
+    ] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            future = is_future;
+            s = rest.trim().to_string();
+            break;
+        }
+    }
+    if let Some(rest) = s.strip_prefix('+') {
+        future = true;
+        s = rest.trim().to_string();
+    } else if let Some(rest) = s.strip_prefix('-') {
+        // Leading '-' is the past — which is already the default — just strip it.
+        s = rest.trim().to_string();
+    }
+
     // Collapse internal whitespace between the number and the unit.
     let s: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
 
@@ -81,7 +113,8 @@ fn parse_relative_duration(raw: &str) -> Option<Duration> {
         "w" | "wk" | "wks" | "week" | "weeks" => 604_800,
         _ => return None,
     };
-    Some(Duration::seconds(n.saturating_mul(secs_per)))
+    let magnitude = Duration::seconds(n.saturating_mul(secs_per));
+    Some(if future { magnitude } else { -magnitude })
 }
 
 /// Resolve `expr` to an absolute UTC instant. `zone` interprets civil
@@ -99,16 +132,20 @@ fn resolve_expr(expr: &str, zone: ResolveZone) -> Result<DateTime<Utc>, String> 
         return Ok(Utc::now());
     }
 
-    // Relative duration → subtract from now.
+    // Relative duration → signed offset from now (sign encodes past/future).
     if let Some(dur) = parse_relative_duration(trimmed) {
-        return Ok(Utc::now() - dur);
+        return Ok(Utc::now() + dur);
     }
 
     // Day anchors: civil midnight in the resolved zone.
-    if lower == "today" || lower == "yesterday" {
-        let offset_days = if lower == "yesterday" { 1 } else { 0 };
+    if lower == "today" || lower == "yesterday" || lower == "tomorrow" {
+        let offset_days = match lower.as_str() {
+            "yesterday" => -1,
+            "tomorrow" => 1,
+            _ => 0,
+        };
         let today_civil = zone.now_civil_date();
-        let target = today_civil - Duration::days(offset_days);
+        let target = today_civil + Duration::days(offset_days);
         return zone.civil_midnight_to_utc(target);
     }
 
@@ -131,8 +168,9 @@ fn resolve_expr(expr: &str, zone: ResolveZone) -> Result<DateTime<Utc>, String> 
 
     Err(format!(
         "could not parse time expression {trimmed:?}. Accepted: \"now\", a relative \
-         duration like \"24h ago\" / \"7d\" / \"2 weeks ago\" (units s/m/h/d/w), \
-         \"today\" / \"yesterday\", an RFC-3339 timestamp like \
+         duration — past (\"24h ago\" / \"7d\" / \"2 weeks ago\") or future \
+         (\"in 10 minutes\" / \"30m from now\") with units s/m/h/d/w, \
+         \"today\" / \"yesterday\" / \"tomorrow\", an RFC-3339 timestamp like \
          \"2026-06-09T19:12:00Z\", a bare date \"2026-06-09\", or \
          \"YYYY-MM-DD HH:MM:SS\"."
     ))
@@ -192,8 +230,9 @@ impl Tool for ResolveTimeTool {
          ALWAYS use this to produce any date/time argument for another tool \
          (Slack/Gmail/Calendar `oldest`/`latest`/`since`/`after`, cron times, etc.) — \
          never hand-compute Unix/epoch seconds yourself; LLM epoch arithmetic is \
-         unreliable. Pass `expr` as \"now\", a relative duration (\"24h ago\", \"7d\", \
-         \"2 weeks ago\"), \"today\"/\"yesterday\", an RFC-3339 timestamp \
+         unreliable. Pass `expr` as \"now\", a past relative duration (\"24h ago\", \
+         \"7d\", \"2 weeks ago\"), a future one for scheduling (\"in 10 minutes\", \
+         \"30m from now\"), \"today\"/\"yesterday\"/\"tomorrow\", an RFC-3339 timestamp \
          (\"2026-06-09T19:12:00Z\"), or a date (\"2026-06-09\"). The result gives \
          `unix_s`, `unix_ms`, `slack_ts`, and `rfc3339` — copy the one the target \
          tool's schema wants. For \"recent / last N\" lookups prefer newest-first \
@@ -206,8 +245,10 @@ impl Tool for ResolveTimeTool {
             "properties": {
                 "expr": {
                     "type": "string",
-                    "description": "Time expression: \"now\", \"24h ago\", \"7d\", \
-                                    \"2 weeks ago\", \"today\", \"yesterday\", \
+                    "description": "Time expression: \"now\", a past duration \
+                                    (\"24h ago\", \"7d\", \"2 weeks ago\"), a future \
+                                    duration (\"in 10 minutes\", \"30m from now\"), \
+                                    \"today\"/\"yesterday\"/\"tomorrow\", \
                                     \"2026-06-09T19:12:00Z\", \"2026-06-09\", or \
                                     \"YYYY-MM-DD HH:MM:SS\"."
                 },
@@ -342,23 +383,56 @@ mod tests {
     }
 
     #[test]
-    fn parses_relative_variants_to_same_duration() {
-        for s in ["24h ago", "last 24 hours", "-24h", "24 hours ago", "24h"] {
+    fn past_variants_resolve_to_a_negative_offset() {
+        // Past phrasing (and bare durations, which default to the past) yield a
+        // NEGATIVE offset so `now + dur` looks backward.
+        for s in [
+            "24h ago",
+            "last 24 hours",
+            "past 24 hours",
+            "-24h",
+            "24 hours ago",
+            "24h",
+        ] {
             let d = parse_relative_duration(s).unwrap_or_else(|| panic!("failed: {s}"));
-            assert_eq!(d.num_seconds(), 86_400, "{s}");
+            assert_eq!(d.num_seconds(), -86_400, "{s}");
         }
         assert_eq!(
             parse_relative_duration("7d").unwrap().num_seconds(),
-            604_800
+            -604_800
         );
         assert_eq!(
             parse_relative_duration("2 weeks").unwrap().num_seconds(),
-            1_209_600
+            -1_209_600
         );
-        assert_eq!(parse_relative_duration("15m").unwrap().num_seconds(), 900);
+        assert_eq!(parse_relative_duration("15m").unwrap().num_seconds(), -900);
         assert_eq!(
             parse_relative_duration("30 days").unwrap().num_seconds(),
-            2_592_000
+            -2_592_000
+        );
+    }
+
+    #[test]
+    fn future_variants_resolve_to_a_positive_offset() {
+        // Regression for the CodeRabbit catch: future phrasing must look
+        // FORWARD (positive offset), not backward — scheduler_agent relies on
+        // "in 10 minutes" / "30m from now".
+        assert_eq!(
+            parse_relative_duration("in 10 minutes")
+                .unwrap()
+                .num_seconds(),
+            600
+        );
+        assert_eq!(
+            parse_relative_duration("30m from now")
+                .unwrap()
+                .num_seconds(),
+            1_800
+        );
+        assert_eq!(parse_relative_duration("+2h").unwrap().num_seconds(), 7_200);
+        assert_eq!(
+            parse_relative_duration("next 7d").unwrap().num_seconds(),
+            604_800
         );
     }
 
@@ -389,6 +463,31 @@ mod tests {
             "got {}, expected ~[{expected_lo},{expected_hi}]",
             dt.timestamp()
         );
+    }
+
+    #[test]
+    fn future_relative_resolves_forward() {
+        // "in 10 minutes" must land ~600s in the FUTURE (the bug fix).
+        let before = Utc::now().timestamp();
+        let dt = resolve_expr("in 10 minutes", ResolveZone::Local).unwrap();
+        let after = Utc::now().timestamp();
+        assert!(
+            dt.timestamp() >= before + 600 - 2 && dt.timestamp() <= after + 600 + 2,
+            "got {}, expected ~now+600",
+            dt.timestamp()
+        );
+    }
+
+    #[test]
+    fn tomorrow_is_after_today_after_yesterday() {
+        let tz: Tz = "Asia/Kolkata".parse().unwrap();
+        let y = resolve_expr("yesterday", ResolveZone::Iana(tz)).unwrap();
+        let t = resolve_expr("today", ResolveZone::Iana(tz)).unwrap();
+        let m = resolve_expr("tomorrow", ResolveZone::Iana(tz)).unwrap();
+        assert!(y < t && t < m, "ordering broken: {y} {t} {m}");
+        // Consecutive civil days are exactly 24h apart.
+        assert_eq!((t - y).num_seconds(), 86_400);
+        assert_eq!((m - t).num_seconds(), 86_400);
     }
 
     #[test]
