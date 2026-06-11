@@ -141,6 +141,27 @@ impl Tool for GlobTool {
                 )));
             }
         };
+        // `validate_path` can authorize a *file* as well as a directory. Walking a
+        // file root yields the file itself, whose path relative to `base` is empty,
+        // so the pattern never matches and the agent gets a misleading "0 match(es)"
+        // instead of a clear error. Reject non-directory roots explicitly.
+        match tokio::fs::metadata(&base).await {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => {
+                log::debug!("[tools:glob] search path is not a directory: path='{search_path}'");
+                return Ok(ToolResult::error(format!(
+                    "glob search path '{search_path}' is not a directory"
+                )));
+            }
+            Err(e) => {
+                log::debug!(
+                    "[tools:glob] search path not accessible: path='{search_path}' error={e}"
+                );
+                return Ok(ToolResult::error(format!(
+                    "glob search path '{search_path}' is not accessible: {e}"
+                )));
+            }
+        };
         log::debug!(
             "[tools:glob] resolved search root: '{}' (action_dir='{}')",
             base.display(),
@@ -152,7 +173,13 @@ impl Tool for GlobTool {
         // path) or absolute (in a granted trusted root → file_read-able as-is).
         let action_root = tokio::fs::canonicalize(&self.security.action_dir)
             .await
-            .unwrap_or_else(|_| self.security.action_dir.clone());
+            .unwrap_or_else(|e| {
+                log::trace!(
+                    "[tools:glob] action_dir canonicalize fallback: path='{}' error={e}",
+                    self.security.action_dir.display()
+                );
+                self.security.action_dir.clone()
+            });
 
         let security = self.security.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -468,5 +495,29 @@ mod tests {
         );
 
         let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// A `path` that resolves to a *file* (not a directory) yields a clear
+    /// "not a directory" error rather than a misleading "0 match(es)".
+    #[tokio::test]
+    async fn glob_rejects_file_search_path() {
+        let dir = std::env::temp_dir().join("openhuman_test_glob_file_root");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(dir.join("file.txt"), "x").await.unwrap();
+
+        let tool = GlobTool::new(test_security(dir.clone()));
+        let result = tool
+            .execute(json!({"pattern": "**/*", "path": "file.txt"}))
+            .await
+            .unwrap();
+        assert!(result.is_error, "{}", result.output());
+        assert!(
+            result.output().contains("not a directory"),
+            "{}",
+            result.output()
+        );
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }
