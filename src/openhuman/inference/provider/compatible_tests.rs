@@ -1524,13 +1524,13 @@ async fn streaming_parallel_tool_calls_preserve_ids_against_empty_continuations(
     assert_eq!(resp.tool_calls.len(), 2, "both parallel tool calls survive");
     // Order-independent: each id must be preserved AND mapped to the right tool
     // (no cross-index contamination).
-    let by_id: std::collections::HashMap<&str, &str> = resp
+    let by_id: std::collections::HashMap<&str, (&str, &str)> = resp
         .tool_calls
         .iter()
-        .map(|t| (t.id.as_str(), t.name.as_str()))
+        .map(|t| (t.id.as_str(), (t.name.as_str(), t.arguments.as_str())))
         .collect();
-    assert_eq!(by_id.get("call_a"), Some(&"get_weather"));
-    assert_eq!(by_id.get("call_b"), Some(&"get_time"));
+    assert_eq!(by_id.get("call_a"), Some(&("get_weather", "{}")));
+    assert_eq!(by_id.get("call_b"), Some(&("get_time", "{}")));
 }
 
 /// Counterpart to the DashScope cases: DeepSeek OMITS the `id` key on
@@ -1582,6 +1582,11 @@ async fn streaming_omitted_continuation_id_preserves_tool_call_id() {
     assert_eq!(resp.tool_calls.len(), 1);
     assert_eq!(resp.tool_calls[0].id.as_str(), "call_ds");
     assert_eq!(resp.tool_calls[0].name.as_str(), "get_weather");
+    assert_eq!(
+        resp.tool_calls[0].arguments.as_str(),
+        "{}",
+        "arguments must accumulate across the id-omitted continuation delta"
+    );
 }
 
 /// Helper: roles in serialized order.
