@@ -1419,6 +1419,62 @@ async fn streaming_tool_call_captures_extra_content() {
     );
 }
 
+/// Regression: some providers (DashScope/Qwen, GMI) emit the tool-call `id`
+/// ONLY on the first delta for an index, then send `"id": ""` (empty string,
+/// not omitted) on every argument-continuation delta. The streaming accumulator
+/// must not let those empty continuation ids clobber the resolved id down to
+/// `""` — an empty `tool_call_id` is rejected by the upstream tool-message
+/// ordering check on the next turn (400), dead-ending the conversation.
+#[tokio::test]
+async fn streaming_empty_continuation_id_does_not_clobber_tool_call_id() {
+    let mock_server = MockServer::start().await;
+    // Delta 1 carries the real id + name; deltas 2-3 are arg continuations that
+    // repeat index 0 with an EMPTY id (the DashScope/GMI wire shape).
+    let body = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_real\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{}\"}}]}}]}\n\n\
+                data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"\",\"function\":{\"arguments\":\"\"}}]}}]}\n\n\
+                data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"\"}]}}]}\n\n\
+                data: [DONE]\n\n";
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+        .mount(&mock_server)
+        .await;
+
+    let provider =
+        OpenAiCompatibleProvider::new("dashscope", &mock_server.uri(), None, AuthStyle::None);
+    let request = NativeChatRequest {
+        model: "qwen3.7-plus".to_string(),
+        messages: vec![NativeMessage {
+            role: "user".to_string(),
+            content: Some("weather in paris?".into()),
+            tool_call_id: None,
+            tool_calls: None,
+            reasoning_content: None,
+        }],
+        temperature: Some(0.7),
+        stream: Some(true),
+        tools: None,
+        tool_choice: None,
+        thread_id: None,
+        stream_options: Some(super::compatible_types::OpenAiStreamOptions {
+            include_usage: true,
+        }),
+        options: None,
+        frequency_penalty: None,
+    };
+    let (delta_tx, _delta_rx) = tokio::sync::mpsc::channel(64);
+    let resp = provider
+        .stream_native_chat(None, &request, &delta_tx, 0)
+        .await
+        .unwrap();
+    assert_eq!(resp.tool_calls.len(), 1);
+    assert_eq!(
+        resp.tool_calls[0].id.as_str(),
+        "call_real",
+        "empty-string id on continuation deltas must not clobber the resolved tool_call id"
+    );
+}
+
 /// Helper: roles in serialized order.
 fn roles(messages: &[NativeMessage]) -> Vec<&str> {
     messages.iter().map(|m| m.role.as_str()).collect()
