@@ -1,4 +1,4 @@
-import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { type MascotFace, RiveMascot } from '../../features/human/Mascot';
 import { useT } from '../../lib/i18n/I18nContext';
@@ -34,6 +34,10 @@ type Toast = { type: 'success' | 'error' | 'info'; title: string; message?: stri
 
 interface Props {
   onToast?: (toast: Toast) => void;
+}
+
+interface MeetingBotsInlineProps extends Props {
+  hasSubmittedRef: RefObject<boolean>;
 }
 
 export default function MeetingBotsCard({ onToast }: Props) {
@@ -194,10 +198,7 @@ function ActiveMeetingView({ onToast }: Props) {
   );
 }
 
-function MeetingBotsInline({
-  onToast,
-  hasSubmittedRef,
-}: Props & { hasSubmittedRef: MutableRefObject<boolean> }) {
+function MeetingBotsInline({ onToast, hasSubmittedRef }: MeetingBotsInlineProps) {
   const { t } = useT();
   const dispatch = useAppDispatch();
   const [meetUrl, setMeetUrl] = useState('');
