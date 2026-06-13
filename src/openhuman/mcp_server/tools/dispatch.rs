@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use serde_json::{json, Map, Value};
 
 use crate::core::all;
@@ -294,40 +292,8 @@ async fn list_subagents() -> Result<Value, ToolCallError> {
     }))
 }
 
-/// In-flight count of MCP `agent.run_subagent` runs, used to bound recursion.
-///
-/// The MCP entry starts a *fresh* agent session each call, so it isn't covered
-/// by OpenHuman's native delegation cap (`agent/tools/delegate.rs` `max_depth`).
-/// Without this, `claude-code → run_subagent → (subagent is claude-code) →
-/// run_subagent → …` could spawn unbounded nested `claude` processes. Counts
-/// in-flight runs ≈ nesting depth; generous so concurrent *sibling*
-/// delegations don't trip it.
-static MCP_SUBAGENT_DEPTH: AtomicUsize = AtomicUsize::new(0);
-const MAX_MCP_SUBAGENT_DEPTH: usize = 6;
-
-/// RAII guard: restores the in-flight count on any return/panic.
-struct SubagentDepthGuard;
-impl Drop for SubagentDepthGuard {
-    fn drop(&mut self) {
-        MCP_SUBAGENT_DEPTH.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-/// Reserve a recursion slot for an MCP subagent run. Returns the RAII guard,
-/// or an error when the depth cap is already reached (so the caller refuses to
-/// spawn another nested subagent instead of running away).
-fn enter_subagent_depth() -> Result<SubagentDepthGuard, ToolCallError> {
-    let depth = MCP_SUBAGENT_DEPTH.fetch_add(1, Ordering::SeqCst);
-    let guard = SubagentDepthGuard;
-    if depth >= MAX_MCP_SUBAGENT_DEPTH {
-        return Err(ToolCallError::Internal(format!(
-            "agent.run_subagent recursion limit reached (in-flight depth {depth} ≥ {MAX_MCP_SUBAGENT_DEPTH}); refusing to spawn another nested subagent"
-        )));
-    }
-    Ok(guard)
-}
-
 async fn run_subagent_tool(params: &Map<String, Value>) -> Result<Value, ToolCallError> {
+    use super::super::subagent_depth;
     use super::params::required_non_empty_string;
 
     let agent_id = required_non_empty_string(params, "agent_id")?;
@@ -338,8 +304,20 @@ async fn run_subagent_tool(params: &Map<String, Value>) -> Result<Value, ToolCal
         ));
     }
 
-    // Bound nested recursion (CC → run_subagent → CC → …). Held for the turn.
-    let _depth_guard = enter_subagent_depth()?;
+    // Bound nested recursion per delegation chain (CC → run_subagent → CC → …).
+    // `current_depth()` is the depth of THIS chain (carried across the loopback
+    // MCP hop via the depth header); the subagent we're about to spawn sits one
+    // level deeper. Refuse before spawning if the child would exceed the cap —
+    // unrelated parallel callers each track their own chain, so they never trip
+    // each other.
+    let chain_depth = subagent_depth::current_depth();
+    let child_depth = chain_depth + 1;
+    if child_depth > subagent_depth::MAX_SUBAGENT_DEPTH {
+        return Err(ToolCallError::Internal(format!(
+            "agent.run_subagent delegation depth limit reached (chain depth {chain_depth}; child would be {child_depth} > {}); refusing to spawn another nested subagent",
+            subagent_depth::MAX_SUBAGENT_DEPTH
+        )));
+    }
 
     let config = load_config_and_init_registry().await?;
     let mut agent = Agent::from_config_for_agent(&config, &agent_id).map_err(|err| {
@@ -366,12 +344,14 @@ async fn run_subagent_tool(params: &Map<String, Value>) -> Result<Value, ToolCal
         reply_target: agent_id.clone(),
         message_id: uuid::Uuid::new_v4().to_string(),
     };
-    let response =
-        crate::openhuman::agent::turn_origin::with_origin(origin, agent.run_single(&prompt))
-            .await
-            .map_err(|err| {
-                ToolCallError::Internal(format!("subagent `{agent_id}` failed: {err}"))
-            })?;
+    // Run the subagent one level deeper in the chain, so its own Claude Code
+    // turns stamp `child_depth` onto any grandchildren they spawn.
+    let response = subagent_depth::scope(
+        child_depth,
+        crate::openhuman::agent::turn_origin::with_origin(origin, agent.run_single(&prompt)),
+    )
+    .await
+    .map_err(|err| ToolCallError::Internal(format!("subagent `{agent_id}` failed: {err}")))?;
 
     Ok(json!({
         "content": [{
@@ -415,25 +395,27 @@ pub fn tool_error(message: String) -> Value {
 
 #[cfg(test)]
 mod depth_tests {
-    use super::*;
+    use super::super::super::subagent_depth::{current_depth, scope, MAX_SUBAGENT_DEPTH};
 
-    #[test]
-    fn subagent_depth_guard_caps_recursion() {
-        // Hold MAX guards (count == cap) → the next entry is refused; once the
-        // guards drop, capacity is restored. RAII guard means the refused call
-        // nets zero (it increments then drops on the error return).
-        let mut held = Vec::new();
-        for _ in 0..MAX_MCP_SUBAGENT_DEPTH {
-            held.push(enter_subagent_depth().expect("entries within the cap succeed"));
-        }
-        assert!(
-            enter_subagent_depth().is_err(),
-            "entry beyond MAX_MCP_SUBAGENT_DEPTH must be refused"
-        );
-        drop(held);
-        assert!(
-            enter_subagent_depth().is_ok(),
-            "capacity is restored after the in-flight guards drop"
-        );
+    #[tokio::test]
+    async fn child_depth_is_bounded_per_chain() {
+        // The dispatch refuses when `current_depth() + 1 > MAX`. Simulate being
+        // at the cap: at depth MAX, the child (MAX+1) must be refused; below it,
+        // allowed. (Parallel unrelated chains each start at 0 — no interference.)
+        assert_eq!(current_depth(), 0, "top level starts at depth 0");
+        scope(MAX_SUBAGENT_DEPTH, async {
+            assert!(
+                current_depth() + 1 > MAX_SUBAGENT_DEPTH,
+                "at the cap, spawning a deeper child must be refused"
+            );
+        })
+        .await;
+        scope(MAX_SUBAGENT_DEPTH - 1, async {
+            assert!(
+                current_depth() + 1 <= MAX_SUBAGENT_DEPTH,
+                "one below the cap, a child is still allowed"
+            );
+        })
+        .await;
     }
 }

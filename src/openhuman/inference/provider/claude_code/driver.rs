@@ -161,13 +161,20 @@ pub struct TurnContext<'a> {
 fn write_mcp_http_config(
     dir: &std::path::Path,
     addr: std::net::SocketAddr,
+    token: &str,
 ) -> std::io::Result<PathBuf> {
     let path = dir.join("openhuman-mcp-config.json");
+    // The loopback MCP server is authenticated — carry the per-process bearer
+    // token so only this `claude` launch (not other local processes) can reach
+    // OpenHuman's tools/memory.
     let cfg = json!({
         "mcpServers": {
             "openhuman": {
                 "type": "http",
                 "url": format!("http://{addr}/"),
+                "headers": {
+                    "Authorization": format!("Bearer {token}"),
+                }
             }
         }
     });
@@ -208,11 +215,12 @@ pub async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatResponse> {
     // the memory bridge survives CC's `.openhuman` jail deny.
     let mut mcp_config_path: Option<PathBuf> = None;
     match crate::openhuman::mcp_server::ensure_local_http().await {
-        Ok(addr) => match write_mcp_http_config(scratch.path(), addr) {
+        Ok(endpoint) => match write_mcp_http_config(scratch.path(), endpoint.addr, &endpoint.token) {
             Ok(p) => {
                 log::debug!(
-                    "[claude-code][driver] wrote http mcp-config path={} url=http://{addr}/",
-                    p.display()
+                    "[claude-code][driver] wrote http mcp-config path={} url=http://{}/ (authenticated)",
+                    p.display(),
+                    endpoint.addr
                 );
                 mcp_config_path = Some(p);
             }
@@ -459,10 +467,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn write_mcp_http_config_emits_http_url() {
+    fn write_mcp_http_config_emits_http_url_with_bearer_header() {
         let dir = tempfile::tempdir().expect("tempdir");
         let addr: std::net::SocketAddr = "127.0.0.1:54321".parse().unwrap();
-        let path = write_mcp_http_config(dir.path(), addr).expect("write config");
+        let path = write_mcp_http_config(dir.path(), addr, "tok-abc123").expect("write config");
         let raw = std::fs::read_to_string(&path).expect("read config");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
         let server = &v["mcpServers"]["openhuman"];
@@ -471,6 +479,8 @@ mod tests {
             "MCP transport must be http (out-of-jail)"
         );
         assert_eq!(server["url"], "http://127.0.0.1:54321/");
+        // The loopback server is authenticated — the config must carry the bearer.
+        assert_eq!(server["headers"]["Authorization"], "Bearer tok-abc123");
         // It must NOT spawn a stdio child (the old jailed path).
         assert!(server.get("command").is_none());
     }

@@ -2148,11 +2148,13 @@ const CustomRoutingDialog = ({
                     mono
                     value={model}
                     onChange={e => setModel(e.target.value)}
-                    placeholder="sonnet-4-5"
+                    placeholder="sonnet"
                   />
                   <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                    Any model id your Claude account can run (e.g. <code>sonnet-4-5</code>,{' '}
-                    <code>opus-4-7</code>). Passed verbatim to <code>claude --model</code>.
+                    A model id the <code>claude</code> CLI accepts — an alias (<code>sonnet</code>,{' '}
+                    <code>opus</code>) or full name (<code>claude-sonnet-4-5</code>). Passed
+                    verbatim to <code>claude --model</code>; marketing strings like{' '}
+                    <code>sonnet-4-5</code> are rejected.
                   </p>
                 </div>
               ) : cloudModelsLoading ? (

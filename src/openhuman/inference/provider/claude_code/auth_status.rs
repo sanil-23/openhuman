@@ -20,12 +20,21 @@
 //! `None`, so we never tell a signed-in user they're signed out just
 //! because their binary predates the subcommand.
 
-use std::process::Command;
-use std::time::SystemTime;
+use std::io::Read as _;
+use std::process::{Command, Stdio};
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
+use wait_timeout::ChildExt as _;
 
 use super::version_check;
+
+/// Hard ceiling on the `claude auth status --json` subprocess. The CLI is an
+/// external binary that can wedge (stuck keychain prompt, hung network); a
+/// bounded wait keeps the auth-status RPC — and the settings modal that awaits
+/// it — from hanging forever. On timeout we kill the child and report
+/// `Unknown` (never "signed out").
+const AUTH_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Discriminator for who actually authenticates the spawned CLI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,26 +121,32 @@ pub fn parse_auth_status_json(raw: &str) -> AuthSource {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
 
-    // `authMethod: "claude.ai"` is the Pro/Max OAuth subscription. Any
-    // other logged-in method (console API key, etc.) authenticates via a
-    // key, so we surface it like an API-key source rather than inventing a
-    // subscription badge.
-    if auth_method == "claude.ai" {
-        let account_email = val
-            .get("email")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-        let subscription_type = val
-            .get("subscriptionType")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-        AuthSource::Subscription {
-            account_email,
-            subscription_type,
-            expires_at: None,
+    // `authMethod: "claude.ai"` is the Pro/Max OAuth subscription. Any other
+    // *named* logged-in method (console API key, etc.) authenticates via a key,
+    // so we surface it like an API-key source. A MISSING/empty `authMethod`
+    // (schema drift) must NOT be reported as a definite signed-in state —
+    // the settings UI renders `api_key_env` as "signed in", so fall through to
+    // `unknown` ("couldn't determine") instead.
+    match auth_method {
+        "claude.ai" => {
+            let account_email = val
+                .get("email")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let subscription_type = val
+                .get("subscriptionType")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            AuthSource::Subscription {
+                account_email,
+                subscription_type,
+                expires_at: None,
+            }
         }
-    } else {
-        AuthSource::ApiKeyEnv
+        "" => AuthSource::Unknown {
+            reason: Some("`claude auth status` reported loggedIn without authMethod".to_string()),
+        },
+        _ => AuthSource::ApiKeyEnv,
     }
 }
 
@@ -146,11 +161,14 @@ fn probe_via_cli() -> AuthSource {
     };
 
     let bin_str = bin.display().to_string();
-    let output = match Command::new(&bin)
+    let mut child = match Command::new(&bin)
         .args(["auth", "status", "--json"])
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
     {
-        Ok(o) => o,
+        Ok(c) => c,
         Err(e) => {
             log::warn!("[claude-code][auth] spawn failed bin={bin_str} err={e}");
             return AuthSource::Unknown {
@@ -159,21 +177,56 @@ fn probe_via_cli() -> AuthSource {
         }
     };
 
-    if !output.status.success() {
+    // Bounded wait — the CLI is external and can hang. On timeout, kill it and
+    // report `Unknown` rather than letting the RPC (and the settings modal)
+    // wait forever.
+    let status = match child.wait_timeout(AUTH_STATUS_TIMEOUT) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            log::warn!(
+                "[claude-code][auth] `claude auth status` timed out after {}s; killing bin={bin_str}",
+                AUTH_STATUS_TIMEOUT.as_secs()
+            );
+            let _ = child.kill();
+            let _ = child.wait();
+            return AuthSource::Unknown {
+                reason: Some(format!(
+                    "`claude auth status` timed out after {}s",
+                    AUTH_STATUS_TIMEOUT.as_secs()
+                )),
+            };
+        }
+        Err(e) => {
+            log::warn!("[claude-code][auth] wait failed bin={bin_str} err={e}");
+            let _ = child.kill();
+            let _ = child.wait();
+            return AuthSource::Unknown {
+                reason: Some(format!("wait failed: {e}")),
+            };
+        }
+    };
+
+    if !status.success() {
         // Most likely an older CLI without the `auth status` subcommand.
         // Never downgrade to signed-out on this path.
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut stderr = String::new();
+        if let Some(mut s) = child.stderr.take() {
+            let _ = s.read_to_string(&mut stderr);
+        }
         log::debug!(
             "[claude-code][auth] `claude auth status` exit={} stderr={}",
-            output.status,
+            status,
             stderr.trim()
         );
         return AuthSource::Unknown {
-            reason: Some(format!("`claude auth status` exited {}", output.status)),
+            reason: Some(format!("`claude auth status` exited {status}")),
         };
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut stdout = String::new();
+    if let Some(mut s) = child.stdout.take() {
+        let _ = s.read_to_string(&mut stdout);
+    }
     let source = parse_auth_status_json(stdout.trim());
     log::debug!(
         "[claude-code][auth] probe classified source={}",
@@ -259,6 +312,18 @@ mod tests {
     fn logged_in_via_api_key_method_maps_to_api_key_env() {
         let raw = r#"{ "loggedIn": true, "authMethod": "console", "apiProvider": "console" }"#;
         assert_eq!(parse_auth_status_json(raw), AuthSource::ApiKeyEnv);
+    }
+
+    #[test]
+    fn logged_in_without_auth_method_is_unknown_not_api_key() {
+        // Schema drift: `loggedIn: true` but no `authMethod`. Must NOT be
+        // reported as the definite `api_key_env` signed-in state — fall to
+        // `unknown` so the UI shows "couldn't determine" instead.
+        let raw = r#"{ "loggedIn": true }"#;
+        match parse_auth_status_json(raw) {
+            AuthSource::Unknown { reason } => assert!(reason.is_some()),
+            other => panic!("expected Unknown, got {other:?}"),
+        }
     }
 
     #[test]

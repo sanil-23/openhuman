@@ -72,6 +72,24 @@ pub fn save(workspace_dir: &Path, settings: &ClaudeCodeSettings) -> std::io::Res
     Ok(())
 }
 
+/// Load settings for the workspace implied by `config` (resolved via
+/// [`super::workspace_dir_from_config`]). Keeps workspace resolution + file IO
+/// out of the RPC handler so `schemas.rs` stays a thin delegator.
+pub fn load_for_config(config: &crate::openhuman::config::Config) -> ClaudeCodeSettings {
+    load(&super::workspace_dir_from_config(config))
+}
+
+/// Persist the full-access toggle for the workspace implied by `config` and
+/// return the saved settings.
+pub fn save_full_access_for_config(
+    config: &crate::openhuman::config::Config,
+    full_access: bool,
+) -> std::io::Result<ClaudeCodeSettings> {
+    let settings = ClaudeCodeSettings { full_access };
+    save(&super::workspace_dir_from_config(config), &settings)?;
+    Ok(settings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

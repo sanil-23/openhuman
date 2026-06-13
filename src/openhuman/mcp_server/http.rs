@@ -159,12 +159,20 @@ async fn handle_post(
         );
     }
 
+    // Carry the delegation-chain depth (set by the Claude Code driver on the
+    // spawned `claude`'s MCP config) into tool dispatch so `run_subagent` can
+    // bound nested recursion per-chain rather than process-wide.
+    let depth = super::subagent_depth::parse_header(header_value(
+        &headers,
+        super::subagent_depth::HEADER_SUBAGENT_DEPTH,
+    ));
+
     if body.get("id").is_none() {
-        let _ = protocol::handle_json_value(body).await;
+        let _ = super::subagent_depth::scope(depth, protocol::handle_json_value(body)).await;
         return StatusCode::NO_CONTENT.into_response();
     }
 
-    match protocol::handle_json_value(body).await {
+    match super::subagent_depth::scope(depth, protocol::handle_json_value(body)).await {
         responses if responses.is_empty() => StatusCode::NO_CONTENT.into_response(),
         responses if responses.len() == 1 => {
             Json(responses.into_iter().next().unwrap()).into_response()
