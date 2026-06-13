@@ -310,14 +310,16 @@ async fn run_subagent_tool(params: &Map<String, Value>) -> Result<Value, ToolCal
     // level deeper. Refuse before spawning if the child would exceed the cap —
     // unrelated parallel callers each track their own chain, so they never trip
     // each other.
+    // Guard BEFORE incrementing so a forged/clamped depth at the cap cannot
+    // overflow `chain_depth + 1` (panic in debug, wrap-to-0 in release).
     let chain_depth = subagent_depth::current_depth();
-    let child_depth = chain_depth + 1;
-    if child_depth > subagent_depth::MAX_SUBAGENT_DEPTH {
+    if chain_depth >= subagent_depth::MAX_SUBAGENT_DEPTH {
         return Err(ToolCallError::Internal(format!(
-            "agent.run_subagent delegation depth limit reached (chain depth {chain_depth}; child would be {child_depth} > {}); refusing to spawn another nested subagent",
+            "agent.run_subagent delegation depth limit reached (chain depth {chain_depth} ≥ {}); refusing to spawn another nested subagent",
             subagent_depth::MAX_SUBAGENT_DEPTH
         )));
     }
+    let child_depth = chain_depth + 1;
 
     let config = load_config_and_init_registry().await?;
     let mut agent = Agent::from_config_for_agent(&config, &agent_id).map_err(|err| {
@@ -401,20 +403,21 @@ mod depth_tests {
 
     #[tokio::test]
     async fn child_depth_is_bounded_per_chain() {
-        // The dispatch refuses when `current_depth() + 1 > MAX`. Simulate being
-        // at the cap: at depth MAX, the child (MAX+1) must be refused; below it,
-        // allowed. (Parallel unrelated chains each start at 0 — no interference.)
+        // The dispatch refuses when `current_depth() >= MAX` (guarding before the
+        // `+1` so a clamped depth at the cap can't overflow). At depth MAX the
+        // next subagent is refused; below it, allowed. (Parallel unrelated chains
+        // each start at 0 — no interference.)
         assert_eq!(current_depth(), 0, "top level starts at depth 0");
         scope(MAX_SUBAGENT_DEPTH, async {
             assert!(
-                current_depth() + 1 > MAX_SUBAGENT_DEPTH,
+                current_depth() >= MAX_SUBAGENT_DEPTH,
                 "at the cap, spawning a deeper child must be refused"
             );
         })
         .await;
         scope(MAX_SUBAGENT_DEPTH - 1, async {
             assert!(
-                current_depth() + 1 <= MAX_SUBAGENT_DEPTH,
+                current_depth() < MAX_SUBAGENT_DEPTH,
                 "one below the cap, a child is still allowed"
             );
         })

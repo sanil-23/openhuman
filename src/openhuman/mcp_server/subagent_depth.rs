@@ -51,10 +51,14 @@ pub async fn scope<F: Future>(depth: usize, fut: F) -> F::Output {
     CHAIN_DEPTH.scope(depth, fut).await
 }
 
-/// Parse the incoming depth header value, clamping nonsense to 0.
+/// Parse the incoming depth header value. The header is external input, so
+/// nonsense parses to 0 and any value is clamped to [`MAX_SUBAGENT_DEPTH`] —
+/// a forged `usize::MAX` can neither bypass the cap nor overflow a later
+/// `depth + 1`.
 pub fn parse_header(raw: Option<&str>) -> usize {
     raw.and_then(|s| s.trim().parse::<usize>().ok())
         .unwrap_or(0)
+        .min(MAX_SUBAGENT_DEPTH)
 }
 
 #[cfg(test)]
@@ -83,11 +87,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_header_handles_missing_and_garbage() {
+    fn parse_header_handles_missing_garbage_and_clamps() {
         assert_eq!(parse_header(None), 0);
         assert_eq!(parse_header(Some("")), 0);
         assert_eq!(parse_header(Some("nope")), 0);
         assert_eq!(parse_header(Some("3")), 3);
         assert_eq!(parse_header(Some("  4 ")), 4);
+        // External input is clamped to the cap — a forged huge value can neither
+        // bypass the limit nor overflow a later `depth + 1`.
+        assert_eq!(parse_header(Some("999999")), MAX_SUBAGENT_DEPTH);
+        assert_eq!(
+            parse_header(Some(&usize::MAX.to_string())),
+            MAX_SUBAGENT_DEPTH
+        );
     }
 }

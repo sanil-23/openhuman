@@ -154,4 +154,58 @@ describe('ClaudeCodeConnect', () => {
       expect(within(dialog).getByRole('alert')).toHaveTextContent(/Could not open the login/i);
     });
   });
+
+  it('api_key_env: inline + modal report the environment key', async () => {
+    authProbe.mockResolvedValue({ source: 'api_key_env', last_checked: 0 });
+    const user = userEvent.setup();
+    render(<ClaudeCodeConnect connected onConnect={noop} onDisconnect={noop} />);
+    await waitFor(() => expect(screen.getByText(/Using ANTHROPIC_API_KEY/i)).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /^Claude Code$/i }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() =>
+      expect(
+        within(dialog).getByText(/Using ANTHROPIC_API_KEY from the environment/i)
+      ).toBeInTheDocument()
+    );
+  });
+
+  it('modal: subscription auth shows the signed-in account detail', async () => {
+    authProbe.mockResolvedValue({
+      source: 'subscription',
+      account_email: 'dev@example.com',
+      subscription_type: 'pro',
+      expires_at: null,
+      last_checked: 0,
+    });
+    const user = userEvent.setup();
+    render(<ClaudeCodeConnect connected onConnect={noop} onDisconnect={noop} />);
+    await user.click(screen.getByRole('button', { name: /^Claude Code$/i }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() =>
+      expect(within(dialog).getByText(/Signed in as dev@example\.com \(Pro\)/i)).toBeInTheDocument()
+    );
+  });
+
+  it('modal: Disconnect button invokes onDisconnect', async () => {
+    const onDisconnect = vi.fn();
+    const user = userEvent.setup();
+    render(<ClaudeCodeConnect connected onConnect={noop} onDisconnect={onDisconnect} />);
+    await user.click(screen.getByRole('button', { name: /^Claude Code$/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /^Disconnect$/i }));
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('modal: full-access ON shows the elevated-capability copy', async () => {
+    getSettings.mockResolvedValue({ full_access: true });
+    const user = userEvent.setup();
+    render(<ClaudeCodeConnect connected onConnect={noop} onDisconnect={noop} />);
+    await user.click(screen.getByRole('button', { name: /^Claude Code$/i }));
+    const dialog = await screen.findByRole('dialog');
+    const sw = within(dialog).getByRole('switch', { name: /Full access/i });
+    await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'true'));
+    expect(
+      within(dialog).getByText(/can run commands, use the network, and spawn subagents/i)
+    ).toBeInTheDocument();
+  });
 });
