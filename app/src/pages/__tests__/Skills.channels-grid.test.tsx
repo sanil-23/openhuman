@@ -69,8 +69,8 @@ describe('Skills page — Channels grid', () => {
   it('renders configured channels as tiles in a dedicated card and opens the setup modal on click', async () => {
     renderWithProviders(<Skills />, { initialEntries: ['/connections'] });
 
-    // Switch to the Messaging tab to make the Channels card visible.
-    fireEvent.click(screen.getByRole('tab', { name: 'Messaging' }));
+    // Switch to the Channels tab to make the Channels card visible.
+    fireEvent.click(screen.getByTestId('two-pane-nav-channels'));
 
     const channelsHeading = screen.getByRole('heading', { name: 'Messaging' });
     expect(channelsHeading).toBeInTheDocument();
@@ -135,8 +135,8 @@ describe('Skills page — Channels grid', () => {
       };
 
       renderWithProviders(<Skills />, { initialEntries: ['/connections'], preloadedState });
-      // Switch to the Messaging tab so the Channels card is visible.
-      fireEvent.click(screen.getByRole('tab', { name: 'Messaging' }));
+      // Switch to the Channels tab so the Channels card is visible.
+      fireEvent.click(screen.getByTestId('two-pane-nav-channels'));
       const channelsCard = screen
         .getByRole('heading', { name: 'Messaging' })
         .closest('.rounded-2xl');
@@ -149,12 +149,10 @@ describe('Skills page — Channels grid', () => {
 
   it('does not surface a Channels chip in the category filter inside the Integrations card', () => {
     renderWithProviders(<Skills />, { initialEntries: ['/connections'] });
-    fireEvent.click(screen.getByRole('tab', { name: 'Apps' }));
+    fireEvent.click(screen.getByTestId('two-pane-nav-composio'));
 
-    // The Apps tab owns the Integrations category filter.
-    const integrationsHeading = screen.getByRole('heading', { name: 'Composio Integrations' });
-    const integrationsCard = integrationsHeading.closest('.rounded-2xl');
-    expect(integrationsCard).not.toBeNull();
+    // The Composio tab owns the Integrations category filter.
+    const integrationsCard = screen.getByTestId('composio-integrations-card');
     const filterTabs = within(integrationsCard as HTMLElement)
       .queryAllByRole('tab')
       .map(el => el.textContent?.trim());

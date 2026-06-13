@@ -139,6 +139,7 @@ pub async fn list_chunks_rpc(
         since_ms: req.since_ms,
         until_ms: req.until_ms,
         limit: req.limit,
+        source_scope: None,
     };
     let rows = tokio::task::spawn_blocking({
         let config = config.clone();
@@ -903,6 +904,73 @@ mod tests {
         .value
         .chunks;
         assert_eq!(listed.len(), first.chunks_written);
+    }
+
+    /// Regression #3568 / CORE-2K: chat payloads with RFC-3339 timestamps must
+    /// be accepted — not rejected with "expected unix timestamp in milliseconds".
+    #[tokio::test]
+    async fn ingest_chat_accepts_rfc3339_timestamps() {
+        let (_tmp, cfg) = test_config();
+        let outcome = ingest_rpc(
+            &cfg,
+            IngestRequest {
+                source_kind: SourceKind::Chat,
+                source_id: "slack:#rfc3339-test".into(),
+                owner: "alice".into(),
+                tags: vec![],
+                payload: json!({
+                    "platform": "slack",
+                    "channel_label": "#eng",
+                    "messages": [
+                        {
+                            "author": "alice",
+                            "timestamp": "2026-05-17T19:30:00Z",
+                            "text": "planning the launch"
+                        },
+                        {
+                            "author": "bob",
+                            "timestamp": 1779046260000_i64,
+                            "text": "confirmed"
+                        }
+                    ]
+                }),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!outcome.value.chunk_ids.is_empty());
+    }
+
+    /// Regression #3568 / CORE-2K: email payloads with RFC-3339 timestamps must
+    /// be accepted.
+    #[tokio::test]
+    async fn ingest_email_accepts_rfc3339_timestamps() {
+        let (_tmp, cfg) = test_config();
+        let outcome = ingest_rpc(
+            &cfg,
+            IngestRequest {
+                source_kind: SourceKind::Email,
+                source_id: "gmail:rfc3339-test".into(),
+                owner: "alice@example.com".into(),
+                tags: vec![],
+                payload: json!({
+                    "provider": "gmail",
+                    "thread_subject": "Launch",
+                    "messages": [
+                        {
+                            "from": "bob@example.com",
+                            "to": ["alice@example.com"],
+                            "subject": "Launch",
+                            "sent_at": "2026-05-17T19:30:00Z",
+                            "body": "Let's ship this."
+                        }
+                    ]
+                }),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!outcome.value.chunk_ids.is_empty());
     }
 
     #[tokio::test]

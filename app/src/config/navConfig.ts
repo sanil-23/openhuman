@@ -21,40 +21,27 @@ export interface NavTab {
 
 /**
  * Ordered list of bottom-bar tabs.  Six entries:
- *   home → human → chat (Assistant) → connections → activity → settings
+ *   home → chat → human → brain → connections → settings
  *
- * The Human tab is a first-class destination again (it was briefly merged into
- * Assistant in IA Phase 6, then restored): `/human` renders the Human page on
- * desktop. The tab id stays `chat` and walkthroughAttr stays `tab-chat` for
- * back-compat with analytics and the walkthrough tour.
+ * Chat is a regular pill tab (second after home). The Human tab is a
+ * first-class destination again (it was briefly merged into Assistant in
+ * IA Phase 6, then restored): `/human` renders the Human page on desktop.
+ * Ids/paths/walkthroughAttrs travel with each tab, so analytics and the
+ * walkthrough tour stay attached to the right feature regardless of position.
  */
 export const NAV_TABS: NavTab[] = [
   { id: 'home', labelKey: 'nav.home', path: '/home', walkthroughAttr: 'tab-home' },
+  { id: 'chat', labelKey: 'nav.chat', path: '/chat', walkthroughAttr: 'tab-chat' },
   { id: 'human', labelKey: 'nav.human', path: '/human', walkthroughAttr: 'tab-human' },
-  { id: 'chat', labelKey: 'nav.assistant', path: '/chat', walkthroughAttr: 'tab-chat' },
+  { id: 'brain', labelKey: 'nav.brain', path: '/brain', walkthroughAttr: 'tab-brain' },
   {
     id: 'connections',
     labelKey: 'nav.connections',
     path: '/connections',
     walkthroughAttr: 'tab-connections',
   },
-  { id: 'activity', labelKey: 'nav.activity', path: '/activity', walkthroughAttr: 'tab-activity' },
   { id: 'settings', labelKey: 'nav.settings', path: '/settings', walkthroughAttr: 'tab-settings' },
 ];
-
-/**
- * The "Brain" — the app's centerpiece memory-graph surface. Rendered
- * specially by BottomTabBar.tsx as a raised circular button in the dead
- * center of the bar (a notch the button rises out of), NOT as part of the
- * regular `NAV_TABS` row. Kept separate so its special, elevated nature is
- * explicit and the 6-tab invariants for the regular row stay intact.
- */
-export const BRAIN_TAB: NavTab = {
-  id: 'brain',
-  labelKey: 'nav.brain',
-  path: '/brain',
-  walkthroughAttr: 'tab-brain',
-};
 
 // ── Avatar / account menu ─────────────────────────────────────────────────────
 
