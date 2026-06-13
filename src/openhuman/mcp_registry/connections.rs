@@ -18,7 +18,7 @@ use std::sync::{Arc, OnceLock};
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use crate::openhuman::config::{Config, McpAuthConfig};
+use crate::openhuman::config::{Config, HttpHeader, McpAuthConfig};
 use crate::openhuman::mcp_client::{McpHttpClient, McpRemoteTool, McpStdioClient};
 
 use super::store;
@@ -27,45 +27,33 @@ use super::types::{ConnStatus, InstalledServer, McpTool, ServerStatus, Transport
 /// Build a static HTTP auth config from an installed HTTP-remote server's
 /// stored env values. Each non-empty entry is treated as a request header
 /// (key = header name, value = the user-supplied secret) per the registry's
-/// declared `remotes[].headers`. A single header is applied today: an
-/// `Authorization` entry wins, otherwise the sole/first non-empty entry is
-/// used (extras are logged). Returns [`McpAuthConfig::None`] when nothing
-/// usable is stored — e.g. OAuth-only servers, which then surface their 401
-/// challenge at `initialize`.
+/// declared `remotes[].headers`. ALL such headers are applied — a server that
+/// authenticates with more than one header (e.g. a client key + client secret)
+/// gets every header on the dial, not just the first. `__`-prefixed keys are
+/// internal bookkeeping (e.g. the OAuth refresh bundle) and are never sent.
+/// Returns [`McpAuthConfig::None`] when nothing usable is stored — e.g.
+/// OAuth-only servers, which then surface their 401 challenge at `initialize`.
 fn build_http_auth(env: &[(String, String)]) -> McpAuthConfig {
-    // Prefer an explicit Authorization header (case-insensitive name).
-    if let Some((name, value)) = env
+    let headers: Vec<HttpHeader> = env
         .iter()
-        .find(|(k, v)| k.eq_ignore_ascii_case("authorization") && !v.trim().is_empty())
-    {
-        return McpAuthConfig::Header {
+        .filter(|(k, v)| !k.starts_with("__") && !v.trim().is_empty())
+        .map(|(name, value)| HttpHeader {
             name: name.clone(),
             value: value.clone(),
-        };
-    }
-    // Otherwise apply the sole non-empty header (warn if several are set,
-    // since a single static header is supported for now). `__`-prefixed keys
-    // are internal bookkeeping (e.g. the OAuth refresh bundle) and must never
-    // be sent as a request header.
-    let mut non_empty = env
-        .iter()
-        .filter(|(k, v)| !k.starts_with("__") && !v.trim().is_empty());
-    match non_empty.next() {
-        None => McpAuthConfig::None,
-        Some((name, value)) => {
-            let extra = non_empty.count();
-            if extra > 0 {
-                tracing::warn!(
-                    "[mcp-registry] http_remote has {} header env values; applying only `{}` (single-header auth)",
-                    extra + 1,
-                    name
-                );
-            }
+        })
+        .collect();
+    match headers.len() {
+        0 => McpAuthConfig::None,
+        // A single header keeps the simple `Header` variant (back-compat).
+        1 => {
+            let h = headers.into_iter().next().expect("len checked == 1");
             McpAuthConfig::Header {
-                name: name.clone(),
-                value: value.clone(),
+                name: h.name,
+                value: h.value,
             }
         }
+        // Multiple headers are ALL sent (multi-header remote auth).
+        _ => McpAuthConfig::Headers { headers },
     }
 }
 
@@ -92,6 +80,41 @@ async fn resolve_final_url(url: &str) -> Option<String> {
             tracing::debug!("[mcp-registry] redirect resolution failed for {url}: {e}");
             None
         }
+    }
+}
+
+/// Decide which URL to dial WITH the user's stored credentials, given the
+/// original install URL and the redirect-resolved final URL.
+///
+/// `resolve_final_url` follows redirects unauthenticated, so a vanity host can
+/// legitimately resolve cross-origin to its real API (e.g. `sh.inference.ac`
+/// -> `api.inference.sh`). But blindly replaying stored auth headers to *any*
+/// redirect target also lets a redirecting / compromised host retarget the
+/// token to a different origin. As a guard we only honor a **cross-origin**
+/// redirect for the authenticated dial when the final origin is **HTTPS** (TLS
+/// authenticates the host and prevents a cleartext/downgrade leak); otherwise
+/// we fall back to the original URL, where the HTTP client's own cross-origin
+/// `Authorization` stripping protects the token. Same-origin redirects are
+/// always honored. (Pinning the resolved origin at install time would harden
+/// this further against a same-scheme HTTPS retarget — tracked as follow-up.)
+fn credential_safe_dial_url(original: &str, resolved: String) -> String {
+    let (Ok(o), Ok(r)) = (
+        reqwest::Url::parse(original),
+        reqwest::Url::parse(&resolved),
+    ) else {
+        return original.to_string();
+    };
+    let same_origin = o.scheme() == r.scheme()
+        && o.host_str() == r.host_str()
+        && o.port_or_known_default() == r.port_or_known_default();
+    if same_origin || r.scheme() == "https" {
+        resolved
+    } else {
+        tracing::warn!(
+            "[mcp-registry] refusing to replay credentials to a non-HTTPS cross-origin redirect target \
+             ({original} -> {resolved}); dialing the original url instead"
+        );
+        original.to_string()
     }
 }
 
@@ -305,7 +328,8 @@ async fn connect_inner(config: &Config, server: &InstalledServer) -> anyhow::Res
             // cross-origin redirect, so the token never reaches the real
             // endpoint. Resolving here means the authenticated request goes
             // straight to the final URL with no redirect to strip it.
-            let dial_url = resolve_final_url(url).await.unwrap_or_else(|| url.clone());
+            let resolved = resolve_final_url(url).await.unwrap_or_else(|| url.clone());
+            let dial_url = credential_safe_dial_url(url, resolved);
             if dial_url != *url {
                 tracing::info!(
                     "[mcp-registry] resolved redirecting url {url} -> {dial_url} for authenticated dial"
@@ -569,7 +593,7 @@ fn into_registry_tool(remote: McpRemoteTool) -> McpTool {
 mod tests {
     // Live-connection tests require a real MCP subprocess and live in
     // tests/json_rpc_e2e.rs. Keep this slot for sync helper tests.
-    use super::build_http_auth;
+    use super::{build_http_auth, credential_safe_dial_url};
     use crate::openhuman::config::McpAuthConfig;
 
     fn kv(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -589,19 +613,69 @@ mod tests {
     }
 
     #[test]
-    fn build_http_auth_prefers_authorization_header() {
-        // Authorization wins even when other headers are present, and the
-        // user-supplied value is sent verbatim (e.g. already `Bearer ...`).
+    fn build_http_auth_applies_all_headers_when_multiple() {
+        // A server requiring more than one header (e.g. a client key + client
+        // secret) must get EVERY header on the dial — not just the first.
+        // Values are sent verbatim (e.g. an already-`Bearer ...` Authorization).
         let auth = build_http_auth(&kv(&[
-            ("X-Other", "abc"),
+            ("X-Client-Key", "abc"),
             ("authorization", "Bearer adv_sk_123"),
         ]));
         match auth {
+            McpAuthConfig::Headers { headers } => {
+                assert_eq!(
+                    headers.len(),
+                    2,
+                    "both headers must be applied: {headers:?}"
+                );
+                let key = headers
+                    .iter()
+                    .find(|h| h.name == "X-Client-Key")
+                    .expect("X-Client-Key present");
+                assert_eq!(key.value, "abc");
+                let auth = headers
+                    .iter()
+                    .find(|h| h.name.eq_ignore_ascii_case("authorization"))
+                    .expect("authorization present");
+                assert_eq!(auth.value, "Bearer adv_sk_123");
+            }
+            other => panic!("expected multi-header Headers auth, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn credential_safe_dial_url_guards_cross_origin_credential_replay() {
+        // Same-origin redirect → honored (e.g. path rewrite).
+        assert_eq!(
+            credential_safe_dial_url("https://a.example/mcp", "https://a.example/v2/mcp".into()),
+            "https://a.example/v2/mcp"
+        );
+        // Cross-origin but HTTPS (vanity host → real API) → honored: this is the
+        // legitimate inference.sh-style flow.
+        assert_eq!(
+            credential_safe_dial_url(
+                "https://sh.inference.ac/mcp",
+                "https://api.inference.sh/mcp".into()
+            ),
+            "https://api.inference.sh/mcp"
+        );
+        // Cross-origin DOWNGRADE to http → refused: falls back to the original
+        // url so creds are not replayed cleartext to a redirect-chosen origin.
+        assert_eq!(
+            credential_safe_dial_url("https://good.example/mcp", "http://evil.example/mcp".into()),
+            "https://good.example/mcp"
+        );
+    }
+
+    #[test]
+    fn build_http_auth_single_header_uses_header_variant() {
+        // Exactly one usable header keeps the simple `Header` variant.
+        match build_http_auth(&kv(&[("authorization", "Bearer t")])) {
             McpAuthConfig::Header { name, value } => {
                 assert!(name.eq_ignore_ascii_case("authorization"));
-                assert_eq!(value, "Bearer adv_sk_123");
+                assert_eq!(value, "Bearer t");
             }
-            other => panic!("expected Header auth, got {other:?}"),
+            other => panic!("expected single Header auth, got {other:?}"),
         }
     }
 

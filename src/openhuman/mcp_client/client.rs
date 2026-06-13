@@ -575,6 +575,21 @@ impl McpHttpClient {
                 (Ok(name), Ok(value)) => request.header(name, value),
                 _ => request,
             },
+            McpAuthConfig::Headers { headers } => {
+                // Apply every header — for remotes that authenticate with more
+                // than one (e.g. a client key + client secret). A header whose
+                // name/value can't be encoded is skipped, not fatal.
+                let mut req = request;
+                for h in headers {
+                    if let (Ok(name), Ok(value)) = (
+                        HeaderName::try_from(h.name.as_str()),
+                        HeaderValue::from_str(&h.value),
+                    ) {
+                        req = req.header(name, value);
+                    }
+                }
+                req
+            }
             McpAuthConfig::QueryParam { name, value } => {
                 request.query(&[(name.as_str(), value.as_str())])
             }
