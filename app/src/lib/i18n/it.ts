@@ -30,7 +30,11 @@ const messages: TranslationMap = {
 
   // Brain — full-page memory knowledge-graph surface
   'brain.subtitle': 'Il tuo grafo della conoscenza, le fonti di memoria e i controlli.',
-  'brain.loading': 'Raccolta dei tuoi ricordi…',
+  'brain.tabs.memory': 'Memoria',
+  'brain.tabs.subconscious': 'Subconscio',
+  'brain.tabs.graph': 'Grafico',
+  'brain.tabs.sources': 'Fonti',
+  'brain.tabs.sync': 'Sincronizzazione',
   'brain.empty':
     'Il tuo cervello è ancora vuoto: collega una fonte per iniziare a costruire la memoria.',
   'brain.error': 'Impossibile caricare il tuo cervello. Riprova.',
@@ -77,6 +81,9 @@ const messages: TranslationMap = {
   'common.continue': 'Continua',
   'common.comingSoon': 'Prossimamente',
   'common.breadcrumb': 'breadcrumb',
+  'common.beta': 'Beta',
+  'common.betaDisclaimer':
+    'Questa funzione è in beta. Potrebbe cambiare o avere qualche imperfezione — il tuo feedback ci aiuta a migliorarla.',
   'settings.general': 'Generale',
   // Settings layman groups (Phase 4 IA revamp)
   'settings.groups.account': 'Account',
@@ -85,11 +92,12 @@ const messages: TranslationMap = {
   'settings.groups.notifications': 'Notifiche',
   'settings.groups.about': 'Informazioni',
   'settings.assistant.personality': 'Personalità',
-  'settings.assistant.personalityDesc': 'Nome, descrizione e persona SOUL.md',
+  'settings.personalityFace.title': 'Personalità e volto',
+  'settings.personalityFace.menuDesc':
+    'Regola il carattere del tuo assistente e scegli il suo volto',
   'settings.assistant.voice': 'Voce',
   'settings.assistant.voiceDesc': 'Impostazioni di sintesi vocale e riconoscimento vocale',
   'settings.assistant.faceMascot': 'Faccia / Mascotte',
-  'settings.assistant.faceMascotDesc': "Scegli il colore della mascotte usato nell'app",
   'settings.assistant.backgroundActivity': 'Subconscio',
   'settings.assistant.backgroundActivityDesc':
     'Controlla quanto attivamente il tuo assistente lavora in background',
@@ -167,6 +175,11 @@ const messages: TranslationMap = {
   'settings.exitLocalSession': 'Esci dalla sessione locale',
   'settings.exitLocalSessionDesc': 'Ritorna alla schermata di accesso',
   'settings.language': 'Lingua',
+  'settings.navGroups.general': 'Generale',
+  'settings.navGroups.assistant': 'Assistente',
+  'settings.navGroups.data': 'Dati',
+  'settings.navGroups.connections': 'Connessioni',
+  'settings.navGroups.system': 'Sistema',
   'settings.betaBuild': 'Build beta - v{version}',
   'settings.languageDesc': "Lingua di visualizzazione dell'interfaccia dell'app",
   'settings.alerts': 'Avvisi',
@@ -326,6 +339,8 @@ const messages: TranslationMap = {
   'chat.newThread': 'Nuovo thread',
   'chat.typeMessage': 'Come posso aiutarti oggi?',
   'chat.send': 'Invia messaggio',
+  'chat.parallelBranchHint': 'Digita un ramo parallelo — ⌘/Ctrl+Invio per inviare',
+  'chat.parallelBranchLabel': 'Ramo parallelo',
   'chat.thinking': 'Sto pensando...',
   'chat.noMessages': 'Nessun messaggio',
   'chat.startConversation': 'Inizia una conversazione',
@@ -385,11 +400,16 @@ const messages: TranslationMap = {
   'skills.tabs.explorer': 'Skill',
   'skills.tabs.meetings': 'Riunioni Google Meet',
   'skills.tabs.mcp': 'MCP Server',
-  'connections.tabs.apps': 'App',
-  'connections.tabs.messaging': 'Messaggistica',
-  'connections.tabs.tools': 'Strumenti',
-  'connections.tabs.explorer': 'Esplora',
-  'connections.tabs.talents': 'Talenti',
+  'connections.tabs.composio': 'Composio',
+  'connections.tabs.channels': 'Canali',
+  'connections.tabs.mcp': 'Server MCP',
+  'connections.tabs.skills': 'Competenze',
+  'connections.tabs.meetings': 'Riunioni',
+  'connections.groups.integrations': 'Integrazioni',
+  'connections.tabs.oauth': 'OAuth',
+  'connections.tabs.composioKey': 'Composio',
+  'connections.groups.apiKeys': 'Chiavi API',
+  'connections.groups.intelligence': 'Intelligenza',
   'memory.title': 'Memoria',
   'memory.search': 'Cerca memorie...',
   'memory.noResults': 'Nessuna memoria trovata',
@@ -908,14 +928,9 @@ const messages: TranslationMap = {
   'settings.about.connectionHelperCloud':
     'Connesso a un core remoto. Cambia questo in BootCheck o nel selettore della modalità cloud.',
   'settings.heartbeat.title': 'Heartbeat e loop',
-  'settings.heartbeat.desc':
-    'Controlla le cadenze di pianificazione di background e ispeziona la mappa del ciclo.',
-  'settings.ledgerUsage.title': 'Registro di utilizzo',
-  'settings.ledgerUsage.desc':
-    'Spesa recente di credito, matematica del budget e lettura del budget di background API.',
+  'settings.usage.title': 'Utilizzo e limiti',
+  'settings.usage.menuDesc': 'Costi, utilizzo dei token, budget e attività in background',
   'settings.costDashboard.title': 'Cruscotto dei costi',
-  'settings.costDashboard.desc':
-    "Spesa e bruciatura di token nell'arco di 7 giorni attraverso lo sciame, con ritmo di budget e suddivisione per modello.",
   'settings.costDashboard.sevenDayCost': 'Costo giornaliero di 7 giorni',
   'settings.costDashboard.sevenDayTokens': 'Utilizzo del token di 7 giorni',
   'settings.costDashboard.totalSpend': 'Totale di 7 giorni',
@@ -1960,6 +1975,9 @@ const messages: TranslationMap = {
   'chat.editThreadTitle': 'Modifica titolo del thread',
   'chat.hideSidebar': 'Nascondi barra laterale',
   'chat.showSidebar': 'Mostra barra laterale',
+  'chat.searchThreads': 'Cerca conversazioni',
+  'layout.resizeSidebar': 'Ridimensiona barra laterale',
+  'layout.showSidebar': 'Mostra barra laterale',
   'chat.newThreadShortcut': 'Nuovo thread (/new)',
   'chat.new': 'Nuovo',
   'chat.failedToLoadMessages': 'Impossibile caricare i messaggi',
@@ -2051,6 +2069,15 @@ const messages: TranslationMap = {
   'token.planClickForDetails': 'piano - clicca per dettagli',
   'token.sessionTokens': 'Ingresso: {in} | Uscita: {out} | Turni: {turns}',
   'token.limit': 'Limite raggiunto',
+  'token.inLabel': 'ENT',
+  'token.outLabel': 'USC',
+  'token.inputTokens': 'Token in ingresso questa sessione',
+  'token.outputTokens': 'Token in uscita questa sessione',
+  'token.turnsCount': 'Turni di inferenza questa sessione',
+  'token.turn': 'turno',
+  'token.turns': 'turni',
+  'token.ctxLabel': 'CTX',
+  'token.contextWindow': 'Utilizzo finestra di contesto (ultimo turno)',
   'catalog.noCapabilityBinding': 'Nessun binding di capacità',
   'catalog.downloadFailed': 'Download fallito',
   'catalog.active': 'Attivo',
@@ -3116,9 +3143,6 @@ const messages: TranslationMap = {
   'pages.settings.aiSection.description':
     'Provider di modelli linguistici, Ollama locale e voce (STT / TTS).',
   'pages.settings.aiSection.title': 'AI',
-  'pages.settings.composioSection.title': 'Composio',
-  'pages.settings.composioSection.description':
-    'Routing, trigger e cronologia per le integrazioni fornite da Composio.',
   'settings.developerMenu.composio.title': 'Composio',
   'settings.developerMenu.composio.desc':
     'Modalità di routing, trigger di integrazione e archivio cronologico dei trigger.',
@@ -4029,6 +4053,9 @@ const messages: TranslationMap = {
   'settings.devWorkflow.schedule.every2hours': 'Ogni 2 ore',
   'settings.devWorkflow.schedule.every6hours': 'Ogni 6 ore',
   'settings.devWorkflow.schedule.onceDaily': 'Una volta al giorno (ore 9)',
+  'settings.developerMenu.tasks.title': 'Attività',
+  'settings.developerMenu.tasks.desc':
+    'Esplora e gestisci le bacheche delle attività — i tuoi to-do e le bacheche create dagli agenti nelle conversazioni.',
   'settings.developerMenu.cronJobs.title': 'Processi cron',
   'settings.developerMenu.cronJobs.desc':
     'Visualizza e configura processi pianificati per le skill di runtime',
@@ -4413,6 +4440,25 @@ const messages: TranslationMap = {
   'settings.modelHealth.modal.apply': 'Applica sostituzione',
   'settings.modelHealth.tag.cheaper': 'CHEAPER',
   'settings.modelHealth.tag.better': 'BETTER',
+  'settings.desktopAgent.title': 'Agente desktop',
+  'settings.desktopAgent.description':
+    'Verifica e concedi le autorizzazioni necessarie all’agente desktop.',
+  'settings.desktopAgent.microphone': 'Microfono',
+  'settings.desktopAgent.grant': 'Concedi',
+  'settings.desktopAgent.notRequiredOnOs': 'Non necessario su questo sistema operativo',
+  'settings.desktopAgent.allGranted':
+    'Tutto pronto: l’agente desktop dispone di tutte le autorizzazioni necessarie.',
+  'settings.desktopAgent.recheck': 'Verifica di nuovo',
+  'settings.desktopAgent.restartAndRecheck': 'Riavvia il core e verifica di nuovo',
+  'settings.desktopAgent.seamless.title': 'Azioni dell’agente',
+  'settings.desktopAgent.seamless.label': 'Lascia che l’agente agisca senza chiedere',
+  'settings.desktopAgent.seamless.description':
+    'Concedi l’accesso completo e approva automaticamente le azioni desktop (aprire app, controllarne le interfacce) così l’agente le esegue senza una richiesta di conferma.',
+  'settings.desktopAgent.seamless.note':
+    'Solo le azioni desktop saltano la richiesta — eseguire comandi shell, modificare file, le richieste di rete e l’installazione di software continuano a chiedere. Disattivando questa opzione si interrompe l’approvazione automatica delle azioni desktop, ma il livello di accesso resta invariato.',
+  'settings.desktopAgent.beta':
+    'Beta — l’agente desktop è sperimentale e potrebbe non funzionare sempre come previsto.',
+  'settings.desktopAgent.wakeWordHint': 'Di’ “Hey Tiny” prima del comando per attivare l’agente.',
   'settings.screenIntel.permissions.accessibility': 'Accessibilità',
   'settings.screenIntel.permissions.grantHint': 'Suggerimento concessione',
   'settings.screenIntel.permissions.inputMonitoring': 'Monitoraggio input',
@@ -4864,6 +4910,8 @@ const messages: TranslationMap = {
   'walletSend.done': 'Fatto',
   'walletSend.genericError': 'Impossibile completare il trasferimento. Riprova.',
   'settings.taskSources.title': 'Fonti del compito',
+  'settings.integrations.title': 'Integrazioni',
+  'settings.integrations.menuDesc': 'Sorgenti di attività, routing Composio e trigger webhook',
   'settings.taskSources.subtitle':
     "Estrai le attività dai tuoi strumenti sulla lavagna delle cose da fare dell'agente",
   'settings.taskSources.description':
@@ -5487,6 +5535,55 @@ const messages: TranslationMap = {
   'notch.speaking': 'Parlo…',
   'notch.transcribing': 'Trascrizione…',
   'notch.executing': 'Eseguendo…',
+  // ── Agent Profiles ───────────────────────────────────────────────────────
+  'settings.profiles.title': 'Profili agente',
+  'settings.profiles.subtitle':
+    'Agenti con carattere: ognuno con la propria anima, memoria, connettori e competenze.',
+  'settings.profiles.menuDesc': 'Crea e gestisci i profili agente',
+  'settings.profiles.new': 'Nuovo profilo',
+  'settings.profiles.empty': 'Ancora nessun profilo agente',
+  'settings.profiles.loadError': 'Impossibile caricare i profili',
+  'settings.profiles.active': 'Attivo',
+  'settings.profiles.setActive': 'Imposta come attivo',
+  'settings.profiles.sourceBuiltIn': 'Integrato',
+  'settings.profiles.sourceCustom': 'Personalizzato',
+  'settings.profiles.deleteConfirm': 'Eliminare questo profilo? Operazione irreversibile.',
+  'settings.profiles.editor.createTitle': 'Nuovo profilo',
+  'settings.profiles.editor.editTitle': 'Modifica profilo',
+  'settings.profiles.editor.name': 'Nome',
+  'settings.profiles.editor.id': 'Identificativo',
+  'settings.profiles.editor.idHint': 'Solo lettere minuscole, numeri e trattini.',
+  'settings.profiles.editor.description': 'Descrizione',
+  'settings.profiles.editor.soul': 'Anima (SOUL.md)',
+  'settings.profiles.editor.soulHint':
+    "Identità personalizzata di questo profilo. Vuoto ricorre al SOUL.md dell'area di lavoro.",
+  'settings.profiles.editor.baseAgent': 'Agente di base',
+  'settings.profiles.editor.baseAgentHint':
+    'Con quale definizione di agente viene eseguito questo profilo (ad es. orchestrator).',
+  'settings.profiles.editor.model': 'Modello',
+  'settings.profiles.editor.modelHint':
+    'Override del modello opzionale. Vuoto eredita il valore predefinito.',
+  'settings.profiles.editor.temperature': 'Temperatura',
+  'settings.profiles.editor.systemPromptSuffix': 'Suffisso del prompt di sistema',
+  'settings.profiles.editor.agentConversations': "Richiamare le conversazioni dell'agente",
+  'settings.profiles.editor.agentConversationsHint':
+    'Includere la memoria delle chat precedenti e incrociate nel contesto di questo profilo.',
+  'settings.profiles.editor.memorySources': 'Fonti di memoria',
+  'settings.profiles.editor.memorySourcesHint': 'Fonti di memoria da cui questo profilo richiama.',
+  'settings.profiles.editor.connectors': 'Connettori',
+  'settings.profiles.editor.connectorsHint': 'Toolkit Composio utilizzabili da questo profilo.',
+  'settings.profiles.editor.skills': 'Competenze',
+  'settings.profiles.editor.skillsHint':
+    'Flussi di lavoro che questo profilo può elencare ed eseguire.',
+  'settings.profiles.editor.mcpServers': 'Server MCP',
+  'settings.profiles.editor.mcpServersHint': 'Server MCP raggiungibili da questo profilo.',
+  'settings.profiles.editor.all': 'Tutti',
+  'settings.profiles.editor.selected': 'Selezionati',
+  'settings.profiles.editor.addPlaceholder': 'Digita un identificativo e premi Invio',
+  'settings.profiles.editor.removeAria': 'Rimuovi {item}',
+  'settings.profiles.editor.notFound': 'Profilo non trovato',
+  'settings.profiles.editor.saving': 'Salvataggio…',
+  'settings.profiles.editor.idRequired': "L'identificativo del profilo non può essere vuoto",
 };
 
 export default messages;
