@@ -3289,7 +3289,7 @@ const messages: TranslationMap = {
   'settings.ai.claudeCode.enableToCheck': 'Enable Claude Code to check sign-in.',
   'settings.ai.claudeCode.usingApiKeyEnvDetail': 'Using ANTHROPIC_API_KEY from the environment.',
   'settings.ai.claudeCode.notFoundInstall':
-    'Claude Code CLI not found — install via npm install -g @anthropic-ai/claude-code.',
+    'Claude Code CLI not found — install with: npm install -g @anthropic-ai/claude-code',
   'settings.ai.claudeCode.unknownDetail':
     "Couldn't determine sign-in state. Your claude CLI may predate auth status — try Reconnect, then Recheck.",
   'settings.ai.claudeCode.notSignedIn': 'Not signed in.',
