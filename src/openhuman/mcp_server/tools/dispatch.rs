@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use serde_json::{json, Map, Value};
 
 use crate::core::all;
@@ -292,6 +294,39 @@ async fn list_subagents() -> Result<Value, ToolCallError> {
     }))
 }
 
+/// In-flight count of MCP `agent.run_subagent` runs, used to bound recursion.
+///
+/// The MCP entry starts a *fresh* agent session each call, so it isn't covered
+/// by OpenHuman's native delegation cap (`agent/tools/delegate.rs` `max_depth`).
+/// Without this, `claude-code → run_subagent → (subagent is claude-code) →
+/// run_subagent → …` could spawn unbounded nested `claude` processes. Counts
+/// in-flight runs ≈ nesting depth; generous so concurrent *sibling*
+/// delegations don't trip it.
+static MCP_SUBAGENT_DEPTH: AtomicUsize = AtomicUsize::new(0);
+const MAX_MCP_SUBAGENT_DEPTH: usize = 6;
+
+/// RAII guard: restores the in-flight count on any return/panic.
+struct SubagentDepthGuard;
+impl Drop for SubagentDepthGuard {
+    fn drop(&mut self) {
+        MCP_SUBAGENT_DEPTH.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Reserve a recursion slot for an MCP subagent run. Returns the RAII guard,
+/// or an error when the depth cap is already reached (so the caller refuses to
+/// spawn another nested subagent instead of running away).
+fn enter_subagent_depth() -> Result<SubagentDepthGuard, ToolCallError> {
+    let depth = MCP_SUBAGENT_DEPTH.fetch_add(1, Ordering::SeqCst);
+    let guard = SubagentDepthGuard;
+    if depth >= MAX_MCP_SUBAGENT_DEPTH {
+        return Err(ToolCallError::Internal(format!(
+            "agent.run_subagent recursion limit reached (in-flight depth {depth} ≥ {MAX_MCP_SUBAGENT_DEPTH}); refusing to spawn another nested subagent"
+        )));
+    }
+    Ok(guard)
+}
+
 async fn run_subagent_tool(params: &Map<String, Value>) -> Result<Value, ToolCallError> {
     use super::params::required_non_empty_string;
 
@@ -302,6 +337,9 @@ async fn run_subagent_tool(params: &Map<String, Value>) -> Result<Value, ToolCal
             "agent.run_subagent does not yet support `integrations_agent`; first-level MCP support is currently limited to standalone agents that do not require toolkit binding".to_string(),
         ));
     }
+
+    // Bound nested recursion (CC → run_subagent → CC → …). Held for the turn.
+    let _depth_guard = enter_subagent_depth()?;
 
     let config = load_config_and_init_registry().await?;
     let mut agent = Agent::from_config_for_agent(&config, &agent_id).map_err(|err| {
@@ -373,4 +411,29 @@ pub fn tool_error(message: String) -> Value {
         }],
         "isError": true
     })
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+
+    #[test]
+    fn subagent_depth_guard_caps_recursion() {
+        // Hold MAX guards (count == cap) → the next entry is refused; once the
+        // guards drop, capacity is restored. RAII guard means the refused call
+        // nets zero (it increments then drops on the error return).
+        let mut held = Vec::new();
+        for _ in 0..MAX_MCP_SUBAGENT_DEPTH {
+            held.push(enter_subagent_depth().expect("entries within the cap succeed"));
+        }
+        assert!(
+            enter_subagent_depth().is_err(),
+            "entry beyond MAX_MCP_SUBAGENT_DEPTH must be refused"
+        );
+        drop(held);
+        assert!(
+            enter_subagent_depth().is_ok(),
+            "capacity is restored after the in-flight guards drop"
+        );
+    }
 }

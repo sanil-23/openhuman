@@ -56,7 +56,7 @@ import {
 import { ConfirmationModal } from '../../intelligence/ConfirmationModal';
 import SettingsHeader from '../components/SettingsHeader';
 import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
-import { ClaudeCodeStatusCard } from './ai/ClaudeCodeStatusCard';
+import { ClaudeCodeConnect } from './ai/ClaudeCodeStatusCard';
 import { routingWithProviderRemoved, toSelectableChatModels } from './aiRouting';
 import {
   authStyleForBuiltinCloudProvider,
@@ -125,6 +125,10 @@ const BUILTIN_RESERVED_SLUGS = [
   'custom',
   'ollama',
   'lmstudio',
+  // Claude Code is a CLI-backed peer provider surfaced via a dedicated
+  // connect button (not a chip), so reserve its slug so it never renders in
+  // the generic custom-provider chip list.
+  'claude-code',
   ...BUILTIN_CLOUD_PROVIDER_SLUGS,
 ];
 
@@ -268,6 +272,8 @@ function slugifyCustomProviderName(name: string): string {
 function authStyleForSlug(slug: string): AuthStyle {
   if (slug === 'openhuman') return 'openhuman_jwt';
   if (slug === 'lmstudio' || slug === 'ollama') return 'none';
+  // Claude Code authenticates via the local CLI, never an HTTP key.
+  if (slug === 'claude-code') return 'none';
   return authStyleForBuiltinCloudProvider(slug) ?? 'bearer';
 }
 
@@ -1754,10 +1760,13 @@ type CustomDialogSource =
   | { kind: 'local' }
   | { kind: 'claude-code' };
 
-/** Default model identifier presented when the user first picks the
- * Claude Code CLI source. The CLI accepts any model id the underlying
- * Claude account can run, so this is just a sensible starting point. */
-const CLAUDE_CODE_DEFAULT_MODEL = 'sonnet-4-5';
+/** Default model identifier presented when the user first picks the Claude
+ * Code CLI source. This string is passed verbatim to `claude --model`, so it
+ * MUST be a value the CLI accepts — an alias (`sonnet`, `opus`, `fable`) or a
+ * full name (`claude-sonnet-4-5`). NOT a marketing string like `sonnet-4-5`,
+ * which the CLI rejects with "model may not exist". `sonnet` tracks the latest
+ * Sonnet the signed-in account can run. */
+const CLAUDE_CODE_DEFAULT_MODEL = 'sonnet';
 
 function providerRefSignature(ref: ProviderRef): string {
   switch (ref.kind) {
@@ -1838,9 +1847,15 @@ const CustomRoutingDialog = ({
   const { t } = useT();
   // Non-openhuman cloud providers + local-ollama (if available) are the
   // "Custom" options. OpenHuman is its own Managed path; Default serializes
-  // to the backend's `cloud` sentinel.
-  const customCloud = cloudProviders.filter(p => p.slug !== 'openhuman');
+  // to the backend's `cloud` sentinel. Claude Code is excluded here — it has
+  // its own dedicated `claude-code:` select option, not a generic cloud one.
+  const customCloud = cloudProviders.filter(
+    p => p.slug !== 'openhuman' && p.slug !== 'claude-code'
+  );
   const localAvailable = ollamaRunning && localModels.length > 0;
+  // Claude Code CLI is offered as a routing source only when its peer chip is
+  // enabled (a cloud_providers entry exists).
+  const claudeCodeEnabled = cloudProviders.some(p => p.slug === 'claude-code');
 
   const initialSource: CustomDialogSource | null =
     initial.kind === 'cloud'
@@ -1853,7 +1868,9 @@ const CustomRoutingDialog = ({
             ? { kind: 'cloud', providerSlug: customCloud[0].slug }
             : localAvailable
               ? { kind: 'local' }
-              : null;
+              : claudeCodeEnabled
+                ? { kind: 'claude-code' }
+                : null;
 
   const [source, setSource] = useState<CustomDialogSource | null>(initialSource);
   const [model, setModel] = useState<string>(() => {
@@ -2023,9 +2040,9 @@ const CustomRoutingDialog = ({
     }
   };
 
-  // Claude Code CLI is always available as a source — never show the
-  // empty state when it's the only option.
-  const noProviders = false;
+  // Empty state only when there's genuinely nothing to route to: no custom
+  // cloud providers, no local Ollama, and the Claude Code peer chip is off.
+  const noProviders = customCloud.length === 0 && !localAvailable && !claudeCodeEnabled;
 
   return (
     <div
@@ -2099,7 +2116,12 @@ const CustomRoutingDialog = ({
                   </option>
                 ))}
                 {localAvailable && <option value="local:">{t('settings.ai.localOllama')}</option>}
-                <option value="claude-code:">Claude Code CLI</option>
+                {/* Offered only when the peer chip is enabled — or when this
+                    workload is already pinned to it (keeps the select value
+                    valid). */}
+                {(claudeCodeEnabled || source?.kind === 'claude-code') && (
+                  <option value="claude-code:">Claude Code CLI</option>
+                )}
               </select>
             </div>
 
@@ -2442,24 +2464,37 @@ const GlobalOwnModelSelector = ({
   onApply: (next: ProviderRef, vision: boolean) => Promise<void>;
 }) => {
   const { t } = useT();
-  const customCloud = cloudProviders.filter(p => p.slug !== 'openhuman');
+  // Claude Code is excluded from the generic cloud list — it has its own
+  // dedicated `claude-code:` option below (offered when connected).
+  const customCloud = cloudProviders.filter(
+    p => p.slug !== 'openhuman' && p.slug !== 'claude-code'
+  );
   const localAvailable = ollamaRunning && localModels.length > 0;
+  const claudeCodeEnabled = cloudProviders.some(p => p.slug === 'claude-code');
 
   const initialSource: CustomDialogSource | null =
     current?.kind === 'cloud'
       ? { kind: 'cloud', providerSlug: current.providerSlug }
       : current?.kind === 'local'
         ? { kind: 'local' }
-        : customCloud[0]
-          ? { kind: 'cloud', providerSlug: customCloud[0].slug }
-          : localAvailable
-            ? { kind: 'local' }
-            : null;
+        : current?.kind === 'claude-code'
+          ? { kind: 'claude-code' }
+          : customCloud[0]
+            ? { kind: 'cloud', providerSlug: customCloud[0].slug }
+            : localAvailable
+              ? { kind: 'local' }
+              : claudeCodeEnabled
+                ? { kind: 'claude-code' }
+                : null;
 
   const [source, setSource] = useState<CustomDialogSource | null>(initialSource);
-  const [model, setModel] = useState<string>(
-    current?.kind === 'cloud' || current?.kind === 'local' ? current.model : ''
-  );
+  const [model, setModel] = useState<string>(() => {
+    if (current?.kind === 'cloud' || current?.kind === 'local' || current?.kind === 'claude-code') {
+      return current.model;
+    }
+    if (initialSource?.kind === 'claude-code') return CLAUDE_CODE_DEFAULT_MODEL;
+    return '';
+  });
   // Registry slug for the selected source — keys the per-model vision flag.
   const registrySlug =
     source?.kind === 'cloud'
@@ -2576,7 +2611,7 @@ const GlobalOwnModelSelector = ({
         </p>
       </div>
 
-      {customCloud.length === 0 && !localAvailable ? (
+      {customCloud.length === 0 && !localAvailable && !claudeCodeEnabled ? (
         <div className="rounded-lg border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
           {t('settings.ai.globalModel.noProviders')}
         </div>
@@ -2602,6 +2637,9 @@ const GlobalOwnModelSelector = ({
                     const nextModel = localModels[0]?.id ?? '';
                     setSource(nextSource);
                     setModel(nextModel);
+                  } else if (kind === 'claude-code') {
+                    setSource({ kind: 'claude-code' });
+                    setModel(CLAUDE_CODE_DEFAULT_MODEL);
                   } else {
                     const nextSource = { kind: 'cloud', providerSlug: slug } as const;
                     setSource(nextSource);
@@ -2617,6 +2655,9 @@ const GlobalOwnModelSelector = ({
                 {localAvailable ? (
                   <option value="local:">{t('settings.ai.provider.ollama')}</option>
                 ) : null}
+                {(claudeCodeEnabled || source?.kind === 'claude-code') && (
+                  <option value="claude-code:">Claude Code CLI</option>
+                )}
               </select>
             </div>
 
@@ -2747,10 +2788,14 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
       slug: string;
       localLabel?: string | null;
       value: string;
-      credentialMode: 'api_key' | 'oauth' | 'codex_oauth' | 'endpoint';
+      credentialMode: 'api_key' | 'oauth' | 'codex_oauth' | 'endpoint' | 'cli_login';
     }) => {
       const isLocalRuntime = credentialMode === 'endpoint';
       const isCodexOAuth = credentialMode === 'codex_oauth';
+      // CLI-backed login (Claude Code): no API key is written and no HTTP
+      // /models probe is made — auth + execution both go through the local
+      // `claude` CLI. Mirrors the Codex skip, but also skips model listing.
+      const isCliLogin = credentialMode === 'cli_login';
       setBusyAction(`toggle-${localLabel ? localLabel.toLowerCase().replace(/\s/g, '') : slug}`);
 
       try {
@@ -2774,7 +2819,9 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
           label: localLabel ?? BUILTIN_PROVIDER_META[slug]?.label ?? slug,
           endpoint,
           authStyle: authStyleForSlug(slug),
-          maskedKey: maskKeyLabel(true),
+          // CLI-login providers hold no API key — reflect that honestly so
+          // the entry matches its reloaded (has_api_key === false) shape.
+          maskedKey: maskKeyLabel(!isCliLogin),
         };
 
         const priorWireProviders = saved.cloudProviders.map(p => ({
@@ -2785,7 +2832,7 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
           auth_style: p.authStyle,
         }));
 
-        if (!isLocalRuntime && !isCodexOAuth && slug !== 'openhuman') {
+        if (!isLocalRuntime && !isCodexOAuth && !isCliLogin && slug !== 'openhuman') {
           await setCloudProviderKey(slug, trimmed);
         } else if (isLocalRuntime && slug === 'ollama') {
           const baseUrl = endpoint.replace(/\/v1\/?$/, '');
@@ -2816,7 +2863,7 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
             },
           ];
           await flushCloudProviders(nextWireProviders);
-          if (!isCodexOAuth) {
+          if (!isCodexOAuth && !isCliLogin) {
             try {
               await listProviderModels(slug);
             } catch (probeErr) {
@@ -2937,7 +2984,6 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
       )}
 
       <div className={embedded ? 'space-y-6' : 'space-y-6 p-4'}>
-        <ClaudeCodeStatusCard />
         {/* ═══════════════════════════════════════════════════════════════
             AUTH — provider authentication (cloud providers + local Ollama
             setup). Everything the user needs to wire a model up.
@@ -3099,6 +3145,7 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
             </div>
 
             <div className="flex flex-col gap-2 pt-1">
+              {/* Codex — imports the existing Codex CLI login as an OpenAI credential. */}
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -3118,6 +3165,33 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
                 </span>
               </div>
               {codexAuthError ? <ProviderSetupErrorNotice error={codexAuthError} /> : null}
+
+              {/* Claude Code CLI — connect control (peer of Codex). A "Claude
+                  Code" button + status text; the button opens a modal with the
+                  enable/sign-in/disconnect controls. No API key: routes chat
+                  through the local `claude` CLI using the CLI's own login. */}
+              <ClaudeCodeConnect
+                connected={draft.cloudProviders.some(cp => cp.slug === 'claude-code')}
+                busy={busyAction === 'toggle-claude-code'}
+                onConnect={() =>
+                  connectProvider({
+                    slug: 'claude-code',
+                    value: 'cli_login',
+                    credentialMode: 'cli_login',
+                  })
+                }
+                onDisconnect={async () => {
+                  const existing = draft.cloudProviders.find(cp => cp.slug === 'claude-code');
+                  if (!existing) return;
+                  const remaining = draft.cloudProviders.filter(cp => cp.id !== existing.id);
+                  const nextRouting = routingWithProviderRemoved(
+                    draft.routing,
+                    { slug: existing.slug, isLocalRuntime: false },
+                    remaining
+                  );
+                  await persist({ ...draft, cloudProviders: remaining, routing: nextRouting });
+                }}
+              />
             </div>
 
             <div className="pt-1">
@@ -3674,6 +3748,9 @@ function defaultEndpointFor(slug: string): string {
   switch (slug) {
     case 'openhuman':
       return 'https://api.openhuman.ai/v1';
+    // Cosmetic only — the claude-code factory branch never makes HTTP calls.
+    case 'claude-code':
+      return 'cli://claude-code';
     case 'ollama':
       // Ollama exposes an OpenAI-compatible endpoint at /v1; the bare host is
       // also accepted by the Rust factory (it appends /v1 internally for chat).

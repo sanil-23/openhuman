@@ -62,6 +62,17 @@ struct McpSseEvent {
 }
 
 pub async fn run_http(config: HttpServerConfig) -> Result<()> {
+    run_http_reporting(config, None).await
+}
+
+/// Like [`run_http`] but reports the actually-bound [`SocketAddr`] through
+/// `ready` once the listener is up. Needed when binding an ephemeral port
+/// (`127.0.0.1:0`) so the caller can learn the chosen port (e.g. to hand the
+/// URL to a local MCP client).
+pub async fn run_http_reporting(
+    config: HttpServerConfig,
+    ready: Option<tokio::sync::oneshot::Sender<SocketAddr>>,
+) -> Result<()> {
     let (event_tx, _) = broadcast::channel(128);
     let state = AppState {
         sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -76,10 +87,11 @@ pub async fn run_http(config: HttpServerConfig) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await
         .with_context(|| format!("binding MCP HTTP server on {}", config.bind_addr))?;
-    log::info!(
-        "[mcp_server] HTTP/SSE listening on http://{}",
-        listener.local_addr()?
-    );
+    let local_addr = listener.local_addr()?;
+    log::info!("[mcp_server] HTTP/SSE listening on http://{local_addr}");
+    if let Some(tx) = ready {
+        let _ = tx.send(local_addr);
+    }
 
     axum::serve(listener, app)
         .await

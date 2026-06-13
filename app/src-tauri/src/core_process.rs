@@ -33,7 +33,13 @@ use tokio_util::sync::CancellationToken;
 use crate::process_kill::{kill_pid_force, kill_pid_term};
 
 const CORE_READY_POLL_MS: u64 = 100;
-const CORE_READY_ATTEMPTS: usize = 200;
+// 60s ceiling. The embedded core boots in ~11s standalone, but inside the
+// desktop app it contends with CEF process startup (GPU/renderer/utility
+// re-execs) and can intermittently cross a 20s cap on a cold/loaded machine.
+// Polling returns the instant the core is ready, so a higher ceiling costs
+// nothing in the common fast case — it only avoids spurious startup-timeout
+// aborts under contention.
+const CORE_READY_ATTEMPTS: usize = 600;
 const CORE_READY_TIMEOUT_MS: u64 = CORE_READY_POLL_MS * CORE_READY_ATTEMPTS as u64;
 
 /// Generate a 256-bit cryptographically-random bearer token as a hex string.
