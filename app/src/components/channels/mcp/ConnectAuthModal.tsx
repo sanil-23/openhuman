@@ -70,8 +70,14 @@ const ConnectAuthModal = ({ server, onClose, onConnected }: ConnectAuthModalProp
   // free-text description — so the user picks). Defaults to Bearer for an
   // `Authorization` header (the overwhelming case), raw for anything else.
   const [knownSchemes, setKnownSchemes] = useState<Record<string, 'bearer' | 'raw'>>({});
-  const schemeFor = (key: string): 'bearer' | 'raw' =>
-    knownSchemes[key] ?? (key.toLowerCase() === 'authorization' ? 'bearer' : 'raw');
+  // Memoized on `knownSchemes` so callbacks that depend on it (e.g.
+  // `handleConnect`) re-derive the right scheme after the user flips the
+  // dropdown — a stale closure here would send the wrong prefix on submit.
+  const schemeFor = useCallback(
+    (key: string): 'bearer' | 'raw' =>
+      knownSchemes[key] ?? (key.toLowerCase() === 'authorization' ? 'bearer' : 'raw'),
+    [knownSchemes]
+  );
   const [customHeaders, setCustomHeaders] = useState<CustomHeader[]>([]);
   const [nextId, setNextId] = useState(1);
   const [busy, setBusy] = useState(false);
@@ -223,7 +229,7 @@ const ConnectAuthModal = ({ server, onClose, onConnected }: ConnectAuthModalProp
         setBusy(false);
       }
     })();
-  }, [knownKeys, values, customHeaders, server.server_id, onConnected, onClose, t]);
+  }, [knownKeys, values, customHeaders, schemeFor, server.server_id, onConnected, onClose, t]);
 
   return (
     <div

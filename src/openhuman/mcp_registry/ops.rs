@@ -439,8 +439,17 @@ pub async fn mcp_clients_update_env(
         env.keys().collect::<Vec<_>>()
     );
 
+    // Merge the supplied values over any already-stored env, THEN persist —
+    // `set_env_values` replaces the value table wholesale, so a partial update
+    // (e.g. the connect modal sending only the one field the user just typed,
+    // with no way to display the other stored secrets) would silently erase
+    // the rest. Merging preserves keys the caller didn't send; supplied values
+    // win on collision. Callers that send every key (the reconfigure form,
+    // which requires all fields) are unaffected — for them merged == supplied.
+    let mut merged = store::load_env_values(config, server_id).unwrap_or_default();
+    merged.extend(env);
     // Persist first so the new values survive even if the reconnect fails.
-    store::set_env_values(config, server_id, &env).map_err(|e| e.to_string())?;
+    store::set_env_values(config, server_id, &merged).map_err(|e| e.to_string())?;
 
     // Drop any live session so the reconnect picks up the new env.
     connections::disconnect(server_id).await;
@@ -451,10 +460,11 @@ pub async fn mcp_clients_update_env(
 
     let mut server = store::get_server(config, server_id).map_err(|e| e.to_string())?;
 
-    // Keep the install record's `env_keys` list in sync with the values we just
-    // wrote — `set_env_values` replaces the value table wholesale, so the
-    // key-name list shown in the UI (and returned below) must track it too.
-    let mut new_keys: Vec<String> = env.keys().cloned().collect();
+    // Keep the install record's `env_keys` list in sync with the full merged
+    // value set we just wrote (not just the keys supplied this call), so the
+    // key-name list shown in the UI (and returned below) reflects every stored
+    // key — including the ones a partial update preserved.
+    let mut new_keys: Vec<String> = merged.keys().cloned().collect();
     new_keys.sort();
     if server.env_keys != new_keys {
         server.env_keys = new_keys;
@@ -627,7 +637,7 @@ pub async fn mcp_clients_list_tools(server_id: String) -> Result<RpcOutcome<Valu
             ))
         }
         None => Err(format!(
-            "server_id={} is not connected; connect it first via mcp_registry_connect",
+            "server_id={} is not connected; connect it first via mcp_clients_connect",
             server_id.trim()
         )),
     }
@@ -835,6 +845,17 @@ async fn invoke_config_assist_agent(
             }));
         }
     };
+    // Scope this docs helper to web-research tools only. `from_config` builds
+    // the full default agent surface (filesystem, shell, MCP, browser, …), but
+    // a credential-help turn must not be able to pivot into unrelated local
+    // capabilities — it only needs to read the provider's public docs (#3648).
+    agent.set_visible_tool_names(
+        ["web_search_tool", "web_fetch", "curl"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+    );
+
     // Trusted desktop-initiated turn — label as CLI so the approval gate doesn't
     // fail closed on an unlabelled call site (mirrors `agent_chat`).
     let reply_result = crate::openhuman::agent::turn_origin::with_origin(

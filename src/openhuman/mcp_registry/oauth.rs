@@ -112,14 +112,39 @@ fn gen_pkce() -> (String, String) {
 }
 
 /// `http://127.0.0.1:<core_port>/oauth/mcp/callback` — the route the core HTTP
-/// server hosts. Port mirrors where the in-process core is bound
-/// (`OPENHUMAN_CORE_PORT`), so the browser redirect reaches it.
+/// server hosts. The port MUST match where the core actually bound, or the
+/// browser redirect lands on a dead listener and sign-in times out.
+///
+/// Source priority:
+/// 1. `OPENHUMAN_CORE_RPC_URL` — set by the core to its *real* bound address
+///    after startup, so it reflects any port-fallback (e.g. the embedded core
+///    falling back off the preferred 7788). This is the authoritative value.
+/// 2. `OPENHUMAN_CORE_PORT` — the configured/requested port hint.
+/// 3. `7788` — the default.
 fn callback_redirect_uri() -> String {
-    let port = std::env::var("OPENHUMAN_CORE_PORT")
-        .ok()
-        .and_then(|v| v.trim().parse::<u16>().ok())
+    let port = port_from_core_rpc_url()
+        .or_else(|| {
+            std::env::var("OPENHUMAN_CORE_PORT")
+                .ok()
+                .and_then(|v| v.trim().parse::<u16>().ok())
+        })
         .unwrap_or(7788);
     format!("http://127.0.0.1:{port}/oauth/mcp/callback")
+}
+
+/// Parse the bound port out of `OPENHUMAN_CORE_RPC_URL` (e.g.
+/// `http://127.0.0.1:7790/rpc` → `7790`). `None` when the var is unset or has
+/// no explicit port.
+fn port_from_core_rpc_url() -> Option<u16> {
+    let url = std::env::var("OPENHUMAN_CORE_RPC_URL").ok()?;
+    parse_explicit_port(&url)
+}
+
+/// Extract an explicit port from an `http(s)://host:port/...` URL. Returns
+/// `None` if there is no explicit port. Kept pure so it is unit-testable
+/// without touching process env.
+fn parse_explicit_port(url: &str) -> Option<u16> {
+    reqwest::Url::parse(url).ok().and_then(|u| u.port())
 }
 
 fn http() -> reqwest::Client {
@@ -142,10 +167,14 @@ fn remote_url(config: &Config, server_id: &str) -> Result<String, String> {
 /// Classify a server's auth requirement via an unauthenticated probe — the only
 /// reliable signal (registry metadata is unreliable / mislabelled).
 pub async fn detect(config: &Config, server_id: &str) -> Result<AuthDetection, String> {
-    let url = match remote_url(config, server_id) {
-        Ok(u) => u,
-        // stdio (or no URL): no HTTP auth to negotiate.
-        Err(_) => {
+    // A genuine lookup/store failure (invalid `server_id`, DB error) must
+    // surface as an error — collapsing it to `kind="none"` would mislead the UI
+    // into showing a false "open server" state and hide the real failure. Only
+    // a non-HTTP / URL-less transport is legitimately "no HTTP auth".
+    let server = store::get_server(config, server_id).map_err(|e| e.to_string())?;
+    let url = match server.transport {
+        Transport::HttpRemote { url } if !url.is_empty() => url,
+        _ => {
             return Ok(AuthDetection {
                 kind: "none".into(),
                 authorization_endpoint: None,
@@ -212,11 +241,28 @@ pub async fn begin(config: &Config, server_id: &str) -> Result<String, String> {
         .await
         .map_err(|e| format!("oauth discovery failed: {e}"))?
         .ok_or_else(|| "server does not require authorization".to_string())?;
+    // Pick by capability, not position: the first advertised authorization
+    // server may be incomplete while a later one is fully usable. Require the
+    // endpoints begin() actually needs (authorize + token + dynamic client
+    // registration) and — when grant types are listed — `authorization_code`.
     let asm = ctx
         .authorization_server_metadata
         .into_iter()
-        .next()
-        .ok_or_else(|| "no authorization server advertised".to_string())?;
+        .find(|asm| {
+            asm.authorization_endpoint.is_some()
+                && asm.token_endpoint.is_some()
+                && asm.registration_endpoint.is_some()
+                && (asm.grant_types_supported.is_empty()
+                    || asm
+                        .grant_types_supported
+                        .iter()
+                        .any(|g| g == "authorization_code"))
+        })
+        .ok_or_else(|| {
+            "no authorization server advertised a usable OAuth configuration \
+             (authorize + token + dynamic registration)"
+                .to_string()
+        })?;
     let authorization_endpoint = asm
         .authorization_endpoint
         .ok_or_else(|| "authorization server has no authorization_endpoint".to_string())?;
@@ -403,7 +449,9 @@ pub async fn refresh_if_expired(config: &Config, server_id: &str) -> Result<bool
 }
 
 /// Persist the access token (`Authorization`) + refresh bundle (`__oauth__`)
-/// for an OAuth server, replace-all so nothing stale lingers.
+/// for an OAuth server, MERGED over the existing env so any custom headers or
+/// other stored keys survive the (re)connect/refresh — `set_env_values` is
+/// replace-all, so starting from a blank map would silently erase them (#3648).
 fn persist_tokens(
     config: &Config,
     server_id: &str,
@@ -419,7 +467,7 @@ fn persist_tokens(
         token_endpoint: token_endpoint.to_string(),
         expires_at: now_unix() + tokens.expires_in.unwrap_or(3600),
     };
-    let mut env = HashMap::new();
+    let mut env = store::load_env_values(config, server_id).unwrap_or_default();
     env.insert(
         "Authorization".to_string(),
         format!("Bearer {}", tokens.access_token),
@@ -517,13 +565,54 @@ mod tests {
         assert_eq!(back.expires_at, 1_700_000_000);
     }
 
+    /// Serialize the env-mutating callback tests — they share the process-global
+    /// `OPENHUMAN_CORE_RPC_URL` / `OPENHUMAN_CORE_PORT` vars, and cargo runs
+    /// tests in the same binary concurrently. Poison-recovery keeps a panicking
+    /// test from wedging the others.
+    fn callback_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn callback_uri_uses_core_port_env() {
+        let _guard = callback_env_lock();
+        // With no RPC URL advertised, fall back to the CORE_PORT hint.
+        std::env::remove_var("OPENHUMAN_CORE_RPC_URL");
         std::env::set_var("OPENHUMAN_CORE_PORT", "7790");
         assert_eq!(
             callback_redirect_uri(),
             "http://127.0.0.1:7790/oauth/mcp/callback"
         );
+        std::env::remove_var("OPENHUMAN_CORE_PORT");
+    }
+
+    #[test]
+    fn parse_explicit_port_reads_bound_port() {
+        // Authoritative real bound address (with explicit port) → that port.
+        assert_eq!(parse_explicit_port("http://127.0.0.1:7790/rpc"), Some(7790));
+        assert_eq!(parse_explicit_port("http://127.0.0.1:1422/rpc"), Some(1422));
+        // No explicit port (default) or unparseable → None, so the caller
+        // falls back to CORE_PORT / 7788.
+        assert_eq!(parse_explicit_port("http://127.0.0.1/rpc"), None);
+        assert_eq!(parse_explicit_port("not-a-url"), None);
+    }
+
+    #[test]
+    fn callback_uri_prefers_real_bound_port_over_core_port_hint() {
+        let _guard = callback_env_lock();
+        // The core fell back to 7791 (advertised via OPENHUMAN_CORE_RPC_URL)
+        // even though the requested CORE_PORT was 7788 — the callback must use
+        // the REAL bound port so the browser redirect actually reaches it.
+        std::env::set_var("OPENHUMAN_CORE_RPC_URL", "http://127.0.0.1:7791/rpc");
+        std::env::set_var("OPENHUMAN_CORE_PORT", "7788");
+        assert_eq!(
+            callback_redirect_uri(),
+            "http://127.0.0.1:7791/oauth/mcp/callback"
+        );
+        std::env::remove_var("OPENHUMAN_CORE_RPC_URL");
         std::env::remove_var("OPENHUMAN_CORE_PORT");
     }
 }
