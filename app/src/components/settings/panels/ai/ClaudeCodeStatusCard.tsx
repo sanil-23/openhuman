@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LuKeyRound, LuX } from 'react-icons/lu';
 
+import { useT } from '../../../../lib/i18n/I18nContext';
 import {
   type ClaudeCodeAuthStatus,
   openhumanClaudeCodeAuthStatus,
@@ -33,6 +34,7 @@ export function ClaudeCodeConnect({
   onConnect: () => void | Promise<void>;
   onDisconnect: () => void | Promise<void>;
 }) {
+  const { t } = useT();
   const [open, setOpen] = useState(false);
   const [auth, setAuth] = useState<ClaudeCodeAuthStatus | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
@@ -53,13 +55,14 @@ export function ClaudeCodeConnect({
   }, []);
 
   // Probe once connected so the inline summary + modal reflect sign-in state.
+  // The disconnected render is DERIVED from `connected` (`shownAuth` below)
+  // rather than clearing `auth` from the effect — synchronous setState in an
+  // effect body is disallowed by `react-hooks/set-state-in-effect`.
   useEffect(() => {
-    if (connected) {
-      void probeAuth();
-    } else {
-      setAuth(null);
-    }
+    if (connected) void probeAuth();
   }, [connected, probeAuth]);
+
+  const shownAuth = connected ? auth : null;
 
   const runConnect = async () => {
     setActing(true);
@@ -85,17 +88,17 @@ export function ClaudeCodeConnect({
         onClick={() => setOpen(true)}
         className="inline-flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-900 transition-colors hover:bg-stone-50 disabled:cursor-wait disabled:opacity-60 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
         <LuKeyRound className="h-3.5 w-3.5" />
-        Claude Code
+        {t('settings.ai.claudeCode.button')}
       </button>
       <span className="text-xs text-stone-500 dark:text-neutral-400">
-        <InlineSummary connected={connected} auth={auth} loading={authLoading} />
+        <InlineSummary connected={connected} auth={shownAuth} loading={authLoading} />
       </span>
 
       {open && (
         <ClaudeCodeModal
           connected={connected}
           busy={busy || acting}
-          auth={auth}
+          auth={shownAuth}
           authLoading={authLoading}
           onClose={() => setOpen(false)}
           onConnect={runConnect}
@@ -131,35 +134,52 @@ function InlineSummary({
   auth: ClaudeCodeAuthStatus | null;
   loading: boolean;
 }) {
+  const { t } = useT();
   if (!connected) {
-    return <>Not connected — routes chat through your local Claude Code CLI.</>;
+    return <>{t('settings.ai.claudeCode.inlineNotConnected')}</>;
   }
   if (!auth) {
-    return <>{loading ? 'Checking sign-in…' : 'Connected.'}</>;
+    return (
+      <>
+        {loading
+          ? t('settings.ai.claudeCode.checkingSignIn')
+          : t('settings.ai.claudeCode.inlineConnected')}
+      </>
+    );
   }
   if (auth.source === 'subscription') {
-    const who = auth.account_email ?? 'Claude subscription';
+    const who = auth.account_email ?? t('settings.ai.claudeCode.subscriptionFallback');
     const plan = auth.subscription_type
       ? ` (${formatSubscriptionType(auth.subscription_type)})`
       : '';
     return (
       <span className="text-emerald-600 dark:text-emerald-400">
-        Signed in as {who}
+        {t('settings.ai.claudeCode.signedInAs')} {who}
         {plan}
       </span>
     );
   }
   if (auth.source === 'api_key_env') {
-    return <span className="text-emerald-600 dark:text-emerald-400">Using ANTHROPIC_API_KEY</span>;
+    return (
+      <span className="text-emerald-600 dark:text-emerald-400">
+        {t('settings.ai.claudeCode.usingApiKeyEnv')}
+      </span>
+    );
   }
   if (auth.source === 'unknown') {
     return (
       <span className="text-amber-600 dark:text-amber-400">
-        {looksNotInstalled(auth.reason) ? 'CLI not installed' : 'Sign-in state unknown'}
+        {looksNotInstalled(auth.reason)
+          ? t('settings.ai.claudeCode.cliNotInstalled')
+          : t('settings.ai.claudeCode.signInUnknown')}
       </span>
     );
   }
-  return <span className="text-amber-600 dark:text-amber-400">Connected · not signed in</span>;
+  return (
+    <span className="text-amber-600 dark:text-amber-400">
+      {t('settings.ai.claudeCode.connectedNotSignedIn')}
+    </span>
+  );
 }
 
 /**
@@ -185,7 +205,9 @@ function ClaudeCodeModal({
   onDisconnect: () => void | Promise<void>;
   onRecheck: () => void | Promise<void>;
 }) {
+  const { t } = useT();
   const [launching, setLaunching] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
 
   // Persisted full-access toggle (bypassPermissions vs the default acceptEdits).
   // `null` until loaded so the switch can render a disabled placeholder.
@@ -223,8 +245,12 @@ function ClaudeCodeModal({
 
   const launchLogin = async () => {
     setLaunching(true);
+    setLaunchError(null);
     try {
       await openhumanClaudeCodeLoginLaunch();
+    } catch {
+      // Surface the failure inline rather than leaving an unhandled rejection.
+      setLaunchError(t('settings.ai.claudeCode.loginError'));
     } finally {
       setLaunching(false);
     }
@@ -234,7 +260,7 @@ function ClaudeCodeModal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Claude Code CLI"
+      aria-label={t('settings.ai.claudeCode.modalTitle')}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
       onClick={onClose}>
       <div
@@ -243,17 +269,16 @@ function ClaudeCodeModal({
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <h3 className="text-base font-semibold text-stone-900 dark:text-neutral-100">
-              Claude Code CLI
+              {t('settings.ai.claudeCode.modalTitle')}
             </h3>
             <p className="mt-1 max-w-sm text-xs leading-5 text-stone-500 dark:text-neutral-400">
-              Routes chat, agentic and reasoning workloads through your locally-installed Claude
-              Code CLI. No API key — it uses the CLI's own login.
+              {t('settings.ai.claudeCode.modalDescription')}
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t('settings.ai.claudeCode.close')}
             className="rounded-md p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200">
             <LuX className="h-4 w-4" />
           </button>
@@ -262,14 +287,18 @@ function ClaudeCodeModal({
         {/* Connection */}
         <div className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 px-3 py-2 dark:border-neutral-800">
           <div className="text-xs">
-            <div className="font-medium text-stone-900 dark:text-neutral-100">Connection</div>
+            <div className="font-medium text-stone-900 dark:text-neutral-100">
+              {t('settings.ai.claudeCode.connection')}
+            </div>
             <div
               className={
                 connected
                   ? 'text-emerald-600 dark:text-emerald-400'
                   : 'text-stone-500 dark:text-neutral-400'
               }>
-              {connected ? 'Enabled' : 'Not enabled'}
+              {connected
+                ? t('settings.ai.claudeCode.enabled')
+                : t('settings.ai.claudeCode.notEnabled')}
             </div>
           </div>
           {connected ? (
@@ -278,7 +307,9 @@ function ClaudeCodeModal({
               onClick={() => void onDisconnect()}
               disabled={busy}
               className="rounded-md border border-rose-300 px-2.5 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50 dark:border-rose-500/40 dark:text-rose-400 dark:hover:bg-rose-500/10">
-              {busy ? 'Disconnecting…' : 'Disconnect'}
+              {busy
+                ? t('settings.ai.claudeCode.disconnecting')
+                : t('settings.ai.claudeCode.disconnect')}
             </button>
           ) : (
             <button
@@ -286,7 +317,7 @@ function ClaudeCodeModal({
               onClick={() => void onConnect()}
               disabled={busy}
               className="rounded-md bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-neutral-700 disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300">
-              {busy ? 'Enabling…' : 'Enable Claude Code'}
+              {busy ? t('settings.ai.claudeCode.enabling') : t('settings.ai.claudeCode.enable')}
             </button>
           )}
         </div>
@@ -295,14 +326,16 @@ function ClaudeCodeModal({
         <div className="mt-3 rounded-lg border border-stone-200 px-3 py-2 dark:border-neutral-800">
           <div className="mb-1.5 flex items-center justify-between">
             <span className="text-xs font-medium text-stone-900 dark:text-neutral-100">
-              Authentication
+              {t('settings.ai.claudeCode.authentication')}
             </span>
             <button
               type="button"
               onClick={() => void onRecheck()}
               disabled={authLoading}
               className="text-xs text-neutral-500 hover:text-neutral-900 disabled:opacity-50 dark:text-neutral-400 dark:hover:text-neutral-100">
-              {authLoading ? 'Checking…' : 'Recheck'}
+              {authLoading
+                ? t('settings.ai.claudeCode.checking')
+                : t('settings.ai.claudeCode.recheck')}
             </button>
           </div>
           <AuthDetail auth={auth} loading={authLoading} />
@@ -313,15 +346,19 @@ function ClaudeCodeModal({
               disabled={launching}
               className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800">
               {launching
-                ? 'Opening terminal…'
+                ? t('settings.ai.claudeCode.openingTerminal')
                 : auth?.source === 'none'
-                  ? 'Sign in with Claude'
-                  : 'Reconnect'}
+                  ? t('settings.ai.claudeCode.signIn')
+                  : t('settings.ai.claudeCode.reconnect')}
             </button>
             <p className="mt-1.5 text-[11px] text-stone-500 dark:text-neutral-400">
-              Opens a terminal running <code>claude login</code>. After it completes, click{' '}
-              <strong>Recheck</strong>.
+              {t('settings.ai.claudeCode.loginHint')}
             </p>
+            {launchError && (
+              <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400" role="alert">
+                {launchError}
+              </p>
+            )}
           </div>
         </div>
 
@@ -330,19 +367,19 @@ function ClaudeCodeModal({
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-xs font-medium text-stone-900 dark:text-neutral-100">
-                Full access
+                {t('settings.ai.claudeCode.fullAccess')}
               </div>
               <p className="mt-0.5 text-[11px] leading-4 text-stone-500 dark:text-neutral-400">
                 {fullAccess
-                  ? 'Claude Code can run commands, use the network, and spawn subagents.'
-                  : 'Accept edits only — auto-applies file edits, gates commands & network.'}
+                  ? t('settings.ai.claudeCode.fullAccessOn')
+                  : t('settings.ai.claudeCode.fullAccessOff')}
               </p>
             </div>
             <button
               type="button"
               role="switch"
               aria-checked={fullAccess === true}
-              aria-label="Full access"
+              aria-label={t('settings.ai.claudeCode.fullAccess')}
               disabled={fullAccess === null || savingAccess}
               onClick={() => void toggleFullAccess(!fullAccess)}
               className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:cursor-wait disabled:opacity-50 ${
@@ -359,8 +396,8 @@ function ClaudeCodeModal({
           </div>
           <p className="mt-1.5 text-[11px] leading-4 text-stone-400 dark:text-neutral-500">
             {isMac()
-              ? 'On macOS, ~/.openhuman stays protected by the sandbox in either mode.'
-              : 'Full access is unconfined on this platform — enable only if you trust the workspace.'}
+              ? t('settings.ai.claudeCode.sandboxNoteMac')
+              : t('settings.ai.claudeCode.sandboxNoteOther')}
           </p>
         </div>
       </div>
@@ -376,21 +413,24 @@ function isMac(): boolean {
 
 /** Detailed auth line inside the modal. */
 function AuthDetail({ auth, loading }: { auth: ClaudeCodeAuthStatus | null; loading: boolean }) {
+  const { t } = useT();
   if (!auth) {
     return (
       <p className="text-xs text-neutral-500 dark:text-neutral-400">
-        {loading ? 'Checking sign-in…' : 'Enable Claude Code to check sign-in.'}
+        {loading
+          ? t('settings.ai.claudeCode.checkingSignIn')
+          : t('settings.ai.claudeCode.enableToCheck')}
       </p>
     );
   }
   if (auth.source === 'subscription') {
-    const who = auth.account_email ?? 'Claude subscription';
+    const who = auth.account_email ?? t('settings.ai.claudeCode.subscriptionFallback');
     const plan = auth.subscription_type
       ? ` (${formatSubscriptionType(auth.subscription_type)})`
       : '';
     return (
       <p className="text-xs text-emerald-600 dark:text-emerald-400">
-        Signed in as {who}
+        {t('settings.ai.claudeCode.signedInAs')} {who}
         {plan}
       </p>
     );
@@ -398,7 +438,7 @@ function AuthDetail({ auth, loading }: { auth: ClaudeCodeAuthStatus | null; load
   if (auth.source === 'api_key_env') {
     return (
       <p className="text-xs text-emerald-600 dark:text-emerald-400">
-        Using <code>ANTHROPIC_API_KEY</code> from the environment.
+        {t('settings.ai.claudeCode.usingApiKeyEnvDetail')}
       </p>
     );
   }
@@ -406,17 +446,19 @@ function AuthDetail({ auth, loading }: { auth: ClaudeCodeAuthStatus | null; load
     if (looksNotInstalled(auth.reason)) {
       return (
         <p className="text-xs text-amber-600 dark:text-amber-400">
-          Claude Code CLI not found — install via{' '}
-          <code>npm install -g @anthropic-ai/claude-code</code>.
+          {t('settings.ai.claudeCode.notFoundInstall')}
         </p>
       );
     }
     return (
       <p className="text-xs text-amber-600 dark:text-amber-400">
-        Couldn't determine sign-in state. Your <code>claude</code> CLI may predate{' '}
-        <code>auth status</code> — try Reconnect, then Recheck.
+        {t('settings.ai.claudeCode.unknownDetail')}
       </p>
     );
   }
-  return <p className="text-xs text-amber-600 dark:text-amber-400">Not signed in.</p>;
+  return (
+    <p className="text-xs text-amber-600 dark:text-amber-400">
+      {t('settings.ai.claudeCode.notSignedIn')}
+    </p>
+  );
 }

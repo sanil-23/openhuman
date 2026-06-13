@@ -2120,7 +2120,7 @@ const CustomRoutingDialog = ({
                     workload is already pinned to it (keeps the select value
                     valid). */}
                 {(claudeCodeEnabled || source?.kind === 'claude-code') && (
-                  <option value="claude-code:">Claude Code CLI</option>
+                  <option value="claude-code:">{t('settings.ai.claudeCode.modalTitle')}</option>
                 )}
               </select>
             </div>
@@ -2656,7 +2656,7 @@ const GlobalOwnModelSelector = ({
                   <option value="local:">{t('settings.ai.provider.ollama')}</option>
                 ) : null}
                 {(claudeCodeEnabled || source?.kind === 'claude-code') && (
-                  <option value="claude-code:">Claude Code CLI</option>
+                  <option value="claude-code:">{t('settings.ai.claudeCode.modalTitle')}</option>
                 )}
               </select>
             </div>

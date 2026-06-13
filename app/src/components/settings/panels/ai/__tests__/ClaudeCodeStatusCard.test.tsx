@@ -6,12 +6,19 @@ import { ClaudeCodeConnect } from '../ClaudeCodeStatusCard';
 
 const authProbe = vi.fn();
 const loginLaunch = vi.fn();
+const getSettings = vi.fn();
+const setFullAccess = vi.fn();
 
 vi.mock('../../../../../utils/tauriCommands/config', () => ({
   // Resolves to the BARE AuthStatus (no `{ result }` envelope), matching the
   // real wrapper.
   openhumanClaudeCodeAuthStatus: () => authProbe(),
   openhumanClaudeCodeLoginLaunch: () => loginLaunch(),
+  // The modal reads the persisted full-access toggle on open and writes it
+  // when toggled — mock both so the modal tests exercise real UI instead of
+  // throwing on a missing export.
+  openhumanClaudeCodeSettings: () => getSettings(),
+  openhumanClaudeCodeSetFullAccess: (enabled: boolean) => setFullAccess(enabled),
 }));
 
 const noop = () => {};
@@ -20,8 +27,14 @@ describe('ClaudeCodeConnect', () => {
   beforeEach(() => {
     authProbe.mockReset();
     loginLaunch.mockReset();
+    getSettings.mockReset();
+    setFullAccess.mockReset();
     loginLaunch.mockResolvedValue('cmd');
     authProbe.mockResolvedValue({ source: 'none', last_checked: 0 });
+    getSettings.mockResolvedValue({ full_access: false });
+    setFullAccess.mockImplementation((enabled: boolean) =>
+      Promise.resolve({ full_access: enabled })
+    );
   });
 
   it('disconnected: shows the "Claude Code" button + "Not connected" summary, no probe', () => {
@@ -112,6 +125,33 @@ describe('ClaudeCodeConnect', () => {
     await user.click(within(dialog).getByRole('button', { name: /Close/i }));
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('modal: full-access toggle reads then persists the setting', async () => {
+    getSettings.mockResolvedValue({ full_access: false });
+    const user = userEvent.setup();
+    render(<ClaudeCodeConnect connected onConnect={noop} onDisconnect={noop} />);
+    await user.click(screen.getByRole('button', { name: /^Claude Code$/i }));
+    const dialog = await screen.findByRole('dialog');
+    const sw = within(dialog).getByRole('switch', { name: /Full access/i });
+    // Loaded as OFF (acceptEdits) from the mocked settings read.
+    await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'false'));
+    await user.click(sw);
+    await waitFor(() => expect(setFullAccess).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'true'));
+  });
+
+  it('modal: surfaces an error when launching the login terminal fails', async () => {
+    loginLaunch.mockRejectedValue(new Error('no terminal'));
+    const user = userEvent.setup();
+    render(<ClaudeCodeConnect connected onConnect={noop} onDisconnect={noop} />);
+    await user.click(screen.getByRole('button', { name: /^Claude Code$/i }));
+    const dialog = await screen.findByRole('dialog');
+    // `none` auth → the launch button reads "Sign in with Claude".
+    await user.click(within(dialog).getByRole('button', { name: /Sign in with Claude/i }));
+    await waitFor(() => {
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(/Could not open the login/i);
     });
   });
 });
