@@ -167,12 +167,19 @@ async fn handle_post(
         super::subagent_depth::HEADER_SUBAGENT_DEPTH,
     ));
 
-    if body.get("id").is_none() {
-        let _ = super::subagent_depth::scope(depth, protocol::handle_json_value(body)).await;
+    // `handle_json_value` can dispatch `run_subagent` (build an Agent + run a
+    // full turn), so its future is very large. Box it onto the heap before
+    // awaiting so this handler's stack frame stays small — an inline giant
+    // future here overflows the tokio worker stack (it was already borderline;
+    // wrapping it in the depth `scope` tipped it over).
+    let has_id = body.get("id").is_some();
+    let responses =
+        super::subagent_depth::scope(depth, Box::pin(protocol::handle_json_value(body))).await;
+    if !has_id {
         return StatusCode::NO_CONTENT.into_response();
     }
 
-    match super::subagent_depth::scope(depth, protocol::handle_json_value(body)).await {
+    match responses {
         responses if responses.is_empty() => StatusCode::NO_CONTENT.into_response(),
         responses if responses.len() == 1 => {
             Json(responses.into_iter().next().unwrap()).into_response()
@@ -182,7 +189,9 @@ async fn handle_post(
 }
 
 async fn handle_initialize(state: &AppState, body: Value) -> Response {
-    let responses = protocol::handle_json_value(body).await;
+    // Box the (large) dispatch future onto the heap to keep this handler's
+    // stack frame small — see the note in `handle_post`.
+    let responses = Box::pin(protocol::handle_json_value(body)).await;
     let Some(response) = responses.into_iter().next() else {
         return StatusCode::NO_CONTENT.into_response();
     };

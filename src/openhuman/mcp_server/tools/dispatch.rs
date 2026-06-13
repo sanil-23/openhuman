@@ -345,11 +345,13 @@ async fn run_subagent_tool(params: &Map<String, Value>) -> Result<Value, ToolCal
         message_id: uuid::Uuid::new_v4().to_string(),
     };
     // Run the subagent one level deeper in the chain, so its own Claude Code
-    // turns stamp `child_depth` onto any grandchildren they spawn.
-    let response = subagent_depth::scope(
+    // turns stamp `child_depth` onto any grandchildren they spawn. The agent
+    // turn future is large; box it onto the heap so this tool (and the
+    // `handle_json_value` dispatch above it) keeps a small stack frame.
+    let response = Box::pin(subagent_depth::scope(
         child_depth,
         crate::openhuman::agent::turn_origin::with_origin(origin, agent.run_single(&prompt)),
-    )
+    ))
     .await
     .map_err(|err| ToolCallError::Internal(format!("subagent `{agent_id}` failed: {err}")))?;
 
