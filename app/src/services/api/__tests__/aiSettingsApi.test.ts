@@ -584,6 +584,7 @@ describe('saveAISettings', () => {
         reasoning: { kind: 'cloud', providerSlug: 'openai', model: 'gpt-4o' },
         agentic: { kind: 'openhuman' },
         coding: { kind: 'openhuman' },
+        vision: { kind: 'openhuman' },
         memory: { kind: 'openhuman' },
 
         heartbeat: { kind: 'openhuman' },
@@ -671,6 +672,7 @@ describe('saveAISettings', () => {
         reasoning: { kind: 'openhuman' },
         agentic: { kind: 'openhuman' },
         coding: { kind: 'openhuman' },
+        vision: { kind: 'openhuman' },
         memory: { kind: 'openhuman' },
 
         heartbeat: { kind: 'openhuman' },
@@ -697,6 +699,7 @@ describe('saveAISettings', () => {
       routing: {
         ...makeSettings().routing,
         coding: { kind: 'cloud', providerSlug: 'openai', model: 'gpt-4o-mini' },
+        vision: { kind: 'cloud', providerSlug: 'openai', model: 'gpt-4o-mini' },
       },
     });
 
@@ -727,6 +730,7 @@ describe('saveAISettings', () => {
       routing: {
         ...makeSettings().routing,
         coding: { kind: 'cloud', providerSlug: 'openai', model: 'gpt-4o-mini' },
+        vision: { kind: 'cloud', providerSlug: 'openai', model: 'gpt-4o-mini' },
       },
     });
     await saveAISettings(prev, next);

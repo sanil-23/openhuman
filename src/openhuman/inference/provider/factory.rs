@@ -154,7 +154,7 @@ pub fn resolve_model_for_hint(hint_or_tier: &str, config: &Config) -> String {
 pub(crate) fn is_known_openhuman_tier(model: &str) -> bool {
     use crate::openhuman::config::{
         MODEL_AGENTIC_V1, MODEL_CHAT_V1, MODEL_CODING_V1, MODEL_REASONING_QUICK_V1,
-        MODEL_REASONING_V1, MODEL_SUMMARIZATION_V1,
+        MODEL_REASONING_V1, MODEL_SUMMARIZATION_V1, MODEL_VISION_V1,
     };
     matches!(
         model,
@@ -164,11 +164,13 @@ pub(crate) fn is_known_openhuman_tier(model: &str) -> bool {
             | MODEL_CODING_V1
             | MODEL_REASONING_QUICK_V1
             | MODEL_SUMMARIZATION_V1
+            | MODEL_VISION_V1
             | "hint:reasoning"
             | "hint:chat"
             | "hint:agentic"
             | "hint:coding"
             | "hint:summarization"
+            | "hint:vision"
     )
 }
 
@@ -187,10 +189,13 @@ pub(crate) fn is_known_openhuman_tier(model: &str) -> bool {
 pub(crate) fn oh_tier_supports_vision(model: &str) -> bool {
     use crate::openhuman::config::{
         MODEL_AGENTIC_V1, MODEL_CHAT_V1, MODEL_CODING_V1, MODEL_REASONING_QUICK_V1,
-        MODEL_REASONING_V1, MODEL_SUMMARIZATION_V1,
+        MODEL_REASONING_V1, MODEL_SUMMARIZATION_V1, MODEL_VISION_V1,
     };
     match model {
         MODEL_REASONING_V1 | "hint:reasoning" => true,
+        // Dedicated multimodal tier — the managed backend serves this with the
+        // vision flag enabled. This is what the vision sub-agent rides on.
+        MODEL_VISION_V1 | "hint:vision" => true,
         MODEL_CHAT_V1 | "hint:chat" => false,
         MODEL_REASONING_QUICK_V1 => false,
         MODEL_AGENTIC_V1 | "hint:agentic" => false,
@@ -223,6 +228,10 @@ pub fn provider_for_role(role: &str, config: &Config) -> String {
         "reasoning" => config.reasoning_provider.as_deref(),
         "agentic" => config.agentic_provider.as_deref(),
         "coding" => config.coding_provider.as_deref(),
+        // Tier-specific multimodal model; like `agentic` it is NOT part of the
+        // chat-tier BYOK inheritance below — when unset it falls through to
+        // `primary_cloud` (→ managed `vision-v1`).
+        "vision" => config.vision_provider.as_deref(),
         // `memory_provider` covers both the memory-tree extract path and
         // the summarizer sub-agent (whose definition declares
         // `hint = "summarization"`). Both are "produce a condensed
@@ -728,6 +737,7 @@ fn make_openhuman_backend(config: &Config) -> anyhow::Result<(Box<dyn Provider>,
         Some("agentic") => crate::openhuman::config::MODEL_AGENTIC_V1.to_string(),
         Some("coding") => crate::openhuman::config::MODEL_CODING_V1.to_string(),
         Some("summarization") => crate::openhuman::config::MODEL_SUMMARIZATION_V1.to_string(),
+        Some("vision") => crate::openhuman::config::MODEL_VISION_V1.to_string(),
         Some(_) => {
             // Unrecognised hint — forward verbatim; the backend decides validity.
             model
@@ -739,7 +749,7 @@ fn make_openhuman_backend(config: &Config) -> anyhow::Result<(Box<dyn Provider>,
                 log::warn!(
                     "[providers][chat-factory] model '{}' is not a recognized OpenHuman \
                      backend tier (valid: reasoning-v1, chat-v1, agentic-v1, coding-v1, \
-                     reasoning-quick-v1, summarization-v1); falling back to '{}'",
+                     reasoning-quick-v1, summarization-v1, vision-v1); falling back to '{}'",
                     model,
                     crate::openhuman::config::MODEL_REASONING_V1,
                 );

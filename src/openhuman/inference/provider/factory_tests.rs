@@ -835,6 +835,7 @@ fn known_tiers_pass() {
         "coding-v1",
         "reasoning-quick-v1",
         "summarization-v1",
+        "vision-v1",
     ] {
         assert!(
             is_known_openhuman_tier(tier),
@@ -850,6 +851,7 @@ fn known_hints_pass() {
     assert!(is_known_openhuman_tier("hint:agentic"));
     assert!(is_known_openhuman_tier("hint:coding"));
     assert!(is_known_openhuman_tier("hint:summarization"));
+    assert!(is_known_openhuman_tier("hint:vision"));
 }
 
 #[test]
@@ -901,6 +903,15 @@ fn unknown_models_are_not_vision_capable() {
     assert!(!oh_tier_supports_vision("gpt-5"));
     assert!(!oh_tier_supports_vision("claude-opus-4-7"));
     assert!(!oh_tier_supports_vision(""));
+}
+
+#[test]
+fn vision_tier_is_vision_capable() {
+    // The dedicated multimodal tier (and its hint form) reports vision support,
+    // so the turn engine's image gate accepts image turns for the vision
+    // sub-agent — managed or BYOK (which resolves via this same alias).
+    assert!(oh_tier_supports_vision("vision-v1"));
+    assert!(oh_tier_supports_vision("hint:vision"));
 }
 
 #[test]
