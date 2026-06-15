@@ -229,9 +229,16 @@ pub(super) async fn run_inner_loop(
 /// Reuses the same `enabled` + `autocompact_enabled` toggles and
 /// `summarizer_model` override as the main chat, so the two paths stay in sync.
 async fn subagent_autocompact_config() -> Option<crate::openhuman::context::EngineAutocompact> {
-    let config = crate::openhuman::config::Config::load_or_init()
-        .await
-        .ok()?;
+    let config = match crate::openhuman::config::Config::load_or_init().await {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "[subagent_runner] failed to load config; engine autocompaction disabled"
+            );
+            return None;
+        }
+    };
     let ctx = &config.context;
     if !ctx.enabled || !ctx.autocompact_enabled {
         tracing::debug!(
