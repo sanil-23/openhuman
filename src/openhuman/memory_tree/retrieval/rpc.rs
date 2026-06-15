@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::openhuman::config::Config;
 use crate::openhuman::memory_store::chunks::types::SourceKind;
 use crate::openhuman::memory_tree::retrieval::{
+    cover::cover_window,
     drill_down::drill_down,
     fetch::fetch_leaves,
     search::search_entities,
@@ -72,6 +73,59 @@ pub async fn query_source_rpc(
             req.source_id.is_some(),
             req.source_kind,
             req.query.is_some(),
+            n
+        ),
+    ))
+}
+
+// ── cover_window ──────────────────────────────────────────────────────
+
+/// Request body for `memory_tree_cover_window`. `since_ms`/`until_ms` are the
+/// inclusive window bounds in epoch-milliseconds; the source filter mirrors
+/// `query_source`. See [`super::cover::cover_window`] for cover semantics.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CoverWindowRequest {
+    pub since_ms: i64,
+    pub until_ms: i64,
+    #[serde(default)]
+    pub source_id: Option<String>,
+    #[serde(default)]
+    pub source_kind: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// JSON-RPC handler body for `memory_tree_cover_window`. Parses the request,
+/// delegates to [`super::cover::cover_window`], logs PII-redacted counts.
+pub async fn cover_window_rpc(
+    config: &Config,
+    req: CoverWindowRequest,
+) -> Result<RpcOutcome<QueryResponse>, String> {
+    let source_kind = match req.source_kind.as_deref() {
+        Some(s) => Some(SourceKind::parse(s).map_err(|e| format!("cover_window: {e}"))?),
+        None => None,
+    };
+    let limit = req.limit.unwrap_or(0);
+    let resp = cover_window(
+        config,
+        req.since_ms,
+        req.until_ms,
+        req.source_id.as_deref(),
+        source_kind,
+        limit,
+    )
+    .await
+    .map_err(|e| format!("cover_window: {e}"))?;
+    let n = resp.hits.len();
+    // Omit scope / source_id from the log — can carry PII. Counts only.
+    Ok(RpcOutcome::single_log(
+        resp,
+        format!(
+            "memory_tree: cover_window since_ms={} until_ms={} has_source_id={} source_kind={:?} hits={}",
+            req.since_ms,
+            req.until_ms,
+            req.source_id.is_some(),
+            req.source_kind,
             n
         ),
     ))
