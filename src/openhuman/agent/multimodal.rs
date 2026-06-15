@@ -508,13 +508,25 @@ pub fn init_attachments_dir(dir: PathBuf) {
     }
 }
 
-/// Resolve the attachments dir, falling back to a temp dir when unset (CLI /
-/// direct invocation / tests that never called [`init_attachments_dir`]). The
-/// persistence-pollution fix and rehydration both hold either way.
+/// Resolve the attachments dir, falling back to a **per-user private** dir when
+/// unset (CLI / direct invocation / tests that never called
+/// [`init_attachments_dir`]). The persistence-pollution fix and rehydration both
+/// hold either way.
 fn attachments_dir() -> PathBuf {
     ATTACHMENTS_DIR
         .get()
         .cloned()
+        .unwrap_or_else(fallback_attachments_dir)
+}
+
+/// Per-user fallback attachments dir used only when [`init_attachments_dir`] was
+/// never called. Uses the OS user cache dir (e.g. `~/Library/Caches/...`,
+/// `~/.cache/...`) so persisted image bytes aren't dropped into a world-readable
+/// shared `temp_dir()` on multi-user hosts. Only falls back to `temp_dir()` when
+/// no user cache dir can be resolved at all.
+fn fallback_attachments_dir() -> PathBuf {
+    directories::BaseDirs::new()
+        .map(|d| d.cache_dir().join("openhuman-attachments"))
         .unwrap_or_else(|| std::env::temp_dir().join("openhuman-attachments"))
 }
 
@@ -583,6 +595,11 @@ async fn enforce_attachments_cap(dir: &Path) {
         return;
     };
     while let Ok(Some(entry)) = rd.next_entry().await {
+        // Skip in-flight `.<id>.<ext>.tmp` writes (mirrors build_attachment_index)
+        // so concurrent atomic writes aren't evicted out from under a rename.
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
         if let Ok(meta) = entry.metadata().await {
             if meta.is_file() {
                 let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
