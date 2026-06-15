@@ -57,7 +57,7 @@ export type WorkloadId =
   | 'learning'
   | 'subconscious';
 
-export const CHAT_WORKLOADS: WorkloadId[] = ['chat', 'reasoning', 'agentic', 'coding', 'vision'];
+export const CHAT_WORKLOADS: WorkloadId[] = ['chat', 'reasoning', 'agentic', 'coding'];
 export const BACKGROUND_WORKLOADS: WorkloadId[] = [
   'memory',
   'heartbeat',
@@ -65,6 +65,14 @@ export const BACKGROUND_WORKLOADS: WorkloadId[] = [
   'subconscious',
 ];
 export const ALL_WORKLOADS: WorkloadId[] = [...CHAT_WORKLOADS, ...BACKGROUND_WORKLOADS];
+
+// Workloads that own a `<id>_provider` config field and must round-trip through
+// settings serialization. Includes the tier-specific `vision` workload, which
+// is deliberately NOT part of `CHAT_WORKLOADS`/`ALL_WORKLOADS`: it defaults to
+// the managed `vision-v1` tier and is a delegate (like agentic BYOK), so it does
+// not participate in the billing-suppression / "routed away from OpenHuman"
+// checks in `useUsageState`.
+export const ROUTABLE_WORKLOADS: WorkloadId[] = [...ALL_WORKLOADS, 'vision'];
 export const OPENAI_CODEX_OAUTH_MISSING_AUTH_URL = 'OPENAI_CODEX_OAUTH_MISSING_AUTH_URL';
 export const OPENAI_CODEX_OAUTH_MISSING_CALLBACK_URL = 'OPENAI_CODEX_OAUTH_MISSING_CALLBACK_URL';
 
@@ -349,7 +357,7 @@ export async function saveAISettings(prev: AISettings, next: AISettings): Promis
       }));
   }
 
-  for (const w of ALL_WORKLOADS) {
+  for (const w of ROUTABLE_WORKLOADS) {
     const a = serializeProviderRef(prev.routing[w]);
     const b = serializeProviderRef(next.routing[w]);
     if (a !== b) {
