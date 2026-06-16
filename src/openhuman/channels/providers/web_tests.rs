@@ -1925,3 +1925,126 @@ async fn parallel_turn_runs_concurrently_with_primary_on_same_thread() {
 
     set_test_run_chat_task_block(None).await;
 }
+
+// ── #3714: session-expired arm (must precede `auth_error`) ──────────────
+#[test]
+fn classify_session_expired_sentinel_routes_to_signin_not_generic() {
+    for raw in [
+        "SESSION_EXPIRED: backend session not active — sign in to resume LLM work",
+        "SESSION_EXPIRED: backend session token expired locally — re-authentication required",
+        "no backend session token; run auth_store_session first",
+    ] {
+        let c = classify_inference_error(raw);
+        assert_eq!(c.error_type, "session_expired", "raw={raw:?}");
+        assert!(!c.retryable, "session-expiry is not retryable: {raw:?}");
+        assert_ne!(
+            c.message,
+            generic_inference_error_user_message(),
+            "must not be the generic catch-all: {raw:?}"
+        );
+    }
+}
+
+#[test]
+fn classify_session_expired_claims_managed_backend_401_invalid_token_before_auth_error() {
+    // The OpenHuman backend 401 "Invalid token" envelope contains "401", which
+    // the `auth_error` arm would otherwise claim ("check your API key") — wrong
+    // for managed-backend users. The session arm must win.
+    let c = classify_inference_error(
+        "OpenHuman API error (401 Unauthorized): {\"error\":\"Invalid token\"}",
+    );
+    assert_eq!(c.error_type, "session_expired");
+}
+
+#[test]
+fn classify_byo_provider_401_stays_auth_error_not_session_expired() {
+    // A BYO provider's own 401 (user's API key) must NOT be swallowed by the
+    // session arm — it stays actionable as `auth_error`.
+    let c = classify_inference_error(
+        "OpenAI API error (401 Unauthorized): {\"error\":{\"message\":\"invalid_api_key\"}}",
+    );
+    assert_eq!(c.error_type, "auth_error");
+}
+
+// ── #3714: transport-drop arm (bucket #1, was the generic catch-all) ─────
+#[test]
+fn classify_connection_drop_routes_to_network_retryable() {
+    for raw in [
+        "error sending request for url (https://api.tinyhumans.ai/openai/v1/chat/completions): \
+         connection closed before message completed",
+        "request or response body error: unexpected end of file",
+        // Raw mid-stream SSE drop: managed backend leaves OFF the errorCode, so
+        // it reaches the ladder as a streaming error with a transport body.
+        "OpenHuman streaming API error: error reading a body from connection: \
+         end of file before message length reached",
+    ] {
+        let c = classify_inference_error(raw);
+        assert_eq!(c.error_type, "network", "raw={raw:?}");
+        assert!(c.retryable, "transport drop is retryable: {raw:?}");
+        assert_ne!(
+            c.message,
+            generic_inference_error_user_message(),
+            "raw={raw:?}"
+        );
+    }
+}
+
+#[test]
+fn classify_managed_sse_badrequest_not_misread_as_network() {
+    // A managed 400 frame carries errorCode → must stay provider_request_rejected
+    // (claimed by the errorCode short-circuit before the transport arm).
+    let c = classify_inference_error(
+        "OpenHuman streaming API error: {\"error\":{\"message\":\"Message has tool role, \
+         but there was no previous assistant message with a tool call!\",\
+         \"type\":\"stream_error\",\"errorCode\":\"BAD_REQUEST\"}}",
+    );
+    assert_eq!(c.error_type, "provider_request_rejected");
+}
+
+#[test]
+fn classify_timeout_not_shadowed_by_network_arm() {
+    let c = classify_inference_error("request timed out while reading response");
+    assert_eq!(c.error_type, "timeout");
+}
+
+// ── #3714: poisoned-history 400 gets the "we cleared it, resend" copy ────
+#[test]
+fn classify_managed_tool_ordering_400_gets_cleared_resend_copy() {
+    // Managed backend `validateToolMessageOrdering` rejection (orphaned tool
+    // message) arrives as a BAD_REQUEST SSE frame — must read "we cleared it,
+    // send again" (not "try a different model") and be retryable, since the
+    // de-poison guard already evicted the bad warm session.
+    let c = classify_inference_error(
+        "OpenHuman streaming API error: {\"error\":{\"message\":\"Message at index 3 has role \
+         'tool' but is not preceded by an assistant message with a matching tool_call\",\
+         \"type\":\"stream_error\",\"errorCode\":\"BAD_REQUEST\"}}",
+    );
+    assert_eq!(c.error_type, "provider_request_rejected");
+    assert!(c.retryable, "post-eviction resend works → retryable");
+    assert!(c.message.contains("cleared it"), "got: {}", c.message);
+    assert!(!c.message.contains("different model"), "got: {}", c.message);
+}
+
+#[test]
+fn classify_byo_tool_ordering_400_gets_cleared_resend_copy() {
+    let c = classify_inference_error(
+        "OpenAI API error (400 Bad Request): {\"error\":{\"message\":\"Invalid parameter: \
+         messages with role 'tool' must be a response to a preceding message with 'tool_calls'.\"}}",
+    );
+    assert_eq!(c.error_type, "provider_request_rejected");
+    assert!(c.retryable);
+    assert!(c.message.contains("cleared it"), "got: {}", c.message);
+}
+
+#[test]
+fn classify_genuine_param_400_keeps_model_mismatch_copy_not_glitch() {
+    // A real model/param 400 (no tool-ordering signature) must NOT get the
+    // "we cleared it" copy — resending the same params fails again.
+    let c = classify_inference_error(
+        "custom_openai API error (400 Bad Request): {\"error\":{\"message\":\
+         \"Unsupported value: 'temperature' must be 1 for this model\"}}",
+    );
+    assert_eq!(c.error_type, "provider_request_rejected");
+    assert!(!c.retryable, "param mismatch is not retryable");
+    assert!(!c.message.contains("cleared it"), "got: {}", c.message);
+}
