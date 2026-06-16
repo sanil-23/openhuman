@@ -20,7 +20,7 @@ use crate::openhuman::memory_queue::types::{
     JobOutcome, NewJob, NodeRef, ReembedBackfillPayload, SealDocumentPayload, SealPayload,
 };
 use crate::openhuman::memory_store::chunks::store as chunk_store;
-use crate::openhuman::memory_store::chunks::types::Chunk;
+use crate::openhuman::memory_store::chunks::types::{truncate_to_conservative_tokens, Chunk};
 use crate::openhuman::memory_store::content::{
     self as content_store, read as content_read, tags as content_tags,
 };
@@ -33,6 +33,21 @@ use crate::openhuman::memory_tree::tree::{LeafRef, TreeFactory};
 /// Default age for L0 flush_stale when the caller doesn't override.
 /// 1 hour means low-volume sources get summaries within a working session.
 const L0_DEFAULT_FLUSH_AGE_SECS: i64 = 60 * 60;
+
+/// Conservative per-text embed token budget. Each body is truncated to this
+/// (via [`cap_embed_text`]) before it joins an `embed_batch` call, so no single
+/// input can exceed the embedder's batch / context limit (`EMBED_NUM_CTX` =
+/// 8192) and terminally fail the reembed job. The estimate over-counts dense /
+/// multilingual text, so this stays safely under the real limit; the chunker
+/// keeps normal chunks well below it, so truncation is a last-resort backstop.
+const EMBED_SAFE_TOKENS: u32 = 7500;
+
+/// Truncate one body to [`EMBED_SAFE_TOKENS`] before it is batched for
+/// embedding. A backstop for any body that reaches an embed call without having
+/// passed through the conservative chunker (`split_by_token_budget`).
+fn cap_embed_text(text: &str) -> &str {
+    truncate_to_conservative_tokens(text, EMBED_SAFE_TOKENS)
+}
 
 /// Maximum `extract_chunk` jobs to coalesce in one worker tick.
 ///
@@ -231,7 +246,7 @@ struct PreparedExtract {
 async fn prepare_extract(config: &Config, job: &Job) -> Result<Option<PreparedExtract>> {
     let payload: ExtractChunkPayload =
         serde_json::from_str(&job.payload_json).context("parse ExtractChunk payload")?;
-    let Some(chunk) = chunk_store::get_chunk(config, &payload.chunk_id)? else {
+    let Some(mut chunk) = chunk_store::get_chunk(config, &payload.chunk_id)? else {
         log::warn!(
             "[memory::jobs] extract chunk missing chunk_id={}",
             payload.chunk_id
@@ -242,13 +257,17 @@ async fn prepare_extract(config: &Config, job: &Job) -> Result<Option<PreparedEx
     // Read the full body from disk (the `content` column in SQLite holds a
     // ≤500-char preview after the MD-on-disk migration). The scorer needs
     // the complete text so extraction operates over the full chunk body.
+    //
+    // Swap the full body INTO the owned chunk for scoring instead of cloning
+    // the whole struct: `score_chunk` only borrows `chunk`, so we temporarily
+    // replace `content` with the body, score, then restore the preview. This
+    // avoids a full `Chunk` clone (metadata + preview) per extract job, and —
+    // crucially — keeps `PreparedExtract` holding only the small preview rather
+    // than the full body, so a batch of N prepared items doesn't retain N full
+    // bodies in memory before finalize.
     let body = content_read::read_chunk_body(config, &chunk.id)
         .with_context(|| format!("read full body for extract chunk_id={}", chunk.id))?;
-    let chunk_with_body = {
-        let mut c = chunk.clone();
-        c.content = body;
-        c
-    };
+    let preview = std::mem::replace(&mut chunk.content, body);
 
     emit_build_progress(
         "extract",
@@ -260,7 +279,10 @@ async fn prepare_extract(config: &Config, job: &Job) -> Result<Option<PreparedEx
     );
 
     let scoring_cfg = score::ScoringConfig::from_config(config);
-    let result = score::score_chunk(&chunk_with_body, &scoring_cfg).await?;
+    let result = score::score_chunk(&chunk, &scoring_cfg).await?;
+
+    // Restore the preview, dropping the full body now that scoring is done.
+    chunk.content = preview;
     Ok(Some(PreparedExtract {
         job: job.clone(),
         chunk,
@@ -742,7 +764,12 @@ async fn reembed_collect(
     // Phase B: one batched embed call. Scope `texts` so its borrow on
     // `readable` ends before we consume `readable` below.
     let results = {
-        let texts: Vec<&str> = readable.iter().map(|(_, body)| body.as_str()).collect();
+        // Cap each body to the embed budget so no single input overflows the
+        // embedder's batch/context limit and fails the whole batch.
+        let texts: Vec<&str> = readable
+            .iter()
+            .map(|(_, body)| cap_embed_text(body))
+            .collect();
         embedder.embed_batch(&texts).await
     };
     if results.len() != readable.len() {

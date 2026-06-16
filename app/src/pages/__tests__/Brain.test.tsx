@@ -1,50 +1,89 @@
-/**
- * Tests for the Brain page orchestration: it shows the loading overlay, then
- * reveals the memory graph once data is fetched, the layout has settled
- * (mocked MemoryGraph fires onReady), and the minimum animation window passes.
- * Heavy children (the Pixi/SVG graph and the Lottie player) and the RPC are
- * mocked so this stays a fast unit test of the gate logic.
- */
-import { act, render, screen } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { renderWithProviders } from '../../test/test-utils';
 import Brain from '../Brain';
 
 const graphExportMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/tauriCommands', () => ({ memoryTreeGraphExport: graphExportMock }));
+vi.mock('../../utils/tauriCommands', () => ({
+  memoryTreeGraphExport: graphExportMock,
+  isTauri: () => false,
+}));
 
-// Mocked graph: fires onReady on mount to simulate the layout settling.
 vi.mock('../../components/intelligence/MemoryGraph', async () => {
   const React = await import('react');
   return {
-    MemoryGraph: ({ nodes, onReady }: { nodes: unknown[]; onReady?: () => void }) => {
-      React.useEffect(() => {
-        onReady?.();
-      }, [onReady]);
-      return React.createElement('div', { 'data-testid': 'memory-graph' }, `nodes:${nodes.length}`);
-    },
+    MemoryGraph: ({ nodes }: { nodes: unknown[] }) =>
+      React.createElement('div', { 'data-testid': 'memory-graph' }, `nodes:${nodes.length}`),
   };
 });
 
-vi.mock('../../components/LottieAnimation', async () => {
+vi.mock('../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (k: string) => k }) }));
+
+vi.mock('../../hooks/useSubconscious', () => ({
+  useSubconscious: () => ({
+    status: null,
+    mode: 'off',
+    refresh: vi.fn(),
+    triggerTick: vi.fn(),
+    setMode: vi.fn(),
+  }),
+}));
+
+vi.mock('../../components/intelligence/IntelligenceSubconsciousTab', async () => {
+  const React = await import('react');
+  return { default: () => React.createElement('div', { 'data-testid': 'brain-subconscious' }) };
+});
+vi.mock('../../components/PillTabBar', async () => {
   const React = await import('react');
   return {
-    default: ({ src }: { src: string }) =>
-      React.createElement('div', { 'data-testid': 'brain-lottie', 'data-src': src }),
+    default: ({ children }: { children?: React.ReactNode }) =>
+      React.createElement('div', null, children),
   };
 });
+vi.mock('../../components/ui/BetaBanner', () => ({ default: () => null }));
 
-// The memory workspace panels own their own polling/RPCs — stub them so this
-// stays an isolated test of the Brain page's loading/reveal orchestration.
 vi.mock('../../components/intelligence/MemoryControls', () => ({ MemoryControls: () => null }));
-vi.mock('../../components/intelligence/MemoryTreeStatusPanel', () => ({
-  MemoryTreeStatusPanel: () => null,
-}));
-vi.mock('../../components/intelligence/MemorySourcesRegistry', () => ({
-  MemorySourcesRegistry: () => null,
-}));
+vi.mock('../../components/intelligence/MemoryTreeStatusPanel', async () => {
+  const React = await import('react');
+  return {
+    MemoryTreeStatusPanel: () => React.createElement('div', { 'data-testid': 'brain-sync' }),
+  };
+});
+vi.mock('../../components/intelligence/MemorySourcesRegistry', async () => {
+  const React = await import('react');
+  return {
+    MemorySourcesRegistry: () => React.createElement('div', { 'data-testid': 'brain-sources' }),
+  };
+});
 vi.mock('../../components/intelligence/Toast', () => ({ ToastContainer: () => null }));
+
+// Knowledge & Memory tabs render relocated settings panels — stub each so the
+// Brain page's per-tab branches are exercised without their deep dependency trees.
+vi.mock('../Intelligence', async () => {
+  const React = await import('react');
+  return { default: () => React.createElement('div', { 'data-testid': 'brain-intelligence' }) };
+});
+vi.mock('../../components/settings/panels/MemoryDataPanel', async () => {
+  const React = await import('react');
+  return { default: () => React.createElement('div', { 'data-testid': 'brain-memory-data' }) };
+});
+vi.mock('../../components/settings/panels/MemoryDebugPanel', async () => {
+  const React = await import('react');
+  return { default: () => React.createElement('div', { 'data-testid': 'brain-memory-debug' }) };
+});
+vi.mock('../../components/settings/panels/AnalysisViewsPanel', async () => {
+  const React = await import('react');
+  return { default: () => React.createElement('div', { 'data-testid': 'brain-analysis-views' }) };
+});
+vi.mock('../../components/settings/layout/SettingsLayoutContext', async () => {
+  const React = await import('react');
+  return {
+    SettingsLayoutProvider: ({ children }: { children?: React.ReactNode }) =>
+      React.createElement(React.Fragment, null, children),
+  };
+});
 
 const makeGraph = (n: number) => ({
   nodes: Array.from({ length: n }, (_, i) => ({ id: `n${i}`, kind: 'summary', label: `N${i}` })),
@@ -55,79 +94,60 @@ const makeGraph = (n: number) => ({
 describe('Brain page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.useFakeTimers();
-    // jsdom has no matchMedia — default to "motion allowed".
-    window.matchMedia = vi
-      .fn()
-      .mockReturnValue({
-        matches: false,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      }) as unknown as typeof window.matchMedia;
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
-  it('shows the loading overlay first, then reveals the graph once ready', async () => {
+  it('renders the graph once data is fetched', async () => {
     graphExportMock.mockResolvedValue(makeGraph(3));
-    render(<Brain />);
-
-    // Overlay (with the Lottie flourish) is visible immediately.
-    expect(screen.getByTestId('brain-loading')).toBeInTheDocument();
-    expect(screen.getByTestId('brain-lottie')).toHaveAttribute(
-      'data-src',
-      '/lottie/brain-collecting.json'
-    );
-
-    // Flush the fetch + the minimum-display timer.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1300);
+      renderWithProviders(<Brain />);
     });
-
-    expect(screen.queryByTestId('brain-loading')).toBeNull();
-    expect(screen.getByTestId('memory-graph')).toHaveTextContent('nodes:3');
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-graph')).toHaveTextContent('nodes:3');
+    });
   });
 
-  it('reveals immediately (empty state) when there is no memory yet', async () => {
+  it('renders empty-state graph when there are no nodes', async () => {
     graphExportMock.mockResolvedValue(makeGraph(0));
-    render(<Brain />);
-
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1300);
+      renderWithProviders(<Brain />);
     });
-
-    expect(screen.queryByTestId('brain-loading')).toBeNull();
-    expect(screen.getByTestId('memory-graph')).toHaveTextContent('nodes:0');
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-graph')).toHaveTextContent('nodes:0');
+    });
   });
 
-  it('uses the static knowledge-node glyph (no Lottie) under reduced motion', async () => {
-    // Reduced motion → the floating Lottie is replaced by the still glyph.
-    window.matchMedia = vi
-      .fn()
-      .mockReturnValue({
-        matches: true,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      }) as unknown as typeof window.matchMedia;
-    graphExportMock.mockResolvedValue(makeGraph(2));
-    render(<Brain />);
-
-    expect(screen.getByTestId('brain-loading')).toBeInTheDocument();
-    expect(screen.getByTestId('brain-glyph')).toBeInTheDocument();
-    expect(screen.queryByTestId('brain-lottie')).toBeNull();
-  });
-
-  it('surfaces an error and dismisses the overlay when the fetch fails', async () => {
+  it('surfaces an error alert when the fetch fails', async () => {
     graphExportMock.mockRejectedValue(new Error('boom'));
-    render(<Brain />);
-
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(50);
+      renderWithProviders(<Brain />);
     });
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+    });
+  });
 
-    expect(screen.queryByTestId('brain-loading')).toBeNull();
-    expect(screen.getByRole('alert')).toBeInTheDocument();
+  // The Knowledge & Memory tabs render relocated settings panels inside the
+  // two-pane shell; the bespoke tabs share the standard scaffold. Drive each via
+  // the `?tab=` query param so every per-tab branch is exercised.
+  it.each([
+    ['intelligence', 'brain-intelligence'],
+    ['memory-data', 'brain-memory-data'],
+    ['memory-debug', 'brain-memory-debug'],
+    ['analysis-views', 'brain-analysis-views'],
+    ['sources', 'brain-sources'],
+    ['sync', 'brain-sync'],
+    ['subconscious', 'brain-subconscious'],
+  ])('renders the %s tab', async (tab, testId) => {
+    graphExportMock.mockResolvedValue(makeGraph(0));
+    await act(async () => {
+      renderWithProviders(<Brain />, { initialEntries: [`/?tab=${tab}`] });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId(testId)).toBeInTheDocument();
+    });
   });
 });
