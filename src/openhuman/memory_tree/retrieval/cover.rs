@@ -31,6 +31,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 
 use crate::openhuman::config::Config;
+use crate::openhuman::memory_queue::handlers::chunk_tree_scope;
 use crate::openhuman::memory_store::chunks::store::{list_chunks, ListChunksQuery};
 use crate::openhuman::memory_store::chunks::types::{Chunk, SourceKind};
 use crate::openhuman::memory_store::content::read as content_read;
@@ -43,11 +44,16 @@ use crate::openhuman::memory_tree::tree::store;
 /// Default cap on returned cover items when the caller passes `limit = 0`.
 const DEFAULT_LIMIT: usize = 200;
 
-/// Upper bound on in-window chunks scanned across all sources. A 24h window
+/// Upper bound on in-window chunks scanned across **all** sources. A 24h window
 /// rarely exceeds this; if it does we log and truncate (the excess simply
 /// doesn't appear — never silently mis-covered, since a frontier summary still
 /// stands in for a whole sealed subtree).
 const MAX_WINDOW_CHUNKS: usize = 5_000;
+
+/// Per-source cap on raw in-window chunks retained for the cover. Applied
+/// **after** grouping so a single high-volume source can't crowd every other
+/// source out of the result; excess is logged, never silently mis-covered.
+const MAX_CHUNKS_PER_SOURCE: usize = 2_000;
 
 /// Entrypoint for `memory_tree_cover_window`. Blocking SQLite work runs on
 /// `spawn_blocking`; the async caller stays on its runtime. Results are
@@ -128,23 +134,46 @@ fn collect_cover(
             since_ms: Some(since_ms),
             until_ms: Some(until_ms),
             limit: Some(MAX_WINDOW_CHUNKS),
+            // Skip rows the admission gate rejected: they linger in
+            // `mem_tree_chunks` but were deliberately never appended to a tree,
+            // so surfacing them raw would leak filtered-out junk into the brief.
+            exclude_dropped: true,
             ..Default::default()
         },
     )?;
     if chunks.len() == MAX_WINDOW_CHUNKS {
         log::warn!(
-            "[retrieval::cover] in-window chunk cap {MAX_WINDOW_CHUNKS} hit — \
+            "[retrieval::cover] global in-window chunk cap {MAX_WINDOW_CHUNKS} hit — \
              some raw leaves may be omitted"
         );
     }
 
-    // Group by source (the chunk's `source_id` == its source tree's scope).
+    // Group by **tree scope**, not raw `source_id`: shared-directory sources
+    // (Notion `path_scope`) and GitHub per-item ids seal under a derived scope,
+    // so grouping by `source_id` would miss their tree and emit everything raw.
+    // Use the same derivation as the append path. A per-source cap keeps one
+    // high-volume source from crowding out the rest.
     let mut by_source: HashMap<String, Vec<Chunk>> = HashMap::new();
+    let mut capped_sources = 0usize;
+    let mut capped_chunks = 0usize;
     for chunk in chunks {
-        by_source
-            .entry(chunk.metadata.source_id.clone())
-            .or_default()
-            .push(chunk);
+        let scope = chunk_tree_scope(&chunk.metadata);
+        let bucket = by_source.entry(scope).or_default();
+        if bucket.len() < MAX_CHUNKS_PER_SOURCE {
+            bucket.push(chunk);
+        } else {
+            if bucket.len() == MAX_CHUNKS_PER_SOURCE {
+                capped_sources += 1;
+            }
+            capped_chunks += 1;
+        }
+    }
+    if capped_chunks > 0 {
+        // Omit scope (PII) — aggregate counts only.
+        log::warn!(
+            "[retrieval::cover] {capped_sources} source(s) hit per-source cap \
+             {MAX_CHUNKS_PER_SOURCE} — {capped_chunks} raw leaf/leaves omitted"
+        );
     }
     log::debug!("[retrieval::cover] in-window sources n={}", by_source.len());
 
