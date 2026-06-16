@@ -5,7 +5,7 @@ use super::super::turn_engine_adapter::{AgentCheckpoint, AgentObserver, AgentToo
 use super::super::types::Agent;
 use super::{
     integration_announcement_note, mcp_announcement_note, newly_connected_slugs,
-    normalize_tool_call, skill_announcement_note,
+    skill_announcement_note,
 };
 use crate::openhuman::agent::harness;
 use crate::openhuman::agent::harness::definition::TriggerMemoryAgent;
