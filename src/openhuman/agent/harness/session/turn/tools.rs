@@ -357,16 +357,20 @@ impl Agent {
         }
     }
 
-    /// Reload installed skills/workflows from disk into [`Self::workflows`] so a
-    /// skill installed mid-session appears in the `## Installed Skills`
-    /// catalogue (and is runnable via `run_skill`) without a session restart.
+    /// Reconcile the tracked installed-skill set ([`Self::workflows`]) against
+    /// what is on disk, so a skill installed/uninstalled mid-session can be
+    /// surfaced to the model without a session restart.
     ///
-    /// Mirrors [`Self::refresh_delegation_tools_from_cached_integrations`]: the
-    /// catalogue section is rebuilt from `self.workflows` every turn, so simply
-    /// refreshing the slice surfaces new skills on the next turn. Genuinely-new
-    /// skill ids (present on disk but not in the prior snapshot) are parked in
-    /// [`Self::pending_skill_announcement`] — announced exactly once via
-    /// [`Self::announced_skills`] — to be surfaced on the next user message.
+    /// Note the system-prompt `## Installed Skills` block is frozen at turn 1
+    /// (KV-cache stability — it is only built when history is empty), so this
+    /// does NOT rebuild that block for the live session. Instead — exactly like
+    /// [`Self::refresh_delegation_tools_from_cached_integrations`] / the MCP
+    /// mid-session mechanism — genuinely-new skill ids (present on disk but not
+    /// in the prior snapshot) are parked in [`Self::pending_skill_announcement`]
+    /// (announced once via [`Self::announced_skills`]) and surfaced on the next
+    /// user turn; `run_skill` then loads/runs them fresh from disk. Updating the
+    /// tracked slice keeps the next diff correct and feeds a *fresh* session's
+    /// rendered catalogue.
     ///
     /// Returns `true` when the installed set changed. Cheap no-op when it
     /// hasn't: a directory scan plus an id-set comparison, no prompt rebuild.
@@ -393,7 +397,7 @@ impl Agent {
             .cloned()
             .collect();
         log::info!(
-            "[agent_loop] installed-skills set changed ({trigger}): {} -> {} skills; refreshing catalogue (system prompt section rebuilds next turn)",
+            "[agent_loop] installed-skills set changed ({trigger}): {} -> {} skills; updating tracked set + parking announcement (system-prompt catalogue is frozen mid-session; the user-turn note surfaces the change)",
             self.workflows.len(),
             latest.len()
         );

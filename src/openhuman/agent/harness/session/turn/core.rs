@@ -56,6 +56,11 @@ impl Agent {
             self.config.max_tool_iterations
         );
         self.ensure_composio_integrations_listener();
+        // Arm the installed-skills listener at turn start (not lazily inside
+        // `drain_skill_events`, which is only reached after the first turn) —
+        // broadcast subscriptions are not retroactive, so a skill installed
+        // during turn 1 would otherwise be missed until a later subscribe.
+        self.ensure_skill_events_listener();
         // ── Session transcript resume ─────────────────────────────────
         // On a fresh session (empty history), look for a previous
         // transcript to pre-populate the exact provider messages for
@@ -171,14 +176,17 @@ impl Agent {
             // old `Config::load_or_init()` round-trip on every turn.
             //
             let _ = self.refresh_delegation_tools_from_cached_integrations("turn-boundary");
-            // Same idea for installed skills: a skill installed mid-session
-            // (via the Skills UI / skill_registry) lands on disk but the
-            // `## Installed Skills` catalogue is built from `self.workflows`,
-            // a session-build snapshot. Event-driven (mirror of the composio
-            // path): only re-scan disk when a `WorkflowsChanged` event was
-            // published since the last turn — no per-turn filesystem walk on
-            // the steady-state hot path. The refresh updates the catalogue +
-            // `run_skill` and parks an announcement for the user message below.
+            // Same idea for installed skills. The system-prompt
+            // `## Installed Skills` block is frozen at turn 1 for KV-cache
+            // stability (history is non-empty here, so it is never rebuilt
+            // mid-session), so — exactly like the MCP mechanism — the
+            // user-turn announcement below is what surfaces a mid-session
+            // install to the model. `refresh_workflows` updates the tracked
+            // set (so the next refresh diffs correctly and a future fresh
+            // session renders the new catalogue) and parks the announcement.
+            // Event-driven (mirror of the composio path): only re-scan disk
+            // when a `WorkflowsChanged` event was published since the last
+            // turn — no per-turn filesystem walk on the steady-state hot path.
             if self.drain_skill_events() {
                 let _ = self.refresh_workflows("event");
             }
