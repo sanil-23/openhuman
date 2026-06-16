@@ -205,22 +205,25 @@ fn connections() -> &'static RwLock<HashMap<String, Arc<Connection>>> {
 
 // ── Per-server last connect error ────────────────────────────────────────────
 
-static LAST_ERRORS: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
-
-fn last_errors() -> &'static RwLock<HashMap<String, String>> {
-    LAST_ERRORS.get_or_init(|| RwLock::new(HashMap::new()))
+/// The most recent connect failure for one server: the raw diagnostic message
+/// (for logs/debugging) plus whether it was specifically an HTTP 401 (auth
+/// required). Both live in ONE record under ONE lock so a status read can never
+/// observe a torn snapshot — e.g. the message updated but the auth flag stale,
+/// which a two-map design would allow if `all_status` interleaved between the
+/// two writes (#3719).
+#[derive(Clone)]
+struct ConnectFailure {
+    message: String,
+    /// `true` when the failure was an MCP HTTP 401 → drives
+    /// `ServerStatus::Unauthorized` so the UI offers a re-auth path instead of
+    /// a raw error blob.
+    unauthorized: bool,
 }
 
-/// `server_id`s whose most recent connect failed specifically with an HTTP 401
-/// (auth required), as opposed to a generic transport error. Drives the
-/// `ServerStatus::Unauthorized` state so the UI can offer a re-auth path
-/// instead of a raw error blob (#3719). Kept separate from [`LAST_ERRORS`]
-/// (which still records the raw diagnostic string for logs/debugging) so the
-/// distinction survives without changing the error-message map's shape.
-static AUTH_REQUIRED: OnceLock<RwLock<std::collections::HashSet<String>>> = OnceLock::new();
+static LAST_ERRORS: OnceLock<RwLock<HashMap<String, ConnectFailure>>> = OnceLock::new();
 
-fn auth_required() -> &'static RwLock<std::collections::HashSet<String>> {
-    AUTH_REQUIRED.get_or_init(|| RwLock::new(std::collections::HashSet::new()))
+fn last_errors() -> &'static RwLock<HashMap<String, ConnectFailure>> {
+    LAST_ERRORS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 /// Whether a connect failure's root cause was an MCP HTTP 401 (auth required).
@@ -236,12 +239,20 @@ fn is_unauthorized_error(err: &anyhow::Error) -> bool {
 /// Read the most recent connect-failure message for `server_id`. `None` when
 /// the server has never failed, or when the most recent connect succeeded.
 pub async fn last_error_for(server_id: &str) -> Option<String> {
-    last_errors().read().await.get(server_id).cloned()
+    last_errors()
+        .read()
+        .await
+        .get(server_id)
+        .map(|f| f.message.clone())
 }
 
 /// Whether `server_id`'s most recent connect failed due to HTTP 401.
 pub async fn needs_auth(server_id: &str) -> bool {
-    auth_required().read().await.contains(server_id)
+    last_errors()
+        .read()
+        .await
+        .get(server_id)
+        .is_some_and(|f| f.unauthorized)
 }
 
 /// Drop any recorded error (generic or auth-required) for `server_id`. Called on
@@ -249,7 +260,6 @@ pub async fn needs_auth(server_id: &str) -> bool {
 /// transitions.
 pub async fn clear_last_error(server_id: &str) {
     last_errors().write().await.remove(server_id);
-    auth_required().write().await.remove(server_id);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -272,29 +282,23 @@ pub async fn connect(config: &Config, server: &InstalledServer) -> anyhow::Resul
     match &result {
         Ok(_) => {
             last_errors().write().await.remove(&server.server_id);
-            auth_required().write().await.remove(&server.server_id);
             tracing::debug!(
                 "[mcp-registry] last_error cleared server_id={}",
                 server.server_id
             );
         }
         Err(err) => {
-            // Always record the raw diagnostic for logs/debugging…
-            last_errors()
-                .write()
-                .await
-                .insert(server.server_id.clone(), err.to_string());
-            // …but classify a 401 separately so status reporting can surface an
-            // actionable "needs authentication" state rather than the raw error.
+            // Record the raw diagnostic AND the 401 classification together in a
+            // single record under one lock, so a concurrent `all_status` can't
+            // observe a torn snapshot (message set but auth flag stale).
             let unauthorized = is_unauthorized_error(err);
-            if unauthorized {
-                auth_required()
-                    .write()
-                    .await
-                    .insert(server.server_id.clone());
-            } else {
-                auth_required().write().await.remove(&server.server_id);
-            }
+            last_errors().write().await.insert(
+                server.server_id.clone(),
+                ConnectFailure {
+                    message: err.to_string(),
+                    unauthorized,
+                },
+            );
             tracing::debug!(
                 "[mcp-registry] last_error recorded server_id={} unauthorized={unauthorized} err={err}",
                 server.server_id
@@ -475,7 +479,6 @@ pub async fn disconnect(server_id: &str) -> bool {
         map.remove(server_id)
     };
     last_errors().write().await.remove(server_id);
-    auth_required().write().await.remove(server_id);
     if let Some(c) = conn {
         let _ = c.client.close_session().await;
         tracing::debug!("[mcp-registry] disconnected server_id={server_id}");
@@ -558,8 +561,9 @@ pub async fn all_status(config: &Config) -> Vec<ConnStatus> {
         map.keys().cloned().collect()
     };
 
-    let errors_snapshot = last_errors().read().await.clone();
-    let auth_snapshot = auth_required().read().await.clone();
+    // One snapshot of the unified failure map — message + auth flag are read
+    // together, so a server's status can't be classified from a torn pair.
+    let failures_snapshot = last_errors().read().await.clone();
 
     let mut out = Vec::with_capacity(installed.len());
     for s in installed {
@@ -578,11 +582,16 @@ pub async fn all_status(config: &Config) -> Vec<ConnStatus> {
             None
         };
 
+        let failure = failures_snapshot.get(&s.server_id);
         let (status, tool_count, last_error) = classify_server_status(
             s.enabled,
             connected_tool_count,
-            auth_snapshot.contains(&s.server_id),
-            errors_snapshot.get(&s.server_id).cloned(),
+            failure.is_some_and(|f| f.unauthorized),
+            // Only a generic (non-401) failure carries a surfaced message; the
+            // 401 message is withheld (it leaks the OAuth metadata URL).
+            failure
+                .filter(|f| !f.unauthorized)
+                .map(|f| f.message.clone()),
         );
 
         out.push(ConnStatus {

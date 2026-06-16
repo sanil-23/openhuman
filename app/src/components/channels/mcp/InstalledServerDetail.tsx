@@ -255,8 +255,11 @@ const InstalledServerDetail = ({
         </div>
       )}
 
-      {/* Error — a genuine (non-auth) connect failure. */}
-      {(error || (status !== 'unauthorized' && connStatus?.last_error)) && (
+      {/* Error — a genuine (non-auth) connect failure. Suppressed entirely while
+          `unauthorized`: the amber notice above is the only message shown, so a
+          local action error (e.g. a reconfigure reconnect that re-hits the 401)
+          can't re-expose raw transport/auth text in this state (#3719). */}
+      {status !== 'unauthorized' && (error || connStatus?.last_error) && (
         <div className="rounded-lg border border-coral-200 dark:border-coral-500/30 bg-coral-50 dark:bg-coral-500/10 px-4 py-3 text-sm text-coral-700 dark:text-coral-300">
           {error ?? connStatus?.last_error}
         </div>
