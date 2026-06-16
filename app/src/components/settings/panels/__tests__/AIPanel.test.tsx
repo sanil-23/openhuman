@@ -301,6 +301,7 @@ describe('AIPanel', () => {
       'Reasoning',
       'Agentic',
       'Coding',
+      'Vision',
       'Memory summarization',
       'Heartbeat',
       /Learning/,

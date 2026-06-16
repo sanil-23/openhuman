@@ -708,6 +708,7 @@ describe('saveAISettings', () => {
     const patch = mockOpenhumanUpdateModelSettings.mock.calls[0][0];
     expect(patch.cloud_providers).toBeDefined();
     expect(patch.coding_provider).toBe('openai:gpt-4o-mini');
+    expect(patch.vision_provider).toBe('openai:gpt-4o-mini');
   });
 
   it('sends model_registry when the vision flag changes', async () => {
@@ -737,6 +738,7 @@ describe('saveAISettings', () => {
     const patch = mockOpenhumanUpdateModelSettings.mock.calls[0][0];
     expect(patch.model_registry).toBeUndefined();
     expect(patch.coding_provider).toBe('openai:gpt-4o-mini');
+    expect(patch.vision_provider).toBe('openai:gpt-4o-mini');
   });
 });
 
