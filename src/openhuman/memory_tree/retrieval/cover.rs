@@ -177,9 +177,21 @@ fn collect_cover(
     }
     log::debug!("[retrieval::cover] in-window sources n={}", by_source.len());
 
+    // An exact `source_id` filter means `chunks` is a strict subset of its
+    // (possibly shared) tree, so shared-tree summaries must be restricted to
+    // the requested leaves. Without a filter every in-window leaf is present.
+    let exact_source = source_id.is_some();
     let mut hits: Vec<RetrievalHit> = Vec::new();
     for (source, src_chunks) in by_source {
-        cover_one_source(config, &source, since_ms, until_ms, src_chunks, &mut hits)?;
+        cover_one_source(
+            config,
+            &source,
+            since_ms,
+            until_ms,
+            src_chunks,
+            exact_source,
+            &mut hits,
+        )?;
     }
     Ok(hits)
 }
@@ -194,6 +206,7 @@ fn cover_one_source(
     since_ms: i64,
     until_ms: i64,
     chunks: Vec<Chunk>,
+    exact_source: bool,
     out: &mut Vec<RetrievalHit>,
 ) -> Result<()> {
     // Look up the source's summary tree (scope == source id). Absent until the
@@ -206,7 +219,10 @@ fn cover_one_source(
         ),
         None => ("", Vec::new()),
     };
-    let plan = plan_cover(&eligible);
+    // In exact-source mode the tree may be shared across sibling sources, so
+    // only emit summaries whose whole subtree is among the filtered chunks.
+    let present: HashSet<&str> = chunks.iter().map(|c| c.id.as_str()).collect();
+    let plan = plan_cover(&eligible, exact_source.then_some(&present));
 
     // Frontier summaries (hydrated to full body).
     let by_id: HashMap<&str, &SummaryNode> = eligible.iter().map(|s| (s.id.as_str(), s)).collect();
@@ -261,25 +277,44 @@ struct CoverPlan {
 /// eligible summary is a leaf chunk id (because every descendant of a
 /// fully-covered node is itself fully covered, hence eligible — so any child
 /// not in the eligible set is a leaf).
-fn plan_cover(eligible: &[SummaryNode]) -> CoverPlan {
+///
+/// `restrict_to_present` guards the exact-source path. A source tree's scope
+/// can be **broader** than the requested `source_id` (Notion `path_scope`,
+/// GitHub repo-scoped trees seal many pages/issues into one tree). When the
+/// caller filtered chunks down to a single source id, a frontier summary over
+/// the shared tree would also cover *sibling* sources' leaves — leaking
+/// unrelated memory and masking the requested raw chunks under a mixed
+/// summary. When `Some(present)`, a maximal summary is emitted only if **every**
+/// chunk it covers is in `present` (the in-filter chunk ids); summaries that
+/// span out-of-filter sources are dropped, and their in-filter chunks fall
+/// through to raw emission. `None` (the no-filter brief path) keeps every
+/// maximal summary — the chunk set already holds every in-window leaf, so no
+/// summary can span anything absent.
+fn plan_cover(eligible: &[SummaryNode], restrict_to_present: Option<&HashSet<&str>>) -> CoverPlan {
     let eligible_ids: HashSet<&str> = eligible.iter().map(|s| s.id.as_str()).collect();
     let by_id: HashMap<&str, &SummaryNode> = eligible.iter().map(|s| (s.id.as_str(), s)).collect();
 
-    let maximal: Vec<&SummaryNode> = eligible
-        .iter()
-        .filter(|s| match &s.parent_id {
-            Some(parent) => !eligible_ids.contains(parent.as_str()),
-            None => true,
-        })
-        .collect();
-
+    let mut maximal_ids: Vec<String> = Vec::new();
     let mut covered_chunk_ids: HashSet<String> = HashSet::new();
-    for node in &maximal {
-        collect_descendant_chunks(node, &by_id, &mut covered_chunk_ids);
+    for node in eligible.iter().filter(|s| match &s.parent_id {
+        Some(parent) => !eligible_ids.contains(parent.as_str()),
+        None => true,
+    }) {
+        let mut sub: HashSet<String> = HashSet::new();
+        collect_descendant_chunks(node, &by_id, &mut sub);
+        if let Some(present) = restrict_to_present {
+            if !sub.iter().all(|c| present.contains(c.as_str())) {
+                // Shared-tree summary spans sources outside the exact-source
+                // filter — skip it; its in-filter chunks are emitted raw.
+                continue;
+            }
+        }
+        maximal_ids.push(node.id.clone());
+        covered_chunk_ids.extend(sub);
     }
 
     CoverPlan {
-        maximal_ids: maximal.iter().map(|s| s.id.clone()).collect(),
+        maximal_ids,
         covered_chunk_ids,
     }
 }
@@ -336,7 +371,7 @@ mod tests {
         // L1 node over two leaf chunks, no parent → it's the frontier and
         // covers both leaves.
         let eligible = vec![summary("s1", None, 1, &["chunk-a", "chunk-b"])];
-        let plan = plan_cover(&eligible);
+        let plan = plan_cover(&eligible, None);
         assert_eq!(plan.maximal_ids, vec!["s1"]);
         assert!(plan.covered_chunk_ids.contains("chunk-a"));
         assert!(plan.covered_chunk_ids.contains("chunk-b"));
@@ -351,7 +386,7 @@ mod tests {
             summary("s2", None, 2, &["s1"]),
             summary("s1", Some("s2"), 1, &["chunk-a", "chunk-b"]),
         ];
-        let plan = plan_cover(&eligible);
+        let plan = plan_cover(&eligible, None);
         assert_eq!(plan.maximal_ids, vec!["s2"]);
         assert!(plan.covered_chunk_ids.contains("chunk-a"));
         assert!(plan.covered_chunk_ids.contains("chunk-b"));
@@ -363,7 +398,7 @@ mod tests {
         // straddles the window / not sealed) → s1 is maximal. Leaves under s1
         // are covered; nothing else.
         let eligible = vec![summary("s1", Some("s2-not-eligible"), 1, &["chunk-a"])];
-        let plan = plan_cover(&eligible);
+        let plan = plan_cover(&eligible, None);
         assert_eq!(plan.maximal_ids, vec!["s1"]);
         assert!(plan.covered_chunk_ids.contains("chunk-a"));
     }
@@ -372,7 +407,7 @@ mod tests {
     fn empty_eligible_set_covers_nothing() {
         // No sealed/eligible summaries → frontier empty, no chunk covered, so
         // the caller emits every in-window chunk raw.
-        let plan = plan_cover(&[]);
+        let plan = plan_cover(&[], None);
         assert!(plan.maximal_ids.is_empty());
         assert!(plan.covered_chunk_ids.is_empty());
     }
@@ -384,9 +419,30 @@ mod tests {
             summary("s1", Some("root-x"), 1, &["chunk-a"]),
             summary("s2", Some("root-x"), 1, &["chunk-b"]),
         ];
-        let mut plan = plan_cover(&eligible);
+        let mut plan = plan_cover(&eligible, None);
         plan.maximal_ids.sort();
         assert_eq!(plan.maximal_ids, vec!["s1", "s2"]);
         assert_eq!(plan.covered_chunk_ids.len(), 2);
+    }
+
+    #[test]
+    fn restrict_drops_summaries_spanning_out_of_filter_chunks() {
+        // Exact-source mode over a SHARED tree: `s_mixed` summarises a leaf the
+        // filter kept (`chunk-a`) plus a sibling page's leaf (`chunk-foreign`)
+        // that isn't in the requested set; `s_clean` covers only kept leaves.
+        // With the present-set restriction, the mixed summary must be dropped
+        // (so `chunk-a` falls through to raw) while the clean one survives.
+        let eligible = vec![
+            summary("s_mixed", Some("root"), 1, &["chunk-a", "chunk-foreign"]),
+            summary("s_clean", Some("root"), 1, &["chunk-b"]),
+        ];
+        let present: HashSet<&str> = ["chunk-a", "chunk-b"].into_iter().collect();
+        let plan = plan_cover(&eligible, Some(&present));
+        assert_eq!(plan.maximal_ids, vec!["s_clean"]);
+        assert!(plan.covered_chunk_ids.contains("chunk-b"));
+        // chunk-a is NOT covered → caller emits it raw rather than via the
+        // sibling-spanning summary.
+        assert!(!plan.covered_chunk_ids.contains("chunk-a"));
+        assert!(!plan.covered_chunk_ids.contains("chunk-foreign"));
     }
 }
