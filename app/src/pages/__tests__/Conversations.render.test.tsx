@@ -1630,13 +1630,24 @@ describe('Conversations — agent task insights panel anchoring (#3717 Bug 2)', 
     });
 
     // Seed the tool timeline after mount settles (mount-time turn-state
-    // hydration would otherwise clobber a preloaded timeline).
+    // hydration would otherwise clobber a preloaded timeline). Include a
+    // running subagent row so the panel exposes its "view full processing"
+    // affordance (drives the onViewSubagent callback below).
     await screen.findByText('Second part of the answer.');
     await act(async () => {
       store!.dispatch(
         setToolTimelineForThread({
           threadId: thread.id,
-          entries: [{ id: 'tl-1', name: 'web_fetch', round: 1, status: 'success' }],
+          entries: [
+            { id: 'tl-1', name: 'web_fetch', round: 1, status: 'success' },
+            {
+              id: 'sa-1',
+              name: 'subagent:researcher',
+              round: 1,
+              status: 'running',
+              subagent: { taskId: 'task-1', agentId: 'researcher', toolCalls: [] },
+            },
+          ],
         })
       );
     });
@@ -1659,6 +1670,17 @@ describe('Conversations — agent task insights panel anchoring (#3717 Bug 2)', 
     expect(firstAgentText.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING
     );
+
+    // Exercise the hoisted button: opens the "Agent Process Source" panel.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('view-process-source'));
+    });
+
+    // Exercise onViewSubagent: clicking the subagent row's "view full
+    // processing" affordance opens the subagent drawer for that task.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('subagent-view-processing'));
+    });
   });
 });
 
