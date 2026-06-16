@@ -406,6 +406,30 @@ impl Agent {
         true
     }
 
+    /// Test-only: installed-skill ids currently in the catalogue snapshot
+    /// (`dir_name`, falling back to `name`). Lets `refresh_workflows` tests
+    /// assert through a method instead of touching private fields.
+    #[cfg(test)]
+    pub(in super::super) fn test_workflow_ids(&self) -> Vec<String> {
+        self.workflows
+            .iter()
+            .map(|w| {
+                if w.dir_name.is_empty() {
+                    w.name.clone()
+                } else {
+                    w.dir_name.clone()
+                }
+            })
+            .collect()
+    }
+
+    /// Test-only: skill ids parked for the next-turn `[skills update]`
+    /// announcement by `refresh_workflows`.
+    #[cfg(test)]
+    pub(in super::super) fn test_pending_skill_announcement(&self) -> &[String] {
+        &self.pending_skill_announcement
+    }
+
     /// Re-synthesise `delegate_*` tools for the orchestrator's `subagents`
     /// declaration using the live `connected_integrations` slice, and
     /// reconcile the resulting set into `self.tools` / `self.tool_specs` /

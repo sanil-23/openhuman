@@ -471,21 +471,21 @@ fn refresh_workflows_picks_up_skill_installed_on_disk() {
 
     // Starts with no skills; refresh discovers the on-disk one and parks it
     // for announcement.
-    assert!(agent.workflows.is_empty());
+    assert!(agent.test_workflow_ids().is_empty());
     assert!(
         agent.refresh_workflows("test"),
         "installing a skill on disk should change the set"
     );
     assert!(
         agent
-            .workflows
+            .test_workflow_ids()
             .iter()
-            .any(|w| w.name == "zz-refresh-test" || w.dir_name == "zz-refresh-test"),
+            .any(|id| id == "zz-refresh-test"),
         "the new skill should be discoverable"
     );
     assert!(
         agent
-            .pending_skill_announcement
+            .test_pending_skill_announcement()
             .iter()
             .any(|id| id == "zz-refresh-test"),
         "the new skill should be parked for announcement"
