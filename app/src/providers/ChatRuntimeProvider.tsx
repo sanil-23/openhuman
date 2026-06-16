@@ -68,18 +68,29 @@ type SegmentDelivery = { segments: Map<number, string>; createdAt: number; lastS
 type ThreadSliceState = ReturnType<typeof store.getState>['thread'];
 
 /**
- * A thread is a valid proactive-delivery target only when it is "fresh" —
- * i.e. holds no messages. We check both the in-memory message cache and the
- * persisted `messageCount` snapshot, so a thread that already has a
- * conversation server-side (but whose messages aren't loaded into the cache
- * yet) is still treated as occupied and never reused. See #3713.
+ * Whether a thread should be treated as occupied for proactive delivery — a
+ * thread is only a valid target when it is provably "fresh" (holds no
+ * messages). We check the in-memory message cache and the persisted
+ * `messageCount` snapshot, so a thread that already has a conversation
+ * server-side (but whose messages aren't loaded into the cache yet) is still
+ * treated as occupied and never reused.
+ *
+ * Crucially, *unknown* thread metadata counts as occupied: when only a
+ * rehydrated `selectedThreadId` is present (e.g. before `loadThreads`
+ * resolves, or after caches were reset while selection was preserved),
+ * `state.threads.find` returns `undefined`. Treating that as fresh would let
+ * a proactive event append into a conversation we simply haven't loaded yet.
+ * We fail closed and open a new thread instead. See #3713.
  */
 function threadHasMessages(state: ThreadSliceState, threadId: string): boolean {
   const cached = state.messagesByThreadId[threadId];
   if (cached && cached.length > 0) return true;
   if (threadId === state.selectedThreadId && state.messages.length > 0) return true;
   const thread = state.threads.find(t => t.id === threadId);
-  return (thread?.messageCount ?? 0) > 0;
+  // Unknown metadata → fail closed (occupied) rather than risk interrupting an
+  // unloaded conversation.
+  if (!thread) return true;
+  return thread.messageCount > 0;
 }
 
 function rtLog(message: string, fields?: Record<string, string | number | null | undefined>) {

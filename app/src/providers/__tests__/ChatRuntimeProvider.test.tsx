@@ -491,6 +491,41 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       expect(threadApi.appendMessage).not.toHaveBeenCalledWith('busy-thread', expect.anything());
     });
 
+    it('treats a selected thread with unknown metadata as occupied and opens a new thread', async () => {
+      vi.mocked(threadApi.createNewThread).mockResolvedValue({
+        id: 'fresh-thread',
+        title: 'new',
+      } as never);
+      vi.mocked(threadApi.getThreads).mockResolvedValue({
+        threads: [{ id: 'fresh-thread', title: 'new' }] as never,
+        count: 1,
+      });
+
+      // Only a rehydrated selection is present — the thread list hasn't loaded,
+      // so its message metadata is unknown. We must NOT assume it is fresh
+      // (it could already hold a server-side conversation). See #3713.
+      store.dispatch(setSelectedThread('rehydrated-thread'));
+      const listeners = renderProvider();
+
+      await act(async () => {
+        listeners.onProactiveMessage?.({
+          thread_id: 'proactive:morning_briefing',
+          request_id: 'req-unknown',
+          full_response: 'briefing',
+        });
+      });
+
+      await waitFor(() => expect(threadApi.createNewThread).toHaveBeenCalledTimes(1));
+      expect(threadApi.appendMessage).toHaveBeenCalledWith(
+        'fresh-thread',
+        expect.objectContaining({ content: 'briefing' })
+      );
+      expect(threadApi.appendMessage).not.toHaveBeenCalledWith(
+        'rehydrated-thread',
+        expect.anything()
+      );
+    });
+
     it('creates a new thread when no visible thread exists for proactive handoff', async () => {
       vi.mocked(threadApi.createNewThread).mockResolvedValue({
         id: 'created-thread',
