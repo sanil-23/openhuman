@@ -413,6 +413,90 @@ fn composio_listener_drains_integrations_changed_events() {
     );
 }
 
+#[test]
+fn skill_listener_drains_workflows_changed_events() {
+    let _ = init_global(64);
+    let mut agent = build_minimal_agent_with_definition_name(Some("orchestrator"));
+    agent.ensure_skill_events_listener();
+    publish_global(DomainEvent::WorkflowsChanged {
+        reason: "install".into(),
+    });
+    assert!(
+        agent.drain_skill_events(),
+        "a WorkflowsChanged event should be observed"
+    );
+    assert!(
+        !agent.drain_skill_events(),
+        "event queue should be drained after one pass"
+    );
+}
+
+#[test]
+fn refresh_workflows_picks_up_skill_installed_on_disk() {
+    use crate::openhuman::workflows::ops_types::{SKILL_MD, TRUST_MARKER};
+
+    // Isolated, trusted workspace with one project-scope skill on disk.
+    let ws = tempfile::TempDir::new().expect("temp workspace");
+    let wsp = ws.path().to_path_buf();
+    std::fs::create_dir_all(wsp.join(".openhuman")).unwrap();
+    std::fs::write(wsp.join(".openhuman").join(TRUST_MARKER), "").unwrap();
+    let skill_dir = wsp
+        .join(".openhuman")
+        .join("skills")
+        .join("zz-refresh-test");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join(SKILL_MD),
+        "---\nname: zz-refresh-test\ndescription: a refresh test skill\n---\n# body\n",
+    )
+    .unwrap();
+
+    let memory_cfg = crate::openhuman::config::MemoryConfig {
+        backend: "none".into(),
+        ..crate::openhuman::config::MemoryConfig::default()
+    };
+    let mem: Arc<dyn Memory> =
+        Arc::from(crate::openhuman::memory_store::create_memory(&memory_cfg, &wsp).unwrap());
+    let provider = Box::new(MockProvider {
+        responses: Mutex::new(vec![]),
+    });
+    let mut agent = Agent::builder()
+        .provider(provider)
+        .tools(vec![Box::new(MockTool)])
+        .memory(mem)
+        .tool_dispatcher(Box::new(NativeToolDispatcher))
+        .workspace_dir(wsp.clone())
+        .build()
+        .expect("agent build should succeed");
+
+    // Starts with no skills; refresh discovers the on-disk one and parks it
+    // for announcement.
+    assert!(agent.workflows.is_empty());
+    assert!(
+        agent.refresh_workflows("test"),
+        "installing a skill on disk should change the set"
+    );
+    assert!(
+        agent
+            .workflows
+            .iter()
+            .any(|w| w.name == "zz-refresh-test" || w.dir_name == "zz-refresh-test"),
+        "the new skill should be discoverable"
+    );
+    assert!(
+        agent
+            .pending_skill_announcement
+            .iter()
+            .any(|id| id == "zz-refresh-test"),
+        "the new skill should be parked for announcement"
+    );
+    // Idempotent: no new install -> no change.
+    assert!(
+        !agent.refresh_workflows("test"),
+        "no install since last refresh -> no change"
+    );
+}
+
 #[tokio::test]
 async fn turn_without_tools_returns_text() {
     let workspace = tempfile::TempDir::new().expect("temp workspace");

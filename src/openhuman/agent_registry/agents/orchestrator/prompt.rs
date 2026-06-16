@@ -334,6 +334,37 @@ mod tests {
     use crate::openhuman::context::prompt::{LearnedContextData, ToolCallFormat};
     use std::collections::HashSet;
 
+    #[test]
+    fn render_installed_skills_lists_skills_and_steers_to_run_skill() {
+        let skills = vec![
+            Workflow {
+                dir_name: "ascii-art".into(),
+                description: "ASCII art via pyfiglet".into(),
+                ..Default::default()
+            },
+            // dir_name empty -> id falls back to name; empty description ->
+            // "(no description)".
+            Workflow {
+                name: "no-dir".into(),
+                ..Default::default()
+            },
+        ];
+        let out = render_installed_skills(&skills);
+        assert!(out.contains("## Installed Skills"));
+        assert!(
+            out.contains("run_skill"),
+            "catalogue must steer to run_skill"
+        );
+        assert!(out.contains("Handoff Plan"));
+        assert!(out.contains("- **ascii-art**: ASCII art via pyfiglet"));
+        assert!(out.contains("- **no-dir**: (no description)"));
+    }
+
+    #[test]
+    fn render_installed_skills_empty_is_omitted() {
+        assert_eq!(render_installed_skills(&[]), "");
+    }
+
     fn ctx_with<'a>(integrations: &'a [ConnectedIntegration]) -> PromptContext<'a> {
         use std::sync::OnceLock;
         static EMPTY_VISIBLE: OnceLock<HashSet<String>> = OnceLock::new();
