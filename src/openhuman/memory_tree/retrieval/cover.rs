@@ -230,6 +230,10 @@ fn cover_one_source(
         ),
         None => ("", Vec::new()),
     };
+    // Latest-wins for versioned document sources (Notion): drop superseded
+    // doc-root revisions so the cover never emits a stale page, and remember
+    // their chunk ids so the raw fallback below doesn't resurface them either.
+    let (eligible, suppressed_chunk_ids) = filter_superseded_doc_versions(eligible);
     // In exact-source mode the tree may be shared across sibling sources, so
     // only emit summaries whose whole subtree is among the filtered chunks.
     let present: HashSet<&str> = chunks.iter().map(|c| c.id.as_str()).collect();
@@ -251,9 +255,10 @@ fn cover_one_source(
         out.push(hit_from_summary(&node, source));
     }
 
-    // In-window chunks not covered by a frontier summary, raw.
+    // In-window chunks not covered by a frontier summary, raw — skipping any
+    // chunk under a superseded document revision.
     for chunk in &chunks {
-        if plan.covered_chunk_ids.contains(&chunk.id) {
+        if plan.covered_chunk_ids.contains(&chunk.id) || suppressed_chunk_ids.contains(&chunk.id) {
             continue;
         }
         let mut chunk = chunk.clone();
@@ -348,6 +353,94 @@ fn collect_descendant_chunks(
     }
 }
 
+/// Latest-wins for versioned document sources (Notion). A source tree can hold
+/// several doc-root summaries for the **same** `doc_id` — each page edit seals
+/// a new doc-root at a higher `version_ms` beside the old one, and retrieval is
+/// expected to hide the older revisions (`drill_down` does the same). Returns
+/// `eligible` with every superseded revision's whole subtree removed, plus the
+/// chunk ids under those dropped revisions so the raw fallback can't resurface
+/// stale page content. Summaries with no `doc_id` are untouched.
+fn filter_superseded_doc_versions(
+    eligible: Vec<SummaryNode>,
+) -> (Vec<SummaryNode>, HashSet<String>) {
+    // No document nodes → nothing to do (the common chat/email case).
+    if !eligible.iter().any(|s| s.doc_id.is_some()) {
+        return (eligible, HashSet::new());
+    }
+
+    let by_id: HashMap<&str, &SummaryNode> = eligible.iter().map(|s| (s.id.as_str(), s)).collect();
+
+    // Winning (max) version per doc_id; `version_ms` defaults to i64::MIN so a
+    // legacy untagged doc-root never wins over a tagged one.
+    let mut max_version_by_doc: HashMap<&str, i64> = HashMap::new();
+    for s in &eligible {
+        if let Some(doc) = s.doc_id.as_deref() {
+            let v = s.version_ms.unwrap_or(i64::MIN);
+            max_version_by_doc
+                .entry(doc)
+                .and_modify(|m| {
+                    if v > *m {
+                        *m = v;
+                    }
+                })
+                .or_insert(v);
+        }
+    }
+
+    // A doc-root is a "loser" when it's an older revision, or a duplicate of the
+    // winning version (e.g. a retried SealDocument minted two) — keep the first
+    // winner only. `eligible` is ordered (level, start), so dedup is stable.
+    let mut winners_seen: HashSet<&str> = HashSet::new();
+    let mut removed_summary_ids: HashSet<String> = HashSet::new();
+    let mut suppressed_chunk_ids: HashSet<String> = HashSet::new();
+    for s in &eligible {
+        let Some(doc) = s.doc_id.as_deref() else {
+            continue;
+        };
+        let v = s.version_ms.unwrap_or(i64::MIN);
+        let max = max_version_by_doc.get(doc).copied().unwrap_or(i64::MIN);
+        // Short-circuit keeps the winner slot untouched for older revisions.
+        let loser = v < max || !winners_seen.insert(doc);
+        if loser {
+            removed_summary_ids.insert(s.id.clone());
+            collect_subtree_ids(
+                s,
+                &by_id,
+                &mut removed_summary_ids,
+                &mut suppressed_chunk_ids,
+            );
+        }
+    }
+
+    let kept = eligible
+        .into_iter()
+        .filter(|s| !removed_summary_ids.contains(&s.id))
+        .collect();
+    (kept, suppressed_chunk_ids)
+}
+
+/// Walk a summary's subtree collecting both descendant summary ids (into
+/// `summaries`) and leaf chunk ids (into `chunks`). Used to evict a superseded
+/// document revision's whole subtree from the cover.
+fn collect_subtree_ids(
+    node: &SummaryNode,
+    by_id: &HashMap<&str, &SummaryNode>,
+    summaries: &mut HashSet<String>,
+    chunks: &mut HashSet<String>,
+) {
+    for child in &node.child_ids {
+        match by_id.get(child.as_str()) {
+            Some(child_summary) => {
+                summaries.insert(child.clone());
+                collect_subtree_ids(child_summary, by_id, summaries, chunks);
+            }
+            None => {
+                chunks.insert(child.clone());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,6 +527,46 @@ mod tests {
         plan.maximal_ids.sort();
         assert_eq!(plan.maximal_ids, vec!["s1", "s2"]);
         assert_eq!(plan.covered_chunk_ids.len(), 2);
+    }
+
+    fn doc_summary(id: &str, doc_id: &str, version_ms: i64, children: &[&str]) -> SummaryNode {
+        let mut s = summary(id, Some("merge-root"), 1, children);
+        s.doc_id = Some(doc_id.to_string());
+        s.version_ms = Some(version_ms);
+        s
+    }
+
+    #[test]
+    fn filter_superseded_doc_versions_keeps_newest_and_suppresses_old_chunks() {
+        // Two revisions of the same Notion page plus an unrelated chat summary.
+        // Only the newest revision survives; the older revision's subtree is
+        // dropped and its chunk reported for raw-fallback suppression.
+        let eligible = vec![
+            doc_summary("pageA@v1", "notion:pageA", 100, &["chunk-old"]),
+            doc_summary("pageA@v2", "notion:pageA", 200, &["chunk-new"]),
+            summary("chat", Some("root"), 1, &["chunk-chat"]),
+        ];
+        let (kept, suppressed) = filter_superseded_doc_versions(eligible);
+        let kept_ids: Vec<&str> = kept.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(kept_ids, vec!["pageA@v2", "chat"]);
+        assert!(suppressed.contains("chunk-old"));
+        assert!(!suppressed.contains("chunk-new"));
+        assert!(!suppressed.contains("chunk-chat"));
+    }
+
+    #[test]
+    fn filter_superseded_doc_versions_dedups_duplicate_winning_revision() {
+        // A retried seal can mint two doc-roots at the SAME winning version;
+        // keep the first, drop the duplicate's subtree.
+        let eligible = vec![
+            doc_summary("dup-a", "notion:pageB", 300, &["chunk-a"]),
+            doc_summary("dup-b", "notion:pageB", 300, &["chunk-b"]),
+        ];
+        let (kept, suppressed) = filter_superseded_doc_versions(eligible);
+        let kept_ids: Vec<&str> = kept.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(kept_ids, vec!["dup-a"]);
+        assert!(suppressed.contains("chunk-b"));
+        assert!(!suppressed.contains("chunk-a"));
     }
 
     #[test]
