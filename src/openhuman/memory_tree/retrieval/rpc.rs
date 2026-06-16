@@ -442,6 +442,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cover_window_rpc_honors_profile_source_scope() {
+        use crate::openhuman::memory::source_scope::with_source_scope;
+        let (_tmp, cfg) = test_config();
+        // Two memory-source chunks in different sources, both inside the window.
+        let mut allowed = sample_chunk("slack:#eng", 0);
+        allowed.metadata.tags = vec!["memory_sources".into(), "chat".into()];
+        let mut blocked = sample_chunk("slack:#secret", 0);
+        blocked.metadata.tags = vec!["memory_sources".into(), "chat".into()];
+        upsert_chunks(&cfg, &[allowed.clone(), blocked.clone()]).unwrap();
+        stage_test_chunks(&cfg, &[allowed.clone(), blocked.clone()]);
+
+        let req = || CoverWindowRequest {
+            since_ms: 0,
+            until_ms: 4_000_000_000_000,
+            source_id: None,
+            source_kind: None,
+            limit: None,
+        };
+
+        // A restricted profile (allowlist = #eng only) must not surface #secret,
+        // even though cover_window does its DB work on a spawn_blocking thread
+        // that does not inherit the source_scope task-local.
+        let resp = with_source_scope(Some(vec!["slack:#eng".into()]), async {
+            cover_window_rpc(&cfg, req()).await
+        })
+        .await
+        .unwrap();
+        let ids: Vec<&str> = resp.value.hits.iter().map(|h| h.node_id.as_str()).collect();
+        assert!(
+            ids.contains(&allowed.id.as_str()),
+            "allowlisted source must be present: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&blocked.id.as_str()),
+            "disallowed source must be filtered out: {ids:?}"
+        );
+
+        // With no profile scope active, both sources are visible.
+        let unrestricted = cover_window_rpc(&cfg, req()).await.unwrap();
+        assert_eq!(unrestricted.value.hits.len(), 2);
+    }
+
+    #[tokio::test]
     async fn cover_window_rpc_rejects_inverted_window() {
         let (_tmp, cfg) = test_config();
         let req = CoverWindowRequest {

@@ -82,6 +82,12 @@ pub async fn cover_window(
 
     let config_owned = config.clone();
     let source_id_owned = source_id.map(|s| s.to_string());
+    // Capture the per-profile memory-source allowlist HERE, in the async task
+    // that holds the `source_scope` task-local — `spawn_blocking` below runs on
+    // a separate thread that does NOT inherit task-locals, so we must thread it
+    // through explicitly or a restricted-profile brief would see every tagged
+    // source. `None` = unrestricted.
+    let source_scope = crate::openhuman::memory::source_scope::current_source_scope();
     let mut hits = tokio::task::spawn_blocking(move || -> Result<Vec<RetrievalHit>> {
         collect_cover(
             &config_owned,
@@ -89,6 +95,7 @@ pub async fn cover_window(
             until_ms,
             source_id_owned.as_deref(),
             source_kind,
+            source_scope,
         )
     })
     .await
@@ -125,6 +132,7 @@ fn collect_cover(
     until_ms: i64,
     source_id: Option<&str>,
     source_kind: Option<SourceKind>,
+    source_scope: Option<std::collections::HashSet<String>>,
 ) -> Result<Vec<RetrievalHit>> {
     let chunks = list_chunks(
         config,
@@ -138,6 +146,9 @@ fn collect_cover(
             // `mem_tree_chunks` but were deliberately never appended to a tree,
             // so surfacing them raw would leak filtered-out junk into the brief.
             exclude_dropped: true,
+            // Per-profile memory-source allowlist (threaded from the async task
+            // — task-locals don't cross `spawn_blocking`).
+            source_scope,
             ..Default::default()
         },
     )?;
