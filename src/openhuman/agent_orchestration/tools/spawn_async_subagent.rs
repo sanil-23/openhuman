@@ -271,6 +271,15 @@ impl Tool for SpawnAsyncSubagentTool {
                             output: outcome.output.clone(),
                             iterations: outcome.iterations,
                         });
+                        // Queue the finished result for idle-gated, batched
+                        // delivery back into the parent chat (the session
+                        // runtime drains this when the session is next idle).
+                        crate::openhuman::agent_orchestration::background_completions::record_completion(
+                            background_parent_session.clone(),
+                            outcome.task_id.clone(),
+                            outcome.agent_id.clone(),
+                            outcome.output.clone(),
+                        );
                         publish_global(DomainEvent::SubagentCompleted {
                             parent_session: background_parent_session,
                             task_id: outcome.task_id.clone(),

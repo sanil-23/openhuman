@@ -6,6 +6,7 @@
 //! construction, tool filtering, and the actual sub-agent run loop.
 
 pub mod agent_teams;
+pub mod background_completions;
 pub mod command_center;
 mod ops;
 pub(crate) mod parent_context;
