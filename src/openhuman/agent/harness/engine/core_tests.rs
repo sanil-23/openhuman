@@ -12,7 +12,7 @@
 //! The whole flow is driven deterministically with no network:
 //!  * a scripted provider returns canned responses and reports usage that
 //!    pushes the guard past its 0.90 trigger (95k / 100k tokens);
-//!  * the model id is unknown, so `effective_context_window` is `None` and the
+//!  * the provider pins `effective_context_window` to `None`, so the
 //!    pre-dispatch token-budget trims stay disabled — autocompaction is the
 //!    only thing that can mutate `history`;
 //!  * the first response carries a tool call so the loop runs a second
@@ -94,6 +94,15 @@ impl Provider for CompactionProvider {
 
     fn supports_native_tools(&self) -> bool {
         true
+    }
+
+    /// Pin the effective context window to `None` so the pre-dispatch
+    /// token-budget trims stay disabled deterministically — autocompaction is
+    /// then the only thing that can mutate `history`. Don't rely on the
+    /// unknown-model fallback (it would silently re-enable trimming if the
+    /// static table ever learned the test's model id).
+    async fn effective_context_window(&self, _model: &str) -> Option<u64> {
+        None
     }
 }
 
@@ -192,8 +201,9 @@ async fn run(
         &checkpoint,
         &parser,
         "test-provider",
-        // Unknown model → `effective_context_window` is None → token-budget
-        // trims stay disabled, isolating autocompaction as the only mutator.
+        // The provider pins `effective_context_window` to `None`, so the
+        // token-budget trims stay disabled, isolating autocompaction as the
+        // only mutator. The model id is otherwise irrelevant here.
         "ctx-test-model-xyz",
         0.0,
         true,
