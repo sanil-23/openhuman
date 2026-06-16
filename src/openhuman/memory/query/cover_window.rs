@@ -61,16 +61,33 @@ impl Tool for MemoryTreeCoverWindowTool {
         log::debug!("[tool][memory_tree] cover_window invoked");
         let req: CoverWindowRequest = serde_json::from_value(args)
             .map_err(|e| anyhow::anyhow!("invalid arguments for memory_tree_cover_window: {e}"))?;
+        // Correlation fields only — source_id can carry PII, so log its presence,
+        // not its value.
+        log::debug!(
+            "[tool][memory_tree] cover_window parsed since_ms={} until_ms={} has_source_id={} has_source_kind={} has_limit={}",
+            req.since_ms,
+            req.until_ms,
+            req.source_id.is_some(),
+            req.source_kind.is_some(),
+            req.limit.is_some()
+        );
         let cfg = config_rpc::load_config_with_timeout()
             .await
             .map_err(|e| anyhow::anyhow!("memory_tree_cover_window: load config failed: {e}"))?;
         let source_kind = match req.source_kind.as_deref() {
-            Some(s) => Some(
-                SourceKind::parse(s)
-                    .map_err(|e| anyhow::anyhow!("memory_tree_cover_window: {e}"))?,
-            ),
+            Some(s) => {
+                log::trace!("[tool][memory_tree] cover_window parse_source_kind");
+                Some(
+                    SourceKind::parse(s)
+                        .map_err(|e| anyhow::anyhow!("memory_tree_cover_window: {e}"))?,
+                )
+            }
             None => None,
         };
+        log::trace!(
+            "[tool][memory_tree] cover_window dispatch limit={}",
+            req.limit.unwrap_or(0)
+        );
         let resp = cover_window(
             &cfg,
             req.since_ms,

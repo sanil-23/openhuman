@@ -814,6 +814,9 @@ pub fn list_summaries_in_window(
     since_ms: i64,
     until_ms: i64,
 ) -> Result<Vec<SummaryNode>> {
+    log::debug!(
+        "[tree::store] list_summaries_in_window tree_id={tree_id} since_ms={since_ms} until_ms={until_ms}"
+    );
     with_connection(config, |conn| {
         let mut stmt = conn.prepare(
             "SELECT id, tree_id, tree_kind, level, parent_id,
@@ -832,6 +835,10 @@ pub fn list_summaries_in_window(
             .query_map(params![tree_id, since_ms, until_ms], row_to_summary)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .context("Failed to collect in-window summaries")?;
+        log::debug!(
+            "[tree::store] list_summaries_in_window tree_id={tree_id} matched={}",
+            rows.len()
+        );
         Ok(rows)
     })
 }
