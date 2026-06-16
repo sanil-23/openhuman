@@ -519,6 +519,38 @@ pub async fn call_tool(
 ///   and the re-auth affordance keyed off the status alone.
 /// - other recorded connect failure in `LAST_ERRORS` → `Error` + message.
 /// - otherwise → `Disconnected`.
+/// Pure status decision for one installed server, factored out of
+/// [`all_status`] so the priority order is unit-testable without a live
+/// connection registry or store. Inputs:
+/// - `enabled` — the install's enabled flag.
+/// - `connected_tool_count` — `Some(n)` when the server is in the live map
+///   (with its advertised tool count), `None` otherwise.
+/// - `auth_required` — most recent connect failed with HTTP 401.
+/// - `generic_error` — most recent (non-401) connect error message, if any.
+///
+/// Priority: `Disabled` > `Connected` > `Unauthorized` > `Error` >
+/// `Disconnected`. The raw error is surfaced ONLY for the generic `Error` case;
+/// `Unauthorized` deliberately carries no message (the UI localizes it and
+/// avoids leaking the OAuth metadata URL, #3719).
+fn classify_server_status(
+    enabled: bool,
+    connected_tool_count: Option<u32>,
+    auth_required: bool,
+    generic_error: Option<String>,
+) -> (ServerStatus, u32, Option<String>) {
+    if !enabled {
+        (ServerStatus::Disabled, 0, None)
+    } else if let Some(n) = connected_tool_count {
+        (ServerStatus::Connected, n, None)
+    } else if auth_required {
+        (ServerStatus::Unauthorized, 0, None)
+    } else if let Some(err) = generic_error {
+        (ServerStatus::Error, 0, Some(err))
+    } else {
+        (ServerStatus::Disconnected, 0, None)
+    }
+}
+
 pub async fn all_status(config: &Config) -> Vec<ConnStatus> {
     let installed = store::list_servers(config).unwrap_or_default();
     let connected_ids: Vec<String> = {
@@ -533,22 +565,25 @@ pub async fn all_status(config: &Config) -> Vec<ConnStatus> {
     for s in installed {
         let is_connected = connected_ids.iter().any(|id| id == &s.server_id);
 
-        let (status, tool_count, last_error) = if !s.enabled {
-            (ServerStatus::Disabled, 0u32, None)
-        } else if is_connected {
+        // Resolve the live tool count up front (the only async input), then let
+        // the pure classifier pick the status — keeps the priority logic
+        // testable without a live registry / DB.
+        let connected_tool_count = if is_connected {
             let map = connections().read().await;
-            let tool_count = match map.get(&s.server_id) {
+            Some(match map.get(&s.server_id) {
                 Some(c) => c.tools_snapshot().await.len() as u32,
                 None => 0,
-            };
-            (ServerStatus::Connected, tool_count, None)
-        } else if auth_snapshot.contains(&s.server_id) {
-            (ServerStatus::Unauthorized, 0u32, None)
-        } else if let Some(err) = errors_snapshot.get(&s.server_id).cloned() {
-            (ServerStatus::Error, 0u32, Some(err))
+            })
         } else {
-            (ServerStatus::Disconnected, 0u32, None)
+            None
         };
+
+        let (status, tool_count, last_error) = classify_server_status(
+            s.enabled,
+            connected_tool_count,
+            auth_snapshot.contains(&s.server_id),
+            errors_snapshot.get(&s.server_id).cloned(),
+        );
 
         out.push(ConnStatus {
             server_id: s.server_id,
@@ -644,9 +679,42 @@ fn into_registry_tool(remote: McpRemoteTool) -> McpTool {
 mod tests {
     // Live-connection tests require a real MCP subprocess and live in
     // tests/json_rpc_e2e.rs. Keep this slot for sync helper tests.
-    use super::{build_http_auth, credential_safe_dial_url, is_unauthorized_error};
+    use super::{
+        build_http_auth, classify_server_status, credential_safe_dial_url, is_unauthorized_error,
+    };
     use crate::openhuman::config::McpAuthConfig;
     use crate::openhuman::mcp_client::McpUnauthorizedError;
+    use crate::openhuman::mcp_registry::types::ServerStatus;
+
+    #[test]
+    fn classify_server_status_priority_order() {
+        // Disabled wins over everything (even a live connection / 401 / error).
+        assert_eq!(
+            classify_server_status(false, Some(3), true, Some("boom".into())),
+            (ServerStatus::Disabled, 0, None)
+        );
+        // Connected → tool count surfaced, no error.
+        assert_eq!(
+            classify_server_status(true, Some(5), true, Some("boom".into())),
+            (ServerStatus::Connected, 5, None)
+        );
+        // Not connected + 401 → Unauthorized, and NO raw error is leaked even
+        // when a generic error is also recorded.
+        assert_eq!(
+            classify_server_status(true, None, true, Some("MCP unauthorized … HTTP 401".into())),
+            (ServerStatus::Unauthorized, 0, None)
+        );
+        // Not connected + generic error (no 401) → Error + message.
+        assert_eq!(
+            classify_server_status(true, None, false, Some("timed out".into())),
+            (ServerStatus::Error, 0, Some("timed out".into()))
+        );
+        // Not connected, no error → Disconnected.
+        assert_eq!(
+            classify_server_status(true, None, false, None),
+            (ServerStatus::Disconnected, 0, None)
+        );
+    }
 
     #[test]
     fn is_unauthorized_error_classifies_typed_401_only() {
