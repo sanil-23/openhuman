@@ -129,6 +129,44 @@ fn list_summaries_in_window_keeps_only_fully_contained() {
 }
 
 #[test]
+fn list_summaries_in_window_includes_exact_boundaries() {
+    // The window is inclusive on both ends: a summary whose envelope touches
+    // `since`/`until` exactly is still fully contained, so it must be eligible.
+    let (_tmp, cfg) = test_config();
+    insert_tree(&cfg, &sample_tree("tree-1", "slack:#eng")).unwrap();
+
+    let mk = |id: &str, start_ms: i64, end_ms: i64| {
+        let mut n = sample_summary(id, "tree-1", 1);
+        n.time_range_start = Utc.timestamp_millis_opt(start_ms).unwrap();
+        n.time_range_end = Utc.timestamp_millis_opt(end_ms).unwrap();
+        n
+    };
+    // window = [1000, 2000]
+    let start_on_edge = mk("start-edge", 1000, 1500); // starts exactly at `since`
+    let end_on_edge = mk("end-edge", 1500, 2000); // ends exactly at `until`
+    let both_edges = mk("both-edges", 1000, 2000); // spans the whole window
+
+    with_connection(&cfg, |conn| {
+        let tx = conn.unchecked_transaction()?;
+        for n in [&start_on_edge, &end_on_edge, &both_edges] {
+            insert_summary_tx(&tx, n, None, "test")?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+
+    let eligible = list_summaries_in_window(&cfg, "tree-1", 1000, 2000).unwrap();
+    let mut ids: Vec<&str> = eligible.iter().map(|s| s.id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec!["both-edges", "end-edge", "start-edge"],
+        "summaries touching the inclusive window edges are eligible"
+    );
+}
+
+#[test]
 fn list_summaries_in_window_excludes_deleted() {
     let (_tmp, cfg) = test_config();
     insert_tree(&cfg, &sample_tree("tree-1", "slack:#eng")).unwrap();

@@ -4134,9 +4134,14 @@ async fn json_rpc_memory_tree_cover_window_end_to_end() {
         json!({ "since_ms": 100_i64, "until_ms": 50_i64 }),
     )
     .await;
+    let inverted_err = assert_jsonrpc_error(&inverted, "cover_window inverted");
+    let inverted_msg = inverted_err
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     assert!(
-        inverted.get("error").is_some(),
-        "until_ms < since_ms must be a JSON-RPC error: {inverted}"
+        inverted_msg.contains("until_ms") && inverted_msg.contains("since_ms"),
+        "expected the inverted-window guard to fire (until_ms < since_ms), got: {inverted_err}"
     );
 
     rpc_join.abort();

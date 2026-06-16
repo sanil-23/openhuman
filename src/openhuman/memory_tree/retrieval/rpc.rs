@@ -101,11 +101,23 @@ pub async fn cover_window_rpc(
     config: &Config,
     req: CoverWindowRequest,
 ) -> Result<RpcOutcome<QueryResponse>, String> {
+    log::debug!(
+        "[rpc][memory_tree] cover_window enter since_ms={} until_ms={} has_source_id={} has_source_kind={} has_limit={}",
+        req.since_ms,
+        req.until_ms,
+        req.source_id.is_some(),
+        req.source_kind.is_some(),
+        req.limit.is_some()
+    );
     let source_kind = match req.source_kind.as_deref() {
-        Some(s) => Some(SourceKind::parse(s).map_err(|e| format!("cover_window: {e}"))?),
+        Some(s) => {
+            log::trace!("[rpc][memory_tree] cover_window parse_source_kind");
+            Some(SourceKind::parse(s).map_err(|e| format!("cover_window: {e}"))?)
+        }
         None => None,
     };
     let limit = req.limit.unwrap_or(0);
+    log::trace!("[rpc][memory_tree] cover_window dispatch limit={limit}");
     let resp = cover_window(
         config,
         req.since_ms,
@@ -117,6 +129,11 @@ pub async fn cover_window_rpc(
     .await
     .map_err(|e| format!("cover_window: {e}"))?;
     let n = resp.hits.len();
+    log::debug!(
+        "[rpc][memory_tree] cover_window exit hits={} total={}",
+        n,
+        resp.total
+    );
     // Omit scope / source_id from the log — can carry PII. Counts only.
     Ok(RpcOutcome::single_log(
         resp,
@@ -383,6 +400,61 @@ mod tests {
         };
         let err = query_source_rpc(&cfg, req).await.unwrap_err();
         assert!(err.contains("unknown source kind: bogus"), "got {err}");
+    }
+
+    // ── cover_window_rpc ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn cover_window_rpc_returns_empty_with_no_data_and_redacts_log() {
+        let (_tmp, cfg) = test_config();
+        let req = CoverWindowRequest {
+            since_ms: 0,
+            until_ms: 4_000_000_000_000,
+            source_id: Some("slack:#eng".into()),
+            source_kind: Some("chat".into()),
+            limit: None,
+        };
+        let outcome = cover_window_rpc(&cfg, req).await.unwrap();
+        assert!(outcome.value.hits.is_empty());
+        assert_eq!(outcome.value.total, 0);
+        assert_eq!(outcome.logs.len(), 1);
+        let log = &outcome.logs[0];
+        assert!(log.contains("has_source_id=true"), "log: {log}");
+        assert!(log.contains("source_kind=Some(\"chat\")"), "log: {log}");
+        assert!(log.contains("hits=0"), "log: {log}");
+        // PII redaction: the raw source_id must NOT leak into the log.
+        assert!(!log.contains("slack:#eng"), "log leaked source_id: {log}");
+    }
+
+    #[tokio::test]
+    async fn cover_window_rpc_rejects_invalid_source_kind() {
+        let (_tmp, cfg) = test_config();
+        let req = CoverWindowRequest {
+            since_ms: 0,
+            until_ms: 1,
+            source_id: None,
+            source_kind: Some("bogus".into()),
+            limit: None,
+        };
+        let err = cover_window_rpc(&cfg, req).await.unwrap_err();
+        assert!(err.contains("cover_window:"), "got {err}");
+        assert!(err.contains("unknown source kind: bogus"), "got {err}");
+    }
+
+    #[tokio::test]
+    async fn cover_window_rpc_rejects_inverted_window() {
+        let (_tmp, cfg) = test_config();
+        let req = CoverWindowRequest {
+            since_ms: 100,
+            until_ms: 50,
+            source_id: None,
+            source_kind: None,
+            limit: None,
+        };
+        let err = cover_window_rpc(&cfg, req).await.unwrap_err();
+        // The guard names both bounds so callers can see the inversion.
+        assert!(err.contains("until_ms"), "got {err}");
+        assert!(err.contains("since_ms"), "got {err}");
     }
 
     // ── search_entities_rpc ───────────────────────────────────────────
