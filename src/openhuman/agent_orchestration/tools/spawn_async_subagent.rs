@@ -242,6 +242,10 @@ impl Tool for SpawnAsyncSubagentTool {
         let background_parent_session = parent_session.clone();
         let background_progress = progress_sink.clone();
         let background_worker_thread_id = worker_thread_id.clone();
+        // Capture the parent chat thread NOW (the spawning turn's thread) so the
+        // finished result can be delivered back into it as a system turn.
+        let background_parent_thread_id =
+            crate::openhuman::inference::provider::thread_context::current_thread_id();
         let background_prompt = add_background_contract(&prompt);
 
         let join = tokio::spawn(async move {
@@ -279,6 +283,7 @@ impl Tool for SpawnAsyncSubagentTool {
                             outcome.task_id.clone(),
                             outcome.agent_id.clone(),
                             outcome.output.clone(),
+                            background_parent_thread_id.clone(),
                         );
                         publish_global(DomainEvent::SubagentCompleted {
                             parent_session: background_parent_session,

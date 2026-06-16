@@ -7,6 +7,7 @@
 
 pub mod agent_teams;
 pub mod background_completions;
+pub mod background_delivery;
 pub mod command_center;
 mod ops;
 pub(crate) mod parent_context;
