@@ -345,16 +345,22 @@ pub(crate) async fn run_chat_task(
 /// cached back, because its in-memory history would replay a provider request
 /// rejection on every subsequent turn.
 ///
-/// True only for a classified `provider_request_rejected` (a 4xx / malformed
-/// payload — for the managed backend an in-stream SSE `event: error` frame
-/// stamped `errorCode:"BAD_REQUEST"`, surfaced as
-/// `"OpenHuman streaming API error: {…}"`, not an HTTP 400). Successes and
-/// transient failures (rate-limit, timeout, 5xx) return false so the warm
-/// session — and the user's mid-thread context — is preserved for a retry.
+/// True only for a *retryable* `provider_request_rejected` — i.e. the
+/// poisoned-history case. The copy-split in `web_errors.rs` marks a tool-ordering
+/// rejection (orphaned / mismatched `tool_call_id` — for the managed backend an
+/// in-stream SSE `event: error` frame stamped `errorCode:"BAD_REQUEST"`)
+/// `retryable: true` because the de-poison makes "send it again" true, while a
+/// genuine model/parameter 400 stays `retryable: false`. Gating on `&& retryable`
+/// therefore evicts ONLY the poisoned session: a non-retryable param 400 keeps
+/// its warm session (no needless reseed), exactly like successes and transient
+/// failures (rate-limit, timeout, 5xx, session-expiry).
 fn turn_result_poisoned_session(result: &Result<WebChatTaskResult, String>) -> bool {
     matches!(
         result,
-        Err(err) if classify_inference_error(err).error_type == "provider_request_rejected"
+        Err(err) if {
+            let classified = classify_inference_error(err);
+            classified.error_type == "provider_request_rejected" && classified.retryable
+        }
     )
 }
 
@@ -390,14 +396,32 @@ mod tests {
     }
 
     #[test]
-    fn poisoned_on_byo_provider_4xx_envelope() {
-        // BYO/direct provider path: a real `… API error (400 …)` envelope.
+    fn poisoned_on_byo_provider_tool_ordering_400() {
+        // BYO/direct provider tool-ordering rejection — classifies as a
+        // *retryable* provider_request_rejected (poisoned history), so it evicts.
         let err: Result<WebChatTaskResult, String> = Err(
-            "custom_openai API error (400 Bad Request): {\"error\":{\"message\":\
-             \"Invalid 'tool_calls': orphaned tool call id\"}}"
+            "OpenAI API error (400 Bad Request): {\"error\":{\"message\":\"Invalid parameter: \
+             messages with role 'tool' must be a response to a preceding message with \
+             'tool_calls'.\"}}"
                 .to_string(),
         );
         assert!(turn_result_poisoned_session(&err));
+    }
+
+    #[test]
+    fn genuine_param_400_keeps_warm_session() {
+        // A non-poisoning model/parameter 400 is a *non-retryable*
+        // provider_request_rejected — narrowing on `&& retryable` must keep its
+        // warm session (resending the same params won't help; no reseed needed).
+        let err: Result<WebChatTaskResult, String> = Err(
+            "custom_openai API error (400 Bad Request): {\"error\":{\"message\":\
+             \"Unsupported value: 'temperature' must be 1 for this model\"}}"
+                .to_string(),
+        );
+        assert!(
+            !turn_result_poisoned_session(&err),
+            "non-retryable param 400 is not poisoned history — keep warm session"
+        );
     }
 
     #[test]
