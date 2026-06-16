@@ -135,7 +135,6 @@ async fn start_chat_emits_sanitized_chat_error_on_inference_failure() {
     .await
     .expect("start_chat should accept valid request");
 
-    let expected = generic_inference_error_user_message().to_string();
     let recv = timeout(Duration::from_secs(20), async move {
         loop {
             let event = rx.recv().await.expect("event stream should stay open");
@@ -151,11 +150,16 @@ async fn start_chat_emits_sanitized_chat_error_on_inference_failure() {
     .await
     .expect("expected chat_error event for started chat request");
 
+    // #3714: "error sending request for url …" is a transport drop, now classified
+    // by the dedicated `network` arm (was the generic catch-all). The key property
+    // this test guards — raw transport details must never leak into the
+    // user-facing copy — still holds for the new arm.
+    assert_eq!(recv.error_type.as_deref(), Some("network"));
     let message = recv.message.unwrap_or_default();
-    assert_eq!(message, expected);
     assert!(
-        !message.contains("error sending request for url"),
-        "chat error payload must not expose raw transport details"
+        !message.contains("error sending request for url")
+            && !message.contains("internal-api.example.invalid"),
+        "chat error payload must not expose raw transport details: {message}"
     );
 
     // Reset the test-only forced error slot while still holding
