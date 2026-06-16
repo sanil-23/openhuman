@@ -246,6 +246,64 @@ impl Agent {
         saw_signal
     }
 
+    /// Lazily attach this session to the global event bus so it can observe
+    /// [`crate::core::event_bus::DomainEvent::WorkflowsChanged`] (skill
+    /// install / uninstall / create). Mirror of
+    /// [`Self::ensure_composio_integrations_listener`].
+    pub(in super::super) fn ensure_skill_events_listener(&mut self) {
+        if self.skill_events_rx.is_some() {
+            return;
+        }
+        if let Some(bus) = crate::core::event_bus::global() {
+            self.skill_events_rx = Some(bus.raw_receiver());
+            log::debug!(
+                "[agent_loop] armed installed-skills listener for session='{}'",
+                self.event_session_id
+            );
+        }
+    }
+
+    /// Drain pending [`crate::core::event_bus::DomainEvent::WorkflowsChanged`]
+    /// events. Returns `true` when at least one was observed (or the listener
+    /// lagged) and the caller should re-scan the installed skill set via
+    /// [`Self::refresh_workflows`]. Mirror of
+    /// [`Self::drain_composio_integrations_changed_events`].
+    pub(in super::super) fn drain_skill_events(&mut self) -> bool {
+        self.ensure_skill_events_listener();
+        let Some(rx) = self.skill_events_rx.as_mut() else {
+            return false;
+        };
+        use tokio::sync::broadcast::error::TryRecvError;
+
+        let mut saw_signal = false;
+        let mut closed = false;
+        loop {
+            match rx.try_recv() {
+                Ok(crate::core::event_bus::DomainEvent::WorkflowsChanged { reason }) => {
+                    saw_signal = true;
+                    log::info!("[agent_loop] received installed-skills changed event ({reason})");
+                }
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Lagged(skipped)) => {
+                    saw_signal = true;
+                    log::warn!(
+                        "[agent_loop] installed-skills listener lagged by {} event(s); forcing catalogue re-check",
+                        skipped
+                    );
+                }
+                Err(TryRecvError::Closed) => {
+                    closed = true;
+                    break;
+                }
+            }
+        }
+        if closed {
+            self.skill_events_rx = None;
+        }
+        saw_signal
+    }
+
     /// Reconcile the session's delegation schema against the latest cached
     /// integrations snapshot. Returns `true` only when a refresh applied.
     pub(in super::super) fn refresh_delegation_tools_from_cached_integrations(
@@ -297,6 +355,55 @@ impl Agent {
             self.connected_integrations = prev_integrations;
             false
         }
+    }
+
+    /// Reload installed skills/workflows from disk into [`Self::workflows`] so a
+    /// skill installed mid-session appears in the `## Installed Skills`
+    /// catalogue (and is runnable via `run_skill`) without a session restart.
+    ///
+    /// Mirrors [`Self::refresh_delegation_tools_from_cached_integrations`]: the
+    /// catalogue section is rebuilt from `self.workflows` every turn, so simply
+    /// refreshing the slice surfaces new skills on the next turn. Genuinely-new
+    /// skill ids (present on disk but not in the prior snapshot) are parked in
+    /// [`Self::pending_skill_announcement`] — announced exactly once via
+    /// [`Self::announced_skills`] — to be surfaced on the next user message.
+    ///
+    /// Returns `true` when the installed set changed. Cheap no-op when it
+    /// hasn't: a directory scan plus an id-set comparison, no prompt rebuild.
+    pub(in super::super) fn refresh_workflows(&mut self, trigger: &str) -> bool {
+        let id_of = |w: &crate::openhuman::workflows::Workflow| -> String {
+            if w.dir_name.is_empty() {
+                w.name.clone()
+            } else {
+                w.dir_name.clone()
+            }
+        };
+        let latest = crate::openhuman::workflows::load_workflow_metadata(&self.workspace_dir);
+        let current_ids: std::collections::HashSet<String> =
+            self.workflows.iter().map(&id_of).collect();
+        let latest_ids: std::collections::HashSet<String> = latest.iter().map(&id_of).collect();
+        if current_ids == latest_ids {
+            return false;
+        }
+        // Newly-present skills (on disk now, absent from the prior snapshot),
+        // announced at most once this session.
+        let newly: Vec<String> = latest_ids
+            .difference(&current_ids)
+            .filter(|id| self.announced_skills.insert((*id).clone()))
+            .cloned()
+            .collect();
+        log::info!(
+            "[agent_loop] installed-skills set changed ({trigger}): {} -> {} skills; refreshing catalogue (system prompt section rebuilds next turn)",
+            self.workflows.len(),
+            latest.len()
+        );
+        self.workflows = latest;
+        for id in newly {
+            if !self.pending_skill_announcement.contains(&id) {
+                self.pending_skill_announcement.push(id);
+            }
+        }
+        true
     }
 
     /// Re-synthesise `delegate_*` tools for the orchestrator's `subagents`

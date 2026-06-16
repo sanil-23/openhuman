@@ -382,6 +382,15 @@ pub(crate) fn create_workflow_inner(
         .into_iter()
         .find(|s| s.name == slug)
         .ok_or_else(|| format!("created skill '{slug}' but failed to re-discover"))?;
+
+    // Notify live agent sessions so they pick up the new skill in their
+    // `## Installed Skills` catalogue (see `Agent::refresh_workflows`).
+    let _ = crate::core::event_bus::publish_global(
+        crate::core::event_bus::DomainEvent::WorkflowsChanged {
+            reason: "create".to_string(),
+        },
+    );
+
     Ok(created)
 }
 
