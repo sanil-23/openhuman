@@ -63,7 +63,7 @@ pub const BYOK_INCOMPLETE_SENTINEL: &str = "__byok_incomplete__";
 fn is_abstract_tier_model(model: &str) -> bool {
     use crate::openhuman::config::{
         MODEL_AGENTIC_V1, MODEL_CHAT_V1, MODEL_CODING_V1, MODEL_REASONING_QUICK_V1,
-        MODEL_REASONING_V1,
+        MODEL_REASONING_V1, MODEL_VISION_V1,
     };
     // No dedicated constant for the summarization tier yet; keep the literal
     // in sync with the tier name used by the summarizer sub-agent.
@@ -74,6 +74,7 @@ fn is_abstract_tier_model(model: &str) -> bool {
         || trimmed == MODEL_CHAT_V1
         || trimmed == MODEL_AGENTIC_V1
         || trimmed == MODEL_CODING_V1
+        || trimmed == MODEL_VISION_V1
         || trimmed == MODEL_SUMMARIZATION_V1
 }
 
@@ -96,6 +97,7 @@ pub fn resolve_model_for_hint(hint_or_tier: &str, config: &Config) -> String {
         ("chat", crate::openhuman::config::MODEL_CHAT_V1),
         ("agentic", crate::openhuman::config::MODEL_AGENTIC_V1),
         ("coding", crate::openhuman::config::MODEL_CODING_V1),
+        ("vision", crate::openhuman::config::MODEL_VISION_V1),
         ("summarization", "summarization-v1"),
     ];
     let tier_to_role: &[(&str, &str)] = &[
@@ -104,6 +106,7 @@ pub fn resolve_model_for_hint(hint_or_tier: &str, config: &Config) -> String {
         (crate::openhuman::config::MODEL_REASONING_QUICK_V1, "chat"),
         (crate::openhuman::config::MODEL_AGENTIC_V1, "agentic"),
         (crate::openhuman::config::MODEL_CODING_V1, "coding"),
+        (crate::openhuman::config::MODEL_VISION_V1, "vision"),
         ("summarization-v1", "summarization"),
     ];
 
@@ -466,7 +469,7 @@ pub fn create_chat_provider_from_string(
     }
 
     if p == PROVIDER_OPENHUMAN {
-        return make_openhuman_backend(config);
+        return make_openhuman_backend(role, config);
     }
 
     // ── Session gate ──────────────────────────────────────────────────
@@ -699,12 +702,29 @@ pub(crate) fn create_local_chat_provider_from_string(
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// Build the OpenHuman backend provider (session-JWT auth).
-fn make_openhuman_backend(config: &Config) -> anyhow::Result<(Box<dyn Provider>, String)> {
-    let model = config
-        .default_model
-        .clone()
-        .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| "reasoning-v1".to_string());
+///
+/// `role` is the workload name (e.g. `"chat"`, `"vision"`). The managed backend
+/// otherwise derives its model from `config.default_model` (which defaults to the
+/// non-vision `chat-v1` tier), so a tier-specific workload whose per-workload
+/// provider is unset would silently inherit the global default. For the `vision`
+/// workload that mismatch is fatal: an unset `vision_provider` would resolve to
+/// `chat-v1`, `model_supports_vision` would report `false`, and the turn engine
+/// would strip every attached image — leaving the managed vision sub-agent blind.
+/// Pin `vision` to the dedicated multimodal `vision-v1` tier so the managed
+/// default path keeps working without requiring the user to set `vision_provider`.
+fn make_openhuman_backend(
+    role: &str,
+    config: &Config,
+) -> anyhow::Result<(Box<dyn Provider>, String)> {
+    let model = if role == "vision" {
+        crate::openhuman::config::MODEL_VISION_V1.to_string()
+    } else {
+        config
+            .default_model
+            .clone()
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| "reasoning-v1".to_string())
+    };
     // Critical: pass the *config's* workspace directory through so the
     // provider's `AuthService` reads `auth-profiles.json` from the
     // same dir login wrote to. Without this, `ProviderRuntimeOptions::default()`
@@ -1301,7 +1321,7 @@ fn make_cloud_provider_by_slug(
                 "[providers][chat-factory] slug='{}' has auth_style=OpenhumanJwt → routing to openhuman backend",
                 slug
             );
-            make_openhuman_backend(config)
+            make_openhuman_backend(role, config)
         }
         AuthStyle::None => {
             let p = make_openai_compatible_provider_with_config(
