@@ -421,10 +421,10 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
   });
 
   describe('proactive thread resolution', () => {
-    it('reuses the selected thread when resolving a proactive: sender', async () => {
+    it('reuses the selected thread when it is fresh (no messages)', async () => {
       store.dispatch(
         loadThreads.fulfilled(
-          { threads: [{ id: 'visible-thread', title: 'x' }] as never, count: 1 },
+          { threads: [{ id: 'visible-thread', title: 'x', messageCount: 0 }] as never, count: 1 },
           'req-id',
           undefined
         )
@@ -440,7 +440,7 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
         });
       });
 
-      // createNewThread must NOT be invoked when a visible thread already exists.
+      // createNewThread must NOT be invoked when a fresh visible thread exists.
       expect(threadApi.createNewThread).not.toHaveBeenCalled();
       await waitFor(() =>
         expect(threadApi.appendMessage).toHaveBeenCalledWith(
@@ -448,6 +448,47 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
           expect.objectContaining({ content: 'ping', sender: 'agent' })
         )
       );
+    });
+
+    it('opens a new thread instead of interrupting a selected thread that has messages (#3713)', async () => {
+      vi.mocked(threadApi.createNewThread).mockResolvedValue({
+        id: 'fresh-thread',
+        title: 'new',
+      } as never);
+      vi.mocked(threadApi.getThreads).mockResolvedValue({
+        threads: [{ id: 'fresh-thread', title: 'new' }] as never,
+        count: 1,
+      });
+
+      // The user is mid-conversation: the selected thread already holds
+      // messages, so a proactive morning brief / subconscious update must
+      // NOT be injected into it.
+      store.dispatch(
+        loadThreads.fulfilled(
+          { threads: [{ id: 'busy-thread', title: 'chat', messageCount: 4 }] as never, count: 1 },
+          'req-id',
+          undefined
+        )
+      );
+      store.dispatch(setSelectedThread('busy-thread'));
+      const listeners = renderProvider();
+
+      await act(async () => {
+        listeners.onProactiveMessage?.({
+          thread_id: 'proactive:morning_briefing',
+          request_id: 'req-mb',
+          full_response: "good morning! here's your briefing",
+        });
+      });
+
+      // The active conversation must be left untouched; delivery goes to a
+      // dedicated new thread.
+      await waitFor(() => expect(threadApi.createNewThread).toHaveBeenCalledTimes(1));
+      expect(threadApi.appendMessage).toHaveBeenCalledWith(
+        'fresh-thread',
+        expect.objectContaining({ content: "good morning! here's your briefing" })
+      );
+      expect(threadApi.appendMessage).not.toHaveBeenCalledWith('busy-thread', expect.anything());
     });
 
     it('creates a new thread when no visible thread exists for proactive handoff', async () => {

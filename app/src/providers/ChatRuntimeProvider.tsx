@@ -65,6 +65,23 @@ const MAX_SEGMENT_DELIVERIES = 100;
 
 type SegmentDelivery = { segments: Map<number, string>; createdAt: number; lastSeenAt: number };
 
+type ThreadSliceState = ReturnType<typeof store.getState>['thread'];
+
+/**
+ * A thread is a valid proactive-delivery target only when it is "fresh" —
+ * i.e. holds no messages. We check both the in-memory message cache and the
+ * persisted `messageCount` snapshot, so a thread that already has a
+ * conversation server-side (but whose messages aren't loaded into the cache
+ * yet) is still treated as occupied and never reused. See #3713.
+ */
+function threadHasMessages(state: ThreadSliceState, threadId: string): boolean {
+  const cached = state.messagesByThreadId[threadId];
+  if (cached && cached.length > 0) return true;
+  if (threadId === state.selectedThreadId && state.messages.length > 0) return true;
+  const thread = state.threads.find(t => t.id === threadId);
+  return (thread?.messageCount ?? 0) > 0;
+}
+
 function rtLog(message: string, fields?: Record<string, string | number | null | undefined>) {
   if (IS_PROD) return;
   if (fields && Object.keys(fields).length > 0) {
@@ -262,14 +279,18 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
       }
 
       const state = store.getState().thread;
-      // Resolution priority: selected > any in-flight inference thread > first
-      // thread. With parallel inference there may be several active threads;
-      // any one is an acceptable proactive target when nothing is selected.
-      const firstActiveThreadId = Object.keys(state.activeThreadIds)[0] ?? null;
-      const targetFromState =
-        state.selectedThreadId ?? firstActiveThreadId ?? state.threads[0]?.id ?? null;
-      if (targetFromState) {
-        return targetFromState;
+      // Reuse an existing thread for proactive delivery ONLY when it is
+      // fresh (no messages). Injecting a morning brief / subconscious
+      // update into a thread that already holds a conversation interrupts
+      // the active chat flow (#3713). Candidate priority is selected >
+      // first thread; if the candidate already has messages we fall
+      // through and open a dedicated new thread instead. An in-flight
+      // inference thread always has at least the user's message, so it is
+      // never considered fresh — that is why `activeThreadIds` is no
+      // longer used as a target here.
+      const candidateThreadId = state.selectedThreadId ?? state.threads[0]?.id ?? null;
+      if (candidateThreadId && !threadHasMessages(state, candidateThreadId)) {
+        return candidateThreadId;
       }
 
       if (proactiveThreadCreationPromiseRef.current) {
