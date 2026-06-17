@@ -103,16 +103,31 @@ pub fn render_datetime(ctx: &PromptContext<'_>) -> Result<String> {
 /// session. The static grounding *rule* that tells the model to read this
 /// line lives in [`DateTimeSection`] / [`render_datetime`].
 pub fn current_datetime_line() -> String {
-    let iana = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
-    let now = chrono::Local::now();
-    format!(
-        "Current Date & Time: {} {} ({}, UTC{}), {}",
-        now.format("%Y-%m-%d %H:%M:%S"),
-        iana,
-        now.format("%Z"),
-        now.format("%:z"),
-        now.format("%A"),
-    )
+    // When the host resolves an IANA zone, stamp local time + that zone. When
+    // it can't (CI, stripped containers), fall back to true UTC — formatting
+    // `Utc::now()` so the time, offset, and zone label all agree rather than
+    // pairing a "UTC" label with a local clock/offset.
+    match iana_time_zone::get_timezone() {
+        Ok(iana) => {
+            let now = chrono::Local::now();
+            format!(
+                "Current Date & Time: {} {} ({}, UTC{}), {}",
+                now.format("%Y-%m-%d %H:%M:%S"),
+                iana,
+                now.format("%Z"),
+                now.format("%:z"),
+                now.format("%A"),
+            )
+        }
+        Err(_) => {
+            let now = chrono::Utc::now();
+            format!(
+                "Current Date & Time: {} UTC (UTC, UTC+00:00), {}",
+                now.format("%Y-%m-%d %H:%M:%S"),
+                now.format("%A"),
+            )
+        }
+    }
 }
 
 /// Render the `## User` identity block. Empty when

@@ -271,15 +271,19 @@ fn current_datetime_line_is_fresh_local_stamp() {
     // `UTC` fallback), a UTC offset, and the weekday — everything the model
     // needs to localize a greeting without a tool call (#3602).
     let line = super::current_datetime_line();
-    assert!(line.starts_with("Current Date & Time: "));
+    let rest = line
+        .strip_prefix("Current Date & Time: ")
+        .unwrap_or_else(|| panic!("stamp must start with canonical prefix: {line}"));
+    // The first 19 chars must be a canonical `YYYY-MM-DD HH:MM:SS`.
+    let dt = rest
+        .get(0..19)
+        .unwrap_or_else(|| panic!("stamp too short for YYYY-MM-DD HH:MM:SS: {line}"));
+    chrono::NaiveDateTime::parse_from_str(dt, "%Y-%m-%d %H:%M:%S")
+        .unwrap_or_else(|e| panic!("timestamp must match YYYY-MM-DD HH:MM:SS ({e}): {line}"));
     assert!(line.contains("UTC"), "missing UTC offset: {line}");
     assert!(
         line.contains('/') || line.contains(" UTC "),
         "missing IANA zone or UTC fallback: {line}"
-    );
-    assert!(
-        line.chars().any(|c| c.is_ascii_digit()),
-        "missing a concrete timestamp: {line}"
     );
 }
 

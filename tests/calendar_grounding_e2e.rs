@@ -135,11 +135,18 @@ async fn test_orchestrator_has_current_date_context() -> Result<()> {
         .iter()
         .find(|m| m.role == "user" && m.content.contains("Current Date & Time:"))
         .expect("User message should carry the per-turn Current Date & Time stamp");
-    assert!(
-        user_msg.content.contains("202"),
-        "user message stamp must include a concrete year: {}",
-        user_msg.content
-    );
+    // Assert a concrete `YYYY-MM-DD HH:MM:SS` shape rather than a decade token
+    // (which would rot as years advance).
+    let after = user_msg
+        .content
+        .split("Current Date & Time: ")
+        .nth(1)
+        .expect("stamp must follow the canonical prefix");
+    let dt = after
+        .get(0..19)
+        .expect("stamp must include YYYY-MM-DD HH:MM:SS");
+    chrono::NaiveDateTime::parse_from_str(dt, "%Y-%m-%d %H:%M:%S")
+        .expect("user message stamp must include a parseable YYYY-MM-DD HH:MM:SS");
 
     Ok(())
 }

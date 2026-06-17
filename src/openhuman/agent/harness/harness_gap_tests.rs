@@ -631,11 +631,16 @@ fn current_datetime_line_matches_iso8601_date_and_utc_offset_pattern() {
     // ISO-8601 date, UTC offset, and IANA zone (or `UTC` fallback).
     let payload = crate::openhuman::agent::prompts::current_datetime_line();
 
-    let has_date = payload.chars().filter(|c| c.is_ascii_digit()).count() >= 8;
-    assert!(
-        has_date,
-        "stamp must contain enough digits for a date: {payload}"
-    );
+    // Parse the concrete `YYYY-MM-DD HH:MM:SS` prefix rather than counting
+    // loose digits, so a malformed layout can't slip through.
+    let rest = payload
+        .strip_prefix("Current Date & Time: ")
+        .expect("stamp must start with the canonical prefix");
+    let dt = rest
+        .get(0..19)
+        .expect("stamp must include YYYY-MM-DD HH:MM:SS");
+    chrono::NaiveDateTime::parse_from_str(dt, "%Y-%m-%d %H:%M:%S")
+        .expect("timestamp must match YYYY-MM-DD HH:MM:SS");
     assert!(
         payload.contains("UTC"),
         "stamp must contain UTC offset marker: {payload}"
