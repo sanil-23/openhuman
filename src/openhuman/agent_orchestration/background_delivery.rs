@@ -64,6 +64,12 @@ impl EventHandler for BackgroundDeliveryHandler {
                 // A user turn just ended — drain anything that finished while it ran.
                 schedule_delivery(session_id.clone(), Duration::from_millis(300));
             }
+            DomainEvent::AgentError { session_id, .. } => {
+                // A failed turn may not emit AgentTurnCompleted — clear busy so
+                // delivery isn't stuck, then try to drain.
+                busy().lock().expect("busy poisoned").remove(session_id);
+                schedule_delivery(session_id.clone(), Duration::from_millis(300));
+            }
             DomainEvent::SubagentCompleted { parent_session, .. } => {
                 // Debounce so a burst of completions batches into a single turn.
                 schedule_delivery(parent_session.clone(), DEBOUNCE);
@@ -81,22 +87,33 @@ fn schedule_delivery(session: String, delay: Duration) {
     });
 }
 
-/// Decide what to deliver for a session **right now** (sync, testable): if the
-/// session is idle, drain all ready results and return `(count, thread_id,
-/// notice)`. Returns `None` when busy (queue left intact, retried later),
-/// when nothing is pending, or when the batch is headless (no originating
-/// thread to stream into — dropped).
-fn plan_delivery(session: &str) -> Option<(usize, String, String)> {
+/// Snapshot the ready batch for a session **right now** (sync, testable): if the
+/// session is idle, drain all ready results. Returns `None` (queue untouched)
+/// when busy or nothing is pending. Headless filtering + delivery happen in the
+/// caller, which can requeue the batch if the turn fails.
+fn plan_delivery(session: &str) -> Option<Vec<background_completions::CompletedBackgroundAgent>> {
     if is_busy(session) {
         return None;
     }
     let batch = background_completions::take_pending(session);
-    match (
-        background_completions::batch_thread_id(&batch),
-        background_completions::build_batched_notice(&batch),
-    ) {
-        (Some(thread_id), Some(notice)) => Some((batch.len(), thread_id, notice)),
-        _ => None,
+    if batch.is_empty() {
+        None
+    } else {
+        Some(batch)
+    }
+}
+
+/// Re-queue a drained batch (after a failed delivery) so it retries on the next
+/// idle drain rather than being lost.
+fn requeue(session: &str, batch: Vec<background_completions::CompletedBackgroundAgent>) {
+    for c in batch {
+        background_completions::record_completion(
+            session,
+            c.task_id,
+            c.agent_id,
+            c.summary,
+            c.parent_thread_id,
+        );
     }
 }
 
@@ -106,7 +123,9 @@ async fn try_deliver(session: String) {
     if is_busy(&session) || !background_completions::has_pending(&session) {
         return;
     }
-    // Claim the delivery slot (skip if a delivery is already in flight).
+    // Claim the delivery slot — held for the WHOLE delivery (including the
+    // awaited turn) so a concurrent completion can't start a second delivery
+    // turn on the same thread. Skip if a delivery is already in flight.
     {
         let mut d = delivering().lock().expect("delivering poisoned");
         if !d.insert(session.clone()) {
@@ -114,26 +133,38 @@ async fn try_deliver(session: String) {
         }
     }
 
-    // Re-check busy + drain under the claim — a user turn may have started.
-    let job = plan_delivery(&session);
+    if let Some(batch) = plan_delivery(&session) {
+        match (
+            background_completions::batch_thread_id(&batch),
+            background_completions::build_batched_notice(&batch),
+        ) {
+            (Some(thread_id), Some(notice)) => {
+                log::info!(
+                    "[background_delivery] delivering {} batched background result(s) \
+                     session={session} thread_id={thread_id}",
+                    batch.len()
+                );
+                if let Err(e) = crate::openhuman::agent::task_dispatcher::run_system_turn_on_thread(
+                    thread_id, notice,
+                )
+                .await
+                {
+                    log::warn!(
+                        "[background_delivery] delivery turn failed session={session} error={e}"
+                    );
+                    requeue(&session, batch); // don't lose results on a failed turn
+                }
+            }
+            // Headless (no originating thread to stream into) — drop the batch.
+            _ => {}
+        }
+    }
 
+    // Release the slot only AFTER the turn settles.
     delivering()
         .lock()
         .expect("delivering poisoned")
         .remove(&session);
-
-    if let Some((count, thread_id, notice)) = job {
-        log::info!(
-            "[background_delivery] delivering {count} batched background result(s) \
-             session={session} thread_id={thread_id}"
-        );
-        if let Err(e) =
-            crate::openhuman::agent::task_dispatcher::run_system_turn_on_thread(thread_id, notice)
-                .await
-        {
-            log::warn!("[background_delivery] delivery turn failed session={session} error={e}");
-        }
-    }
 }
 
 /// Register the delivery subscriber on the global event bus. Keeps the
@@ -149,14 +180,18 @@ mod tests {
     use crate::openhuman::agent_orchestration::background_completions::record_completion;
 
     #[test]
-    fn plan_delivers_batch_when_idle_with_thread() {
+    fn plan_drains_ready_batch_when_idle() {
         let s = "bd-ready";
         record_completion(s, "sub-1", "researcher", "alpha", Some("thread-9".into()));
         record_completion(s, "sub-2", "researcher", "beta", Some("thread-9".into()));
 
-        let (count, thread_id, notice) = plan_delivery(s).expect("plans a delivery");
-        assert_eq!(count, 2);
-        assert_eq!(thread_id, "thread-9");
+        let batch = plan_delivery(s).expect("plans a delivery");
+        assert_eq!(batch.len(), 2);
+        assert_eq!(
+            background_completions::batch_thread_id(&batch).as_deref(),
+            Some("thread-9")
+        );
+        let notice = background_completions::build_batched_notice(&batch).unwrap();
         assert!(notice.contains("sub-1") && notice.contains("sub-2"));
         assert!(!background_completions::has_pending(s)); // drained
     }
@@ -175,19 +210,32 @@ mod tests {
     }
 
     #[test]
-    fn plan_drops_headless_batch_with_no_thread() {
-        let s = "bd-headless";
-        record_completion(s, "sub-1", "researcher", "x", None);
-        assert!(plan_delivery(s).is_none()); // no thread → nothing to stream into
-    }
-
-    #[test]
     fn plan_none_when_nothing_pending() {
         assert!(plan_delivery("bd-empty-unique").is_none());
     }
 
+    #[test]
+    fn headless_batch_has_no_thread_so_caller_drops_it() {
+        let s = "bd-headless";
+        record_completion(s, "sub-1", "researcher", "x", None);
+        let batch = plan_delivery(s).expect("batch present");
+        // No originating thread → batch_thread_id is None, so try_deliver drops it.
+        assert!(background_completions::batch_thread_id(&batch).is_none());
+    }
+
+    #[test]
+    fn requeue_restores_a_failed_batch() {
+        let s = "bd-requeue";
+        record_completion(s, "sub-1", "researcher", "alpha", Some("t".into()));
+        let batch = plan_delivery(s).expect("batch");
+        assert!(!background_completions::has_pending(s)); // drained
+        requeue(s, batch);
+        assert!(background_completions::has_pending(s)); // restored for retry
+        let _ = background_completions::take_pending(s); // cleanup
+    }
+
     #[tokio::test]
-    async fn handler_tracks_busy_across_turn_events() {
+    async fn handler_tracks_busy_across_turn_and_error_events() {
         let h = BackgroundDeliveryHandler;
         let sid = "bd-turn".to_string();
 
@@ -202,6 +250,16 @@ mod tests {
             session_id: sid.clone(),
             text_chars: 0,
             iterations: 0,
+        })
+        .await;
+        assert!(!is_busy(&sid));
+
+        // A failed turn (AgentError) must also clear busy so delivery isn't stuck.
+        busy().lock().expect("busy").insert(sid.clone());
+        h.handle(&DomainEvent::AgentError {
+            session_id: sid.clone(),
+            message: "boom".into(),
+            recoverable: true,
         })
         .await;
         assert!(!is_busy(&sid));

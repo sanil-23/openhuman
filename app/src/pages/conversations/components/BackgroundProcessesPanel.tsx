@@ -93,6 +93,13 @@ function statusStyle(status: ToolTimelineEntryStatus): {
   }
 }
 
+export interface BackgroundProcessesPanelProps {
+  open: boolean;
+  processes: BackgroundProcess[];
+  onClose: () => void;
+  onOpenProcess: (taskId: string) => void;
+}
+
 /**
  * Right side-drawer listing the thread's detached background sub-agents. Each
  * row opens the existing {@link SubagentDrawer} (via `onOpenProcess`) for the
@@ -103,12 +110,7 @@ export function BackgroundProcessesPanel({
   processes,
   onClose,
   onOpenProcess,
-}: {
-  open: boolean;
-  processes: BackgroundProcess[];
-  onClose: () => void;
-  onOpenProcess: (taskId: string) => void;
-}) {
+}: BackgroundProcessesPanelProps) {
   const { t } = useT();
 
   useEffect(() => {
