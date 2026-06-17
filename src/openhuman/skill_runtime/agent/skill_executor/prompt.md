@@ -32,7 +32,7 @@ Your toolset is intentionally narrow (shell, files, skill loading, runtimes). So
 
 Format your final report exactly like this:
 
-```
+```text
 ## Completed
 - <step you finished> → <result / where the output is>
 

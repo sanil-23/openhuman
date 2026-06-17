@@ -432,6 +432,42 @@ fn skill_listener_drains_workflows_changed_events() {
 }
 
 #[test]
+fn skill_listener_treats_lag_as_signal() {
+    let _ = init_global(64);
+    let mut agent = build_minimal_agent_with_definition_name(Some("orchestrator"));
+    agent.ensure_skill_events_listener();
+    // Flood well past the 64-slot bounded bus so the receiver lags. The
+    // `Lagged` arm must still report a signal (returns true) so a refresh
+    // isn't silently dropped under load.
+    for _ in 0..256 {
+        publish_global(DomainEvent::WorkflowsChanged {
+            reason: "install".into(),
+        });
+    }
+    assert!(
+        agent.drain_skill_events(),
+        "a lagged listener must be treated as a signal"
+    );
+}
+
+#[test]
+fn skill_listener_closed_channel_nulls_rx_and_is_not_a_signal() {
+    let mut agent = build_minimal_agent_with_definition_name(Some("orchestrator"));
+    // A receiver whose sender has been dropped → `try_recv` yields `Closed`.
+    let (tx, rx) = tokio::sync::broadcast::channel::<DomainEvent>(4);
+    drop(tx);
+    agent.set_skill_events_rx_for_test(rx);
+    assert!(
+        !agent.drain_skill_events(),
+        "a closed channel is not a signal"
+    );
+    assert!(
+        !agent.has_skill_events_rx(),
+        "a closed receiver should be dropped so the next drain re-arms"
+    );
+}
+
+#[test]
 fn refresh_workflows_picks_up_skill_installed_on_disk() {
     use crate::openhuman::workflows::ops_types::{SKILL_MD, TRUST_MARKER};
 

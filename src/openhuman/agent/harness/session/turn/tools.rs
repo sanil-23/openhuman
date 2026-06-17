@@ -390,7 +390,11 @@ impl Agent {
             return false;
         }
         // Newly-present skills (on disk now, absent from the prior snapshot),
-        // announced at most once this session.
+        // announced at most once this session. Removals are detected by the
+        // id-set diff above but are NOT yet retracted from the frozen
+        // catalogue (symmetric to the integration/MCP announcements, which
+        // also only announce additions) — tracked in
+        // tinyhumansai/openhuman#3738.
         let newly: Vec<String> = latest_ids
             .difference(&current_ids)
             .filter(|id| self.announced_skills.insert((*id).clone()))
@@ -432,6 +436,23 @@ impl Agent {
     #[cfg(test)]
     pub(in super::super) fn test_pending_skill_announcement(&self) -> &[String] {
         &self.pending_skill_announcement
+    }
+
+    /// Test-only: inject a specific skill-events receiver (e.g. one whose
+    /// sender has been dropped) so `drain_skill_events`' `Closed` arm is
+    /// reachable without the global bus singleton.
+    #[cfg(test)]
+    pub(in super::super) fn set_skill_events_rx_for_test(
+        &mut self,
+        rx: tokio::sync::broadcast::Receiver<crate::core::event_bus::DomainEvent>,
+    ) {
+        self.skill_events_rx = Some(rx);
+    }
+
+    /// Test-only: whether the skill-events listener is currently armed.
+    #[cfg(test)]
+    pub(in super::super) fn has_skill_events_rx(&self) -> bool {
+        self.skill_events_rx.is_some()
     }
 
     /// Re-synthesise `delegate_*` tools for the orchestrator's `subagents`
