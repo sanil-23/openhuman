@@ -250,6 +250,14 @@ impl Tool for SpawnAsyncSubagentTool {
         // entry knows which parent thread owns this sub-agent — that's how
         // `cancel_for_thread` aborts it when the thread is deleted.
         let register_parent_thread_id = background_parent_thread_id.clone();
+        // Lifecycle-critical wiring: log the parent-thread binding so the
+        // thread-close cancellation path (`cancel_for_thread`) is grep-friendly.
+        log::debug!(
+            "[spawn_async_subagent] register task_id={} parent_session={} parent_thread_id={}",
+            task_id,
+            parent_session,
+            register_parent_thread_id.as_deref().unwrap_or("none")
+        );
         let background_prompt = add_background_contract(&prompt);
 
         let join = tokio::spawn(async move {
