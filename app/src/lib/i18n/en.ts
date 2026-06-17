@@ -3403,7 +3403,6 @@ const en: TranslationMap = {
   'conversations.backgroundTasks.statusDone': 'Done',
   'conversations.backgroundTasks.statusFailed': 'Failed',
   'conversations.backgroundTasks.statusNeedsYou': 'Needs you',
-  'conversations.backgroundTasks.exitCode': 'exit {code}',
   'conversations.backgroundTasks.toolCallOne': '{count} tool call',
   'conversations.backgroundTasks.toolCallOther': '{count} tool calls',
   'conversations.backgroundTasks.steps': '{count} steps',
