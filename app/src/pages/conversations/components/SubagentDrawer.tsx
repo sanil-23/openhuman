@@ -130,15 +130,11 @@ export function SubagentDrawer({
 }) {
   const { t } = useT();
   // Cancel-in-flight + last-error state for the "Cancel task" affordance.
+  // The parent keys this drawer by task id, so a different sub-agent remounts
+  // with fresh state — no effect-driven reset needed (which would trip the
+  // repo's `react-hooks/set-state-in-effect` rule).
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState(false);
-
-  // Reset the transient cancel state whenever a different sub-agent is shown.
-  const subagentTaskId = subagent?.taskId;
-  useEffect(() => {
-    setCancelling(false);
-    setCancelError(false);
-  }, [subagentTaskId]);
 
   // Close on Escape for keyboard parity with the backdrop click.
   useEffect(() => {

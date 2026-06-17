@@ -2646,6 +2646,7 @@ const Conversations = ({
         }}
       />
       <SubagentDrawer
+        key={openSubagentTaskId ?? 'none'}
         subagent={openSubagentEntry?.subagent ?? null}
         status={openSubagentEntry?.status}
         onCancel={

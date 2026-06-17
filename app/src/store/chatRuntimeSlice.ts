@@ -405,8 +405,9 @@ function timelineStatusFromRun(status: AgentRun['status']): ToolTimelineEntrySta
   switch (status) {
     case 'completed':
       return 'success';
-    case 'failed':
     case 'cancelled':
+      return 'cancelled';
+    case 'failed':
     case 'interrupted':
       return 'error';
     case 'awaiting_user':

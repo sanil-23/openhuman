@@ -146,12 +146,15 @@ fn json_output(name: &'static str, comment: &'static str) -> FieldSchema {
     }
 }
 
-/// Extract a required non-empty string param, or an RPC-facing error.
+/// Extract a required non-empty string param, **trimmed**, or an RPC-facing
+/// error. Trimming matters for `taskId`: a whitespace-padded id would otherwise
+/// pass validation yet never match the registry key in `cancel_by_task`.
 fn require_str(params: &Map<String, Value>, key: &str) -> Result<String, String> {
     params
         .get(key)
         .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .map(str::to_string)
         .ok_or_else(|| format!("missing required param: {key}"))
 }
@@ -186,6 +189,9 @@ mod tests {
         params.insert("taskId".into(), json!("   "));
         assert!(require_str(&params, "taskId").is_err());
         params.insert("taskId".into(), json!("sub-1"));
+        assert_eq!(require_str(&params, "taskId").unwrap(), "sub-1");
+        // Whitespace-padded ids are trimmed so they match the registry key.
+        params.insert("taskId".into(), json!("  sub-1  "));
         assert_eq!(require_str(&params, "taskId").unwrap(), "sub-1");
     }
 
