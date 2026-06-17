@@ -216,16 +216,6 @@ fn legacy_aliases() -> &'static [(&'static str, &'static str)] {
 pub fn resolve_legacy(method: &str) -> &str {
     for (legacy, canonical) in legacy_aliases() {
         if *legacy == method {
-            // Stable, greppable resolution-source log. The dispatcher
-            // (`src/core/dispatch.rs`) logs the rewrite again at its call
-            // site; this line guarantees visibility regardless of which path
-            // invokes the resolver, and only fires on an actual match so the
-            // pass-through hot path stays silent.
-            log::debug!(
-                "[rpc-legacy-alias] resolved legacy method={} -> canonical={}",
-                method,
-                canonical
-            );
             return canonical;
         }
     }
