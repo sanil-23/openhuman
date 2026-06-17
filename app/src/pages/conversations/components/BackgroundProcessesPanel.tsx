@@ -60,7 +60,11 @@ type StatusLabelKey =
   | 'conversations.backgroundTasks.statusFailed'
   | 'conversations.backgroundTasks.statusNeedsYou';
 
-function statusStyle(status: ToolTimelineEntryStatus): { dot: string; labelKey: StatusLabelKey; pill: string } {
+function statusStyle(status: ToolTimelineEntryStatus): {
+  dot: string;
+  labelKey: StatusLabelKey;
+  pill: string;
+} {
   switch (status) {
     case 'running':
       return {
@@ -123,7 +127,10 @@ export function BackgroundProcessesPanel({
     running > 0
       ? t('conversations.backgroundTasks.running').replace('{count}', String(running))
       : t('conversations.backgroundTasks.noneRunning');
-  const totalLabel = t('conversations.backgroundTasks.total').replace('{count}', String(processes.length));
+  const totalLabel = t('conversations.backgroundTasks.total').replace(
+    '{count}',
+    String(processes.length)
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" data-testid="background-processes-panel">
@@ -144,7 +151,12 @@ export function BackgroundProcessesPanel({
             onClick={onClose}
             className="flex h-7 w-7 items-center justify-center rounded-lg text-stone-400 hover:bg-stone-100 hover:text-stone-600 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-300">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </header>
@@ -172,8 +184,12 @@ export function BackgroundProcessesPanel({
                   <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${s.dot}`} />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center justify-between gap-2">
-                      <span className="truncate text-sm font-medium text-stone-800 dark:text-neutral-100">{p.name}</span>
-                      <span className={`shrink-0 text-[11px] font-medium ${s.pill}`}>{t(s.labelKey)}</span>
+                      <span className="truncate text-sm font-medium text-stone-800 dark:text-neutral-100">
+                        {p.name}
+                      </span>
+                      <span className={`shrink-0 text-[11px] font-medium ${s.pill}`}>
+                        {t(s.labelKey)}
+                      </span>
                     </span>
                     {p.goal ? (
                       <span className="mt-0.5 line-clamp-2 block text-[12px] text-stone-500 dark:text-neutral-400">

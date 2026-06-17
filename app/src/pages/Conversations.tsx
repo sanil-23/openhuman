@@ -1285,7 +1285,7 @@ const Conversations = ({
   // Detached background sub-agents (mode === 'async') spawned in this thread.
   const backgroundProcesses = useMemo(
     () => selectBackgroundProcesses(selectedThreadToolTimeline),
-    [selectedThreadToolTimeline],
+    [selectedThreadToolTimeline]
   );
   const runningBackgroundCount = backgroundProcesses.filter(p => p.status === 'running').length;
   // Re-derive the open subagent's live activity (and its row status) from the
@@ -1790,7 +1790,7 @@ const Conversations = ({
                   backgroundProcesses.length > 0
                     ? t('conversations.backgroundTasks.titleWithCount').replace(
                         '{count}',
-                        String(backgroundProcesses.length),
+                        String(backgroundProcesses.length)
                       )
                     : t('conversations.backgroundTasks.title')
                 }

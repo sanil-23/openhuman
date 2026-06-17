@@ -37,7 +37,10 @@ fn delivering() -> &'static Mutex<HashSet<String>> {
 }
 
 fn is_busy(session: &str) -> bool {
-    busy().lock().expect("background_delivery busy poisoned").contains(session)
+    busy()
+        .lock()
+        .expect("background_delivery busy poisoned")
+        .contains(session)
 }
 
 struct BackgroundDeliveryHandler;
@@ -51,7 +54,10 @@ impl EventHandler for BackgroundDeliveryHandler {
     async fn handle(&self, event: &DomainEvent) {
         match event {
             DomainEvent::AgentTurnStarted { session_id, .. } => {
-                busy().lock().expect("busy poisoned").insert(session_id.clone());
+                busy()
+                    .lock()
+                    .expect("busy poisoned")
+                    .insert(session_id.clone());
             }
             DomainEvent::AgentTurnCompleted { session_id, .. } => {
                 busy().lock().expect("busy poisoned").remove(session_id);
@@ -104,7 +110,10 @@ async fn try_deliver(session: String) {
         }
     };
 
-    delivering().lock().expect("delivering poisoned").remove(&session);
+    delivering()
+        .lock()
+        .expect("delivering poisoned")
+        .remove(&session);
 
     if let Some((count, thread_id, notice)) = job {
         log::info!(
@@ -112,7 +121,8 @@ async fn try_deliver(session: String) {
              session={session} thread_id={thread_id}"
         );
         if let Err(e) =
-            crate::openhuman::agent::task_dispatcher::run_system_turn_on_thread(thread_id, notice).await
+            crate::openhuman::agent::task_dispatcher::run_system_turn_on_thread(thread_id, notice)
+                .await
         {
             log::warn!("[background_delivery] delivery turn failed session={session} error={e}");
         }

@@ -8,8 +8,8 @@ import type {
   ToolTimelineEntryStatus,
 } from '../../../../store/chatRuntimeSlice';
 import {
-  BackgroundProcessesPanel,
   type BackgroundProcess,
+  BackgroundProcessesPanel,
   selectBackgroundProcesses,
 } from '../BackgroundProcessesPanel';
 
@@ -20,7 +20,7 @@ function sub(partial: Partial<SubagentActivity> & { taskId: string }): SubagentA
 function entry(
   status: ToolTimelineEntryStatus,
   subagent?: SubagentActivity,
-  name = 'subagent:researcher',
+  name = 'subagent:researcher'
 ): ToolTimelineEntry {
   return { id: `e-${subagent?.taskId ?? name}`, name, round: 0, status, subagent };
 }
@@ -60,22 +60,44 @@ describe('selectBackgroundProcesses', () => {
             { callId: 'a', toolName: 't', status: 'success' },
             { callId: 'b', toolName: 't', status: 'success' },
           ],
-        }),
+        })
       ),
     ]);
-    expect(out[0]).toMatchObject({ name: 'Researcher', toolCount: 2, iterations: 3, status: 'running' });
+    expect(out[0]).toMatchObject({
+      name: 'Researcher',
+      toolCount: 2,
+      iterations: 3,
+      status: 'running',
+    });
   });
 });
 
 describe('BackgroundProcessesPanel', () => {
   const procs: BackgroundProcess[] = [
-    { taskId: 'sub-1', name: 'Researcher', goal: 'research the Eiffel Tower', status: 'running', toolCount: 16 },
-    { taskId: 'sub-2', name: 'Archivist', goal: 'summarize notes', status: 'success', toolCount: 4 },
+    {
+      taskId: 'sub-1',
+      name: 'Researcher',
+      goal: 'research the Eiffel Tower',
+      status: 'running',
+      toolCount: 16,
+    },
+    {
+      taskId: 'sub-2',
+      name: 'Archivist',
+      goal: 'summarize notes',
+      status: 'success',
+      toolCount: 4,
+    },
   ];
 
   it('renders nothing when closed', () => {
     const { container } = render(
-      <BackgroundProcessesPanel open={false} processes={procs} onClose={vi.fn()} onOpenProcess={vi.fn()} />,
+      <BackgroundProcessesPanel
+        open={false}
+        processes={procs}
+        onClose={vi.fn()}
+        onOpenProcess={vi.fn()}
+      />
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -83,7 +105,12 @@ describe('BackgroundProcessesPanel', () => {
   it('lists processes and opens one on click', async () => {
     const onOpenProcess = vi.fn();
     render(
-      <BackgroundProcessesPanel open processes={procs} onClose={vi.fn()} onOpenProcess={onOpenProcess} />,
+      <BackgroundProcessesPanel
+        open
+        processes={procs}
+        onClose={vi.fn()}
+        onOpenProcess={onOpenProcess}
+      />
     );
     const rows = screen.getAllByTestId('background-process-row');
     expect(rows).toHaveLength(2);
@@ -95,7 +122,9 @@ describe('BackgroundProcessesPanel', () => {
   });
 
   it('shows an empty state when there are no background tasks', () => {
-    render(<BackgroundProcessesPanel open processes={[]} onClose={vi.fn()} onOpenProcess={vi.fn()} />);
+    render(
+      <BackgroundProcessesPanel open processes={[]} onClose={vi.fn()} onOpenProcess={vi.fn()} />
+    );
     expect(screen.getByText(/No background tasks in this chat/i)).toBeInTheDocument();
   });
 });

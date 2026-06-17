@@ -48,7 +48,9 @@ pub fn record_completion(
         summary: summary.into(),
         parent_thread_id,
     };
-    let mut map = queue().lock().expect("background_completions queue poisoned");
+    let mut map = queue()
+        .lock()
+        .expect("background_completions queue poisoned");
     let pending = map.entry(parent_session).or_default();
     if pending.iter().any(|c| c.task_id == entry.task_id) {
         return;
@@ -87,9 +89,7 @@ pub fn take_pending(parent_session: &str) -> Vec<CompletedBackgroundAgent> {
 
 /// The thread id to deliver a batch into — the first record that carries one.
 pub fn batch_thread_id(completed: &[CompletedBackgroundAgent]) -> Option<String> {
-    completed
-        .iter()
-        .find_map(|c| c.parent_thread_id.clone())
+    completed.iter().find_map(|c| c.parent_thread_id.clone())
 }
 
 /// Build the single batched, system-injected notice for a set of finished
@@ -147,7 +147,13 @@ mod tests {
         assert!(has_pending(s));
 
         let drained = take_pending(s);
-        assert_eq!(drained.iter().map(|c| c.task_id.as_str()).collect::<Vec<_>>(), ["sub-1", "sub-2"]);
+        assert_eq!(
+            drained
+                .iter()
+                .map(|c| c.task_id.as_str())
+                .collect::<Vec<_>>(),
+            ["sub-1", "sub-2"]
+        );
         assert_eq!(batch_thread_id(&drained).as_deref(), Some("thread-A"));
         assert!(!has_pending(s));
         assert_eq!(take_pending(s), vec![]);
