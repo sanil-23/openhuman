@@ -134,6 +134,20 @@ async fn try_deliver(session: String) {
     }
 
     if let Some(batch) = plan_delivery(&session) {
+        // A user turn can start (AgentTurnStarted -> busy) between plan_delivery's
+        // gate and the awaited turn below. Re-check here so we don't stream a
+        // *system* turn concurrently with a freshly-started user turn on the same
+        // thread — requeue the drained batch and let the next idle drain retry.
+        // (Narrows the window; a turn starting mid-await is still possible, but
+        // both append into the thread and delivery is keyed to its own run id.)
+        if is_busy(&session) {
+            requeue(&session, batch);
+            delivering()
+                .lock()
+                .expect("delivering poisoned")
+                .remove(&session);
+            return;
+        }
         match (
             background_completions::batch_thread_id(&batch),
             background_completions::build_batched_notice(&batch),
@@ -231,6 +245,28 @@ mod tests {
         assert!(!background_completions::has_pending(s)); // drained
         requeue(s, batch);
         assert!(background_completions::has_pending(s)); // restored for retry
+        let _ = background_completions::take_pending(s); // cleanup
+    }
+
+    #[test]
+    fn interleave_recheck_requeues_when_user_turn_starts_after_drain() {
+        // Mirrors try_deliver's M1 guard: a user turn can start between
+        // plan_delivery draining the batch and the awaited system turn. The
+        // re-check must requeue the drained batch rather than stream concurrently.
+        let s = "bd-interleave";
+        record_completion(s, "sub-1", "researcher", "alpha", Some("t".into()));
+
+        let batch = plan_delivery(s).expect("batch drained");
+        assert!(!background_completions::has_pending(s)); // drained
+
+        // User turn starts after the drain, before the (would-be) await.
+        busy().lock().expect("busy").insert(s.to_string());
+        if is_busy(s) {
+            requeue(s, batch); // the guard's action
+        }
+        assert!(background_completions::has_pending(s)); // preserved for next drain
+
+        busy().lock().expect("busy").remove(s);
         let _ = background_completions::take_pending(s); // cleanup
     }
 

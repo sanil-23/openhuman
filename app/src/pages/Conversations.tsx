@@ -1779,7 +1779,11 @@ const Conversations = ({
             {(selectedThreadId ?? firstActiveThreadId) && (
               <ChatFilesChip threadId={(selectedThreadId ?? firstActiveThreadId) as string} />
             )}
-            {(selectedThreadId ?? firstActiveThreadId) && (
+            {/* Gated on selectedThreadId alone (not the firstActiveThreadId
+                fallback): the panel/badge derive from selectedThreadToolTimeline,
+                which is [] unless a thread is actually selected, so showing the
+                icon for the fallback would render an always-empty panel. */}
+            {selectedThreadId && (
               <button
                 type="button"
                 data-testid="background-processes-toggle"
