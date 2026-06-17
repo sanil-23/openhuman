@@ -246,6 +246,10 @@ impl Tool for SpawnAsyncSubagentTool {
         // finished result can be delivered back into it as a system turn.
         let background_parent_thread_id =
             crate::openhuman::inference::provider::thread_context::current_thread_id();
+        // Kept on this side (the closure moves its own clone) so the registry
+        // entry knows which parent thread owns this sub-agent — that's how
+        // `cancel_for_thread` aborts it when the thread is deleted.
+        let register_parent_thread_id = background_parent_thread_id.clone();
         let background_prompt = add_background_contract(&prompt);
 
         let join = tokio::spawn(async move {
@@ -362,6 +366,7 @@ impl Tool for SpawnAsyncSubagentTool {
             task_id.clone(),
             definition.id.clone(),
             parent_session.clone(),
+            register_parent_thread_id,
             steer_queue,
             join.abort_handle(),
             status_rx,

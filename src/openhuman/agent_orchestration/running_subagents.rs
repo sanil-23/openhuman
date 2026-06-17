@@ -51,6 +51,10 @@ struct RunningSubagentEntry {
     #[allow(dead_code)]
     agent_id: String,
     parent_session: String,
+    /// Parent chat thread that spawned this sub-agent, captured at registration.
+    /// `None` for a headless spawn with no originating thread. Used to abort the
+    /// sub-agent when its parent thread is deleted (see [`cancel_for_thread`]).
+    parent_thread_id: Option<String>,
     run_queue: Arc<RunQueue>,
     abort: AbortHandle,
     status: watch::Receiver<SubagentStatus>,
@@ -90,6 +94,7 @@ pub fn register(
     task_id: String,
     agent_id: String,
     parent_session: String,
+    parent_thread_id: Option<String>,
     run_queue: Arc<RunQueue>,
     abort: AbortHandle,
     status: watch::Receiver<SubagentStatus>,
@@ -97,6 +102,7 @@ pub fn register(
     let entry = RunningSubagentEntry {
         agent_id,
         parent_session,
+        parent_thread_id,
         run_queue,
         abort,
         status,
@@ -245,6 +251,44 @@ pub fn close(task_id: &str, parent_session: &str) -> bool {
     }
 }
 
+/// Abort and drop every running sub-agent whose parent chat thread is
+/// `thread_id`. Called when that thread is deleted so detached children don't
+/// keep running (and later try to deliver) against a thread that no longer
+/// exists. Returns the number of sub-agents cancelled.
+pub fn cancel_for_thread(thread_id: &str) -> usize {
+    let mut map = registry().lock().expect("running_subagents mutex poisoned");
+    let to_cancel: Vec<String> = map
+        .iter()
+        .filter(|(_, e)| e.parent_thread_id.as_deref() == Some(thread_id))
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in &to_cancel {
+        if let Some(entry) = map.remove(id) {
+            entry.abort.abort();
+        }
+    }
+    let count = to_cancel.len();
+    log::debug!(
+        "[running_subagents] cancel_for_thread thread_id={} cancelled={} live_entries={}",
+        thread_id,
+        count,
+        map.len()
+    );
+    count
+}
+
+/// Abort and drop **every** registered sub-agent. Called on a full thread purge
+/// where no parent thread survives. Returns the number cancelled.
+pub fn cancel_all() -> usize {
+    let mut map = registry().lock().expect("running_subagents mutex poisoned");
+    let count = map.len();
+    for (_, entry) in map.drain() {
+        entry.abort.abort();
+    }
+    log::debug!("[running_subagents] cancel_all cancelled={}", count);
+    count
+}
+
 fn prune(task_id: &str) {
     registry()
         .lock()
@@ -262,6 +306,19 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::MutexGuard;
+
+    /// Serializes every test that touches the global [`REGISTRY`]. We reuse the
+    /// crate-wide `TEST_ENV_LOCK` (rather than a module-local mutex) because the
+    /// destructive `cancel_all` path is also reachable from the `threads::ops`
+    /// tests — those hold the same lock, so this prevents a purge there from
+    /// wiping entries a test here is mid-way through.
+    fn test_guard() -> MutexGuard<'static, ()> {
+        // Recover from a poisoned guard so one panicking test doesn't cascade.
+        crate::openhuman::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
 
     fn dummy_abort() -> AbortHandle {
         tokio::spawn(async {}).abort_handle()
@@ -274,11 +331,23 @@ mod tests {
         parent_session: &str,
         rq: Arc<RunQueue>,
     ) -> watch::Sender<SubagentStatus> {
+        register_test_with_thread(task_id, parent_session, None, rq)
+    }
+
+    /// Like [`register_test`] but lets a test set the parent thread id so it can
+    /// exercise [`cancel_for_thread`].
+    fn register_test_with_thread(
+        task_id: &str,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+        rq: Arc<RunQueue>,
+    ) -> watch::Sender<SubagentStatus> {
         let (tx, rx) = status_channel();
         register(
             task_id.into(),
             "researcher".into(),
             parent_session.into(),
+            parent_thread_id.map(Into::into),
             rq,
             dummy_abort(),
             rx,
@@ -288,6 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn steer_pushes_into_the_subagent_queue() {
+        let _guard = test_guard();
         let rq = RunQueue::new();
         let tx = register_test("task-steer", "session-A", rq.clone());
 
@@ -323,6 +393,7 @@ mod tests {
 
     #[tokio::test]
     async fn steer_rejects_cross_parent_and_unknown() {
+        let _guard = test_guard();
         let rq = RunQueue::new();
         let _tx = register_test("task-owned", "session-owner", rq);
 
@@ -351,6 +422,7 @@ mod tests {
 
     #[tokio::test]
     async fn steer_after_terminal_is_rejected() {
+        let _guard = test_guard();
         let rq = RunQueue::new();
         let tx = register_test("task-term", "session-A", rq);
         let _ = tx.send(SubagentStatus::Failed {
@@ -366,6 +438,7 @@ mod tests {
 
     #[tokio::test]
     async fn wait_returns_completion_once_published() {
+        let _guard = test_guard();
         let rq = RunQueue::new();
         let tx = register_test("task-wait", "session-A", rq);
 
@@ -398,6 +471,7 @@ mod tests {
 
     #[tokio::test]
     async fn wait_times_out_and_leaves_entry_intact() {
+        let _guard = test_guard();
         let rq = RunQueue::new();
         let _tx = register_test("task-slow", "session-A", rq);
 
@@ -419,5 +493,71 @@ mod tests {
         .await
         .is_ok());
         prune("task-slow");
+    }
+
+    #[tokio::test]
+    async fn cancel_for_thread_aborts_only_matching_entries() {
+        let _guard = test_guard();
+        let rq = RunQueue::new();
+        let _a = register_test_with_thread("task-tA-1", "session-A", Some("thread-X"), rq.clone());
+        let _b = register_test_with_thread("task-tA-2", "session-A", Some("thread-X"), rq.clone());
+        // Different thread — must survive.
+        let _c = register_test_with_thread("task-tB", "session-A", Some("thread-Y"), rq.clone());
+        // Headless (no parent thread) — must survive.
+        let _d = register_test_with_thread("task-headless", "session-A", None, rq);
+
+        let cancelled = cancel_for_thread("thread-X");
+        assert_eq!(cancelled, 2, "both thread-X entries should be cancelled");
+
+        // The two cancelled entries are gone (steer can't find them).
+        assert_eq!(
+            steer("task-tA-1", "session-A", "x".into(), QueueMode::Steer).await,
+            Err(SteerError::Unknown)
+        );
+        assert_eq!(
+            steer("task-tA-2", "session-A", "x".into(), QueueMode::Steer).await,
+            Err(SteerError::Unknown)
+        );
+
+        // Non-matching entries stay live and steerable.
+        assert!(steer("task-tB", "session-A", "x".into(), QueueMode::Steer)
+            .await
+            .is_ok());
+        assert!(
+            steer("task-headless", "session-A", "x".into(), QueueMode::Steer)
+                .await
+                .is_ok()
+        );
+
+        // Idempotent: a second pass cancels nothing.
+        assert_eq!(cancel_for_thread("thread-X"), 0);
+
+        prune("task-tB");
+        prune("task-headless");
+    }
+
+    #[tokio::test]
+    async fn cancel_all_clears_everything() {
+        let _guard = test_guard();
+        let rq = RunQueue::new();
+        let _a = register_test_with_thread("task-all-1", "session-A", Some("thread-1"), rq.clone());
+        let _b = register_test_with_thread("task-all-2", "session-B", None, rq);
+
+        let cancelled = cancel_all();
+        assert!(
+            cancelled >= 2,
+            "cancel_all should report at least the two entries just registered, got {cancelled}"
+        );
+
+        assert_eq!(
+            steer("task-all-1", "session-A", "x".into(), QueueMode::Steer).await,
+            Err(SteerError::Unknown)
+        );
+        assert_eq!(
+            steer("task-all-2", "session-B", "x".into(), QueueMode::Steer).await,
+            Err(SteerError::Unknown)
+        );
+        // Registry is empty now.
+        assert_eq!(cancel_all(), 0);
     }
 }

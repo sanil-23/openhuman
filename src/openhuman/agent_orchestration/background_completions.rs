@@ -87,6 +87,43 @@ pub fn take_pending(parent_session: &str) -> Vec<CompletedBackgroundAgent> {
         .unwrap_or_default()
 }
 
+/// Drop every queued completion whose `parent_thread_id` is `thread_id`, across
+/// **all** sessions. Called when that thread is deleted so a result captured
+/// before deletion is never delivered into a thread that no longer exists.
+/// Returns the number of queued completions removed.
+pub fn discard_for_thread(thread_id: &str) -> usize {
+    let mut map = queue()
+        .lock()
+        .expect("background_completions queue poisoned");
+    let mut removed = 0;
+    for pending in map.values_mut() {
+        let before = pending.len();
+        pending.retain(|c| c.parent_thread_id.as_deref() != Some(thread_id));
+        removed += before - pending.len();
+    }
+    // Drop now-empty session buckets so the map doesn't accumulate keys.
+    map.retain(|_, v| !v.is_empty());
+    log::debug!(
+        "[background_completions] discard_for_thread thread_id={} removed={} sessions_left={}",
+        thread_id,
+        removed,
+        map.len()
+    );
+    removed
+}
+
+/// Wipe the entire queue across all sessions. Called on a full thread purge.
+/// Returns the number of queued completions removed.
+pub fn clear_all() -> usize {
+    let mut map = queue()
+        .lock()
+        .expect("background_completions queue poisoned");
+    let removed: usize = map.values().map(Vec::len).sum();
+    map.clear();
+    log::debug!("[background_completions] clear_all removed={}", removed);
+    removed
+}
+
 /// The thread id to deliver a batch into — the first record that carries one.
 pub fn batch_thread_id(completed: &[CompletedBackgroundAgent]) -> Option<String> {
     completed.iter().find_map(|c| c.parent_thread_id.clone())
@@ -126,6 +163,17 @@ pub fn build_batched_notice(completed: &[CompletedBackgroundAgent]) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::MutexGuard;
+
+    /// Serializes every test that touches the global [`QUEUE`]. We reuse the
+    /// crate-wide `TEST_ENV_LOCK` because `clear_all` is also reachable from the
+    /// `threads::ops` purge test (which holds the same lock); a module-local
+    /// mutex wouldn't prevent that cross-module race.
+    fn test_guard() -> MutexGuard<'static, ()> {
+        crate::openhuman::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
 
     fn c(task: &str, agent: &str, summary: &str) -> CompletedBackgroundAgent {
         CompletedBackgroundAgent {
@@ -138,6 +186,7 @@ mod tests {
 
     #[test]
     fn record_and_drain_is_session_scoped_and_batches() {
+        let _guard = test_guard();
         let s = "sess-batch-A";
         record_completion(s, "sub-1", "researcher", "eiffel", Some("thread-A".into()));
         record_completion(s, "sub-2", "researcher", "liberty", Some("thread-A".into()));
@@ -163,6 +212,7 @@ mod tests {
 
     #[test]
     fn record_is_idempotent_on_task_id() {
+        let _guard = test_guard();
         let s = "sess-dupe";
         record_completion(s, "sub-1", "researcher", "first", None);
         record_completion(s, "sub-1", "researcher", "second", None);
@@ -195,5 +245,66 @@ mod tests {
     #[test]
     fn empty_batch_is_none() {
         assert_eq!(build_batched_notice(&[]), None);
+    }
+
+    #[test]
+    fn discard_for_thread_removes_matching_across_sessions() {
+        let _guard = test_guard();
+        // Two sessions, each with a completion for the doomed thread plus one
+        // for a thread that must survive.
+        record_completion(
+            "sess-d1",
+            "sub-a",
+            "researcher",
+            "x",
+            Some("thread-DEL".into()),
+        );
+        record_completion(
+            "sess-d1",
+            "sub-b",
+            "researcher",
+            "y",
+            Some("thread-KEEP".into()),
+        );
+        record_completion(
+            "sess-d2",
+            "sub-c",
+            "researcher",
+            "z",
+            Some("thread-DEL".into()),
+        );
+        // Headless completion (no parent thread) must survive.
+        record_completion("sess-d2", "sub-d", "researcher", "w", None);
+
+        let removed = discard_for_thread("thread-DEL");
+        assert_eq!(removed, 2, "both thread-DEL completions removed");
+
+        // thread-KEEP survives in sess-d1; sess-d2 keeps only the headless one.
+        assert_eq!(pending_count("sess-d1"), 1);
+        let d1 = take_pending("sess-d1");
+        assert_eq!(d1[0].task_id, "sub-b");
+
+        assert_eq!(pending_count("sess-d2"), 1);
+        let d2 = take_pending("sess-d2");
+        assert_eq!(d2[0].task_id, "sub-d");
+
+        // Idempotent: nothing left to discard.
+        assert_eq!(discard_for_thread("thread-DEL"), 0);
+    }
+
+    #[test]
+    fn clear_all_empties_the_queue() {
+        let _guard = test_guard();
+        record_completion("sess-c1", "sub-1", "researcher", "a", Some("t1".into()));
+        record_completion("sess-c2", "sub-2", "researcher", "b", None);
+
+        let removed = clear_all();
+        assert!(
+            removed >= 2,
+            "clear_all should report at least the two just queued, got {removed}"
+        );
+        assert!(!has_pending("sess-c1"));
+        assert!(!has_pending("sess-c2"));
+        assert_eq!(clear_all(), 0);
     }
 }
