@@ -244,9 +244,13 @@ async fn store_session_auth_me_failure_returns_err_and_does_not_persist() {
     let _ = server_task.await;
 
     let err = result.expect_err("store_session must fail when GET /auth/me returns 500");
+    // Lock the cross-layer error-string contract: this exact prefix is what the
+    // frontend `classifyAuthStoreFailure` matches on. Assert `starts_with` (not
+    // just `contains`) so a reword in `store_session`/`rest.rs` fails CI here
+    // instead of silently degrading the FE classifier to 'other'.
     assert!(
-        err.contains("Session validation failed (GET /auth/me)"),
-        "unexpected error: {err}"
+        err.starts_with("Session validation failed (GET /auth/me):"),
+        "store_session error must keep the contract prefix; got: {err}"
     );
 
     // Explicitly verify the failure path persisted NOTHING — the gate returns
