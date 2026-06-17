@@ -144,16 +144,24 @@ describe('BackgroundProcessesPanel', () => {
     expect(screen.getByText('Needs you')).toBeInTheDocument();
   });
 
-  it('renders singular tool-call wording, step count, and a goal-less row', () => {
-    const one: BackgroundProcess[] = [
-      { taskId: 's1', name: 'One', goal: '', status: 'running', toolCount: 1, iterations: 3 },
+  it('renders singular tool-call wording, step count, and suppresses an empty goal', () => {
+    const rows: BackgroundProcess[] = [
+      {
+        taskId: 'g',
+        name: 'WithGoal',
+        goal: 'investigate the bridge',
+        status: 'success',
+        toolCount: 4,
+      },
+      { taskId: 's1', name: 'NoGoal', goal: '', status: 'running', toolCount: 1, iterations: 3 },
     ];
     const { container } = render(
-      <BackgroundProcessesPanel open processes={one} onClose={vi.fn()} onOpenProcess={vi.fn()} />
+      <BackgroundProcessesPanel open processes={rows} onClose={vi.fn()} onOpenProcess={vi.fn()} />
     );
-    expect(container.textContent).toContain('1 tool call'); // singular branch
+    expect(container.textContent).toContain('1 tool call'); // singular branch (NoGoal row)
     expect(container.textContent).toContain('3 steps'); // iterations branch
-    expect(container.textContent).not.toContain('research the Eiffel Tower'); // goal-less
+    // The goal renders for the row that has one; the goal-less row adds no copy.
+    expect(screen.getAllByText('investigate the bridge')).toHaveLength(1);
   });
 
   it('closes on Escape', () => {
