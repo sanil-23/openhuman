@@ -2652,11 +2652,18 @@ const Conversations = ({
           openSubagentEntry?.subagent && selectedThreadId
             ? async () => {
                 const taskId = openSubagentEntry.subagent!.taskId;
-                await subagentApi.cancel(taskId);
-                // No terminal socket event arrives for an aborted run, so flip
-                // the row optimistically; the cancelled notice reaches chat via
-                // the idle-gated delivery path.
-                dispatch(markSubagentCancelled({ threadId: selectedThreadId, taskId }));
+                const result = await subagentApi.cancel(taskId);
+                // Only flip the row when something was actually aborted — a
+                // cancelled=false result means the run already finished/unknown,
+                // and overwriting its real terminal state would hide it. No
+                // terminal socket event arrives for an aborted run, so the
+                // optimistic mark is what surfaces the cancellation (the notice
+                // itself reaches chat via the idle-gated delivery path).
+                if (result.cancelled) {
+                  dispatch(
+                    markSubagentCancelled({ threadId: selectedThreadId, taskId: result.taskId })
+                  );
+                }
               }
             : undefined
         }

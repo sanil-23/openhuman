@@ -239,6 +239,7 @@ describe('SubagentDrawer', () => {
 
   it('renders the cancelled status label', () => {
     render(<SubagentDrawer subagent={activity()} status="cancelled" onClose={() => {}} />);
-    expect(screen.getByTestId('subagent-drawer').textContent).toContain('cancelled');
+    // Case-robust: the label may be rendered as "Cancelled" or "cancelled".
+    expect(screen.getByTestId('subagent-drawer').textContent?.toLowerCase()).toContain('cancelled');
   });
 });
