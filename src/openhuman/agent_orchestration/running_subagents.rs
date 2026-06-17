@@ -18,7 +18,7 @@
 //! grow unbounded if a parent never waits (the Codex "spawn-slot leak" failure
 //! mode — openai/codex#18335).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -278,15 +278,30 @@ pub fn cancel_for_thread(thread_id: &str) -> usize {
 }
 
 /// Abort and drop **every** registered sub-agent. Called on a full thread purge
-/// where no parent thread survives. Returns the number cancelled.
-pub fn cancel_all() -> usize {
+/// where no parent thread survives. Returns the **distinct parent thread ids**
+/// that had sub-agents, so the purge path can tombstone them in
+/// [`super::background_completions`] and drop any straggler completion that wins
+/// the cooperative-abort race. Headless sub-agents (no parent thread) are still
+/// aborted but contribute no id.
+pub fn cancel_all() -> Vec<String> {
     let mut map = registry().lock().expect("running_subagents mutex poisoned");
     let count = map.len();
+    let mut thread_ids: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     for (_, entry) in map.drain() {
         entry.abort.abort();
+        if let Some(thread_id) = entry.parent_thread_id {
+            if seen.insert(thread_id.clone()) {
+                thread_ids.push(thread_id);
+            }
+        }
     }
-    log::debug!("[running_subagents] cancel_all cancelled={}", count);
-    count
+    log::debug!(
+        "[running_subagents] cancel_all cancelled={} distinct_threads={}",
+        count,
+        thread_ids.len()
+    );
+    thread_ids
 }
 
 fn prune(task_id: &str) {
@@ -541,12 +556,17 @@ mod tests {
         let _guard = test_guard();
         let rq = RunQueue::new();
         let _a = register_test_with_thread("task-all-1", "session-A", Some("thread-1"), rq.clone());
+        // Headless (no parent thread) — aborted, but contributes no thread id.
         let _b = register_test_with_thread("task-all-2", "session-B", None, rq);
 
-        let cancelled = cancel_all();
+        let cancelled_threads = cancel_all();
         assert!(
-            cancelled >= 2,
-            "cancel_all should report at least the two entries just registered, got {cancelled}"
+            cancelled_threads.contains(&"thread-1".to_string()),
+            "cancel_all should report the parent thread of the cancelled sub-agent"
+        );
+        assert!(
+            !cancelled_threads.iter().any(|t| t.is_empty()),
+            "headless sub-agents must not contribute an id"
         );
 
         assert_eq!(
@@ -558,6 +578,6 @@ mod tests {
             Err(SteerError::Unknown)
         );
         // Registry is empty now.
-        assert_eq!(cancel_all(), 0);
+        assert!(cancel_all().is_empty());
     }
 }

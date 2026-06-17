@@ -9,7 +9,7 @@
 //! tagged by its sub-agent process id. This module owns only the queue + the
 //! notice formatting.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Mutex, OnceLock};
 
 /// One finished background sub-agent's deliverable result.
@@ -26,14 +26,57 @@ pub struct CompletedBackgroundAgent {
     pub parent_thread_id: Option<String>,
 }
 
-static QUEUE: OnceLock<Mutex<HashMap<String, Vec<CompletedBackgroundAgent>>>> = OnceLock::new();
+/// Upper bound on the cancelled-thread tombstone set. A thread id is a one-shot
+/// UUID, so only the *recently* cancelled threads can still be racing a late
+/// completion; older tombstones are evicted in insertion order. 512 is far more
+/// than the number of sub-agents that could realistically be mid-flight when a
+/// batch of threads is deleted.
+const CANCELLED_TOMBSTONE_CAP: usize = 512;
 
-fn queue() -> &'static Mutex<HashMap<String, Vec<CompletedBackgroundAgent>>> {
-    QUEUE.get_or_init(|| Mutex::new(HashMap::new()))
+/// Shared state behind a single mutex so the cancellation check in
+/// [`record_completion`] is atomic against the tombstone+sweep in
+/// [`discard_for_thread`] — otherwise the cooperative-abort race could enqueue a
+/// completion for a thread that was just deleted (see issue #3711 review).
+#[derive(Default)]
+struct QueueState {
+    /// Finished results awaiting idle delivery, keyed by `parent_session`.
+    pending: HashMap<String, Vec<CompletedBackgroundAgent>>,
+    /// Threads whose sub-agents were cancelled because the thread was
+    /// deleted/purged. A completion that lands here *after* the discard sweep
+    /// (Tokio `abort()` is cooperative — a task already past its last `.await`
+    /// still runs to `record_completion`) is dropped instead of delivered into
+    /// a thread that no longer exists.
+    cancelled_threads: HashSet<String>,
+    /// Insertion order for `cancelled_threads`, used to bound the set.
+    cancelled_order: VecDeque<String>,
+}
+
+impl QueueState {
+    /// Tombstone `thread_id` so any straggler completion for it is dropped.
+    fn tombstone(&mut self, thread_id: &str) {
+        if self.cancelled_threads.insert(thread_id.to_string()) {
+            self.cancelled_order.push_back(thread_id.to_string());
+            while self.cancelled_order.len() > CANCELLED_TOMBSTONE_CAP {
+                if let Some(evicted) = self.cancelled_order.pop_front() {
+                    self.cancelled_threads.remove(&evicted);
+                }
+            }
+        }
+    }
+}
+
+static QUEUE: OnceLock<Mutex<QueueState>> = OnceLock::new();
+
+fn queue() -> &'static Mutex<QueueState> {
+    QUEUE.get_or_init(|| Mutex::new(QueueState::default()))
 }
 
 /// Record a finished background sub-agent for later idle delivery, keyed by
 /// `parent_session`. Idempotent on `task_id` within a session.
+///
+/// Drops the result outright if its parent thread has been tombstoned by
+/// [`discard_for_thread`] — closing the race where a detached sub-agent finishes
+/// (and records) concurrently with its parent thread being deleted.
 pub fn record_completion(
     parent_session: impl Into<String>,
     task_id: impl Into<String>,
@@ -48,10 +91,20 @@ pub fn record_completion(
         summary: summary.into(),
         parent_thread_id,
     };
-    let mut map = queue()
+    let mut state = queue()
         .lock()
         .expect("background_completions queue poisoned");
-    let pending = map.entry(parent_session).or_default();
+    if let Some(thread_id) = entry.parent_thread_id.as_deref() {
+        if state.cancelled_threads.contains(thread_id) {
+            log::debug!(
+                "[background_completions] dropping completion task_id={} for cancelled thread_id={}",
+                entry.task_id,
+                thread_id
+            );
+            return;
+        }
+    }
+    let pending = state.pending.entry(parent_session).or_default();
     if pending.iter().any(|c| c.task_id == entry.task_id) {
         return;
     }
@@ -63,6 +116,7 @@ pub fn has_pending(parent_session: &str) -> bool {
     queue()
         .lock()
         .expect("background_completions queue poisoned")
+        .pending
         .get(parent_session)
         .is_some_and(|v| !v.is_empty())
 }
@@ -72,6 +126,7 @@ pub fn pending_count(parent_session: &str) -> usize {
     queue()
         .lock()
         .expect("background_completions queue poisoned")
+        .pending
         .get(parent_session)
         .map_or(0, Vec::len)
 }
@@ -83,43 +138,51 @@ pub fn take_pending(parent_session: &str) -> Vec<CompletedBackgroundAgent> {
     queue()
         .lock()
         .expect("background_completions queue poisoned")
+        .pending
         .remove(parent_session)
         .unwrap_or_default()
 }
 
 /// Drop every queued completion whose `parent_thread_id` is `thread_id`, across
-/// **all** sessions. Called when that thread is deleted so a result captured
-/// before deletion is never delivered into a thread that no longer exists.
-/// Returns the number of queued completions removed.
+/// **all** sessions, and **tombstone** the thread so any straggler completion
+/// that records *after* this sweep (the cooperative-abort race) is dropped by
+/// [`record_completion`] rather than delivered into a thread that no longer
+/// exists. Called when that thread is deleted. Returns the number of queued
+/// completions removed.
 pub fn discard_for_thread(thread_id: &str) -> usize {
-    let mut map = queue()
+    let mut state = queue()
         .lock()
         .expect("background_completions queue poisoned");
+    state.tombstone(thread_id);
     let mut removed = 0;
-    for pending in map.values_mut() {
+    for pending in state.pending.values_mut() {
         let before = pending.len();
         pending.retain(|c| c.parent_thread_id.as_deref() != Some(thread_id));
         removed += before - pending.len();
     }
     // Drop now-empty session buckets so the map doesn't accumulate keys.
-    map.retain(|_, v| !v.is_empty());
+    state.pending.retain(|_, v| !v.is_empty());
+    let sessions_left = state.pending.len();
     log::debug!(
         "[background_completions] discard_for_thread thread_id={} removed={} sessions_left={}",
         thread_id,
         removed,
-        map.len()
+        sessions_left
     );
     removed
 }
 
-/// Wipe the entire queue across all sessions. Called on a full thread purge.
-/// Returns the number of queued completions removed.
+/// Wipe every queued completion across all sessions. Called on a full thread
+/// purge. Tombstones are left intact (the per-thread protection set by
+/// [`discard_for_thread`]); the purge path tombstones each in-flight sub-agent's
+/// thread before calling this, so stragglers are still dropped. Returns the
+/// number of queued completions removed.
 pub fn clear_all() -> usize {
-    let mut map = queue()
+    let mut state = queue()
         .lock()
         .expect("background_completions queue poisoned");
-    let removed: usize = map.values().map(Vec::len).sum();
-    map.clear();
+    let removed: usize = state.pending.values().map(Vec::len).sum();
+    state.pending.clear();
     log::debug!("[background_completions] clear_all removed={}", removed);
     removed
 }
@@ -290,6 +353,37 @@ mod tests {
 
         // Idempotent: nothing left to discard.
         assert_eq!(discard_for_thread("thread-DEL"), 0);
+    }
+
+    #[test]
+    fn record_after_discard_is_dropped_by_tombstone() {
+        let _guard = test_guard();
+        // Deleting the thread tombstones it...
+        discard_for_thread("thread-race");
+        // ...so a straggler completion that records *after* the sweep (the
+        // cooperative-abort race) is dropped rather than queued.
+        record_completion(
+            "sess-race",
+            "sub-late",
+            "researcher",
+            "stale",
+            Some("thread-race".into()),
+        );
+        assert_eq!(
+            pending_count("sess-race"),
+            0,
+            "late completion for a cancelled thread must be dropped"
+        );
+        // A completion for a different, live thread still records normally.
+        record_completion(
+            "sess-race",
+            "sub-ok",
+            "researcher",
+            "fresh",
+            Some("thread-live-race".into()),
+        );
+        assert_eq!(pending_count("sess-race"), 1);
+        take_pending("sess-race");
     }
 
     #[test]

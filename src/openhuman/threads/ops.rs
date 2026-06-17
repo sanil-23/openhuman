@@ -561,12 +561,20 @@ pub async fn threads_purge(
     let stats = conversations::purge_threads(dir.clone())?;
     // No parent thread survives a purge, so cancel every detached sub-agent and
     // wipe every queued result. Same ordering as `thread_delete`: abort the
-    // in-flight runs first, then clear the delivery queue.
-    let cancelled = crate::openhuman::agent_orchestration::running_subagents::cancel_all();
-    let discarded = crate::openhuman::agent_orchestration::background_completions::clear_all();
+    // in-flight runs first, then clear the delivery queue. Tombstone each
+    // cancelled sub-agent's thread BEFORE the final wipe so a straggler that
+    // wins the cooperative-abort race (records after the wipe) is still dropped
+    // by `record_completion` rather than delivered into a purged thread.
+    use crate::openhuman::agent_orchestration::{background_completions, running_subagents};
+    let cancelled_threads = running_subagents::cancel_all();
+    let mut discarded = 0;
+    for thread_id in &cancelled_threads {
+        discarded += background_completions::discard_for_thread(thread_id);
+    }
+    discarded += background_completions::clear_all();
     log::debug!(
-        "[threads] threads_purge cancelled_subagents={} discarded_completions={}",
-        cancelled,
+        "[threads] threads_purge cancelled_threads={} discarded_completions={}",
+        cancelled_threads.len(),
         discarded
     );
     // Threads are gone, so any orphan turn snapshots can never be
