@@ -48,7 +48,6 @@ impl SubagentStatus {
 }
 
 struct RunningSubagentEntry {
-    #[allow(dead_code)]
     agent_id: String,
     parent_session: String,
     /// Parent chat thread that spawned this sub-agent, captured at registration.
@@ -235,6 +234,41 @@ pub async fn wait(
         }
         Err(_) => Ok(WaitOutcome::TimedOut(rx.borrow().clone())),
     }
+}
+
+/// Metadata captured when a sub-agent is cancelled, so the caller can surface
+/// the cancellation back in the parent chat (record a "cancelled" completion
+/// for idle-gated delivery).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CancelledSubagent {
+    pub agent_id: String,
+    pub parent_session: String,
+    pub parent_thread_id: Option<String>,
+}
+
+/// Abort and drop the sub-agent with `task_id`, returning its metadata so the
+/// caller can deliver a "cancelled" notice into the parent chat. Returns `None`
+/// if no such sub-agent is registered (already finished, or unknown id).
+///
+/// Unlike [`close`], this is keyed by `task_id` alone with no parent-session
+/// ownership check — it backs the user-facing "Cancel" affordance, and the
+/// desktop user owns every sub-agent in their own core.
+pub fn cancel_by_task(task_id: &str) -> Option<CancelledSubagent> {
+    let mut map = registry().lock().expect("running_subagents mutex poisoned");
+    let entry = map.remove(task_id)?;
+    entry.abort.abort();
+    log::debug!(
+        "[running_subagents] cancel_by_task task_id={} agent_id={} parent_thread_id={:?} live_entries={}",
+        task_id,
+        entry.agent_id,
+        entry.parent_thread_id,
+        map.len()
+    );
+    Some(CancelledSubagent {
+        agent_id: entry.agent_id,
+        parent_session: entry.parent_session,
+        parent_thread_id: entry.parent_thread_id,
+    })
 }
 
 /// Abort a running sub-agent and drop its registry entry. Kept for a future
@@ -549,6 +583,28 @@ mod tests {
 
         prune("task-tB");
         prune("task-headless");
+    }
+
+    #[tokio::test]
+    async fn cancel_by_task_returns_metadata_and_removes_entry() {
+        let _guard = test_guard();
+        let rq = RunQueue::new();
+        let _tx =
+            register_test_with_thread("task-cbt", "session-Z", Some("thread-cbt"), rq.clone());
+
+        let meta = cancel_by_task("task-cbt").expect("known task should cancel");
+        assert_eq!(meta.agent_id, "researcher");
+        assert_eq!(meta.parent_session, "session-Z");
+        assert_eq!(meta.parent_thread_id.as_deref(), Some("thread-cbt"));
+
+        // Entry is gone — steer can no longer find it, and a second cancel is a no-op.
+        assert_eq!(
+            steer("task-cbt", "session-Z", "x".into(), QueueMode::Steer).await,
+            Err(SteerError::Unknown)
+        );
+        assert!(cancel_by_task("task-cbt").is_none());
+        // Unknown ids are simply None.
+        assert!(cancel_by_task("never-existed").is_none());
     }
 
     #[tokio::test]

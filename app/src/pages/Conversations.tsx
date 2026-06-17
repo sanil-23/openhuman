@@ -29,6 +29,7 @@ import {
 import { useT } from '../lib/i18n/I18nContext';
 import { trackEvent } from '../services/analytics';
 import { applyOpenRouterFreeModels } from '../services/api/openrouterFreeModels';
+import { subagentApi } from '../services/api/subagentApi';
 import { threadApi } from '../services/api/threadApi';
 import { chatCancel, chatSend, useRustChat } from '../services/chatService';
 import { callCoreRpc } from '../services/coreRpcClient';
@@ -43,6 +44,7 @@ import {
   beginInferenceTurn,
   clearRuntimeForThread,
   fetchAndHydrateTurnState,
+  markSubagentCancelled,
   registerParallelRequest,
   setTaskBoardForThread,
   setToolTimelineForThread,
@@ -2646,6 +2648,18 @@ const Conversations = ({
       <SubagentDrawer
         subagent={openSubagentEntry?.subagent ?? null}
         status={openSubagentEntry?.status}
+        onCancel={
+          openSubagentEntry?.subagent && selectedThreadId
+            ? async () => {
+                const taskId = openSubagentEntry.subagent!.taskId;
+                await subagentApi.cancel(taskId);
+                // No terminal socket event arrives for an aborted run, so flip
+                // the row optimistically; the cancelled notice reaches chat via
+                // the idle-gated delivery path.
+                dispatch(markSubagentCancelled({ threadId: selectedThreadId, taskId }));
+              }
+            : undefined
+        }
         onClose={() => setOpenSubagentTaskId(null)}
       />
       <AgentProcessSourcePanel
