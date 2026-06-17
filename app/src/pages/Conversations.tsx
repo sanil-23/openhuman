@@ -1785,11 +1785,14 @@ const Conversations = ({
                 data-testid="background-processes-toggle"
                 data-analytics-id="chat-header-background-processes"
                 onClick={() => setShowBackgroundProcesses(true)}
-                aria-label="Background tasks"
+                aria-label={t('conversations.backgroundTasks.title')}
                 title={
                   backgroundProcesses.length > 0
-                    ? `Background tasks (${backgroundProcesses.length})`
-                    : 'Background tasks'
+                    ? t('conversations.backgroundTasks.titleWithCount').replace(
+                        '{count}',
+                        String(backgroundProcesses.length),
+                      )
+                    : t('conversations.backgroundTasks.title')
                 }
                 className="relative flex h-7 w-7 items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100 hover:text-stone-700 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 transition-colors">
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

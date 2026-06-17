@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 
+import { useT } from '../../../lib/i18n/I18nContext';
 import type {
   SubagentActivity,
   ToolTimelineEntry,
@@ -53,16 +54,38 @@ export function selectBackgroundProcesses(timeline: ToolTimelineEntry[]): Backgr
   return out.sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running'));
 }
 
-function statusStyle(status: ToolTimelineEntryStatus): { dot: string; label: string; pill: string } {
+type StatusLabelKey =
+  | 'conversations.backgroundTasks.statusRunning'
+  | 'conversations.backgroundTasks.statusDone'
+  | 'conversations.backgroundTasks.statusFailed'
+  | 'conversations.backgroundTasks.statusNeedsYou';
+
+function statusStyle(status: ToolTimelineEntryStatus): { dot: string; labelKey: StatusLabelKey; pill: string } {
   switch (status) {
     case 'running':
-      return { dot: 'bg-amber-500 animate-pulse', label: 'Running', pill: 'text-amber-700 dark:text-amber-300' };
+      return {
+        dot: 'bg-amber-500 animate-pulse',
+        labelKey: 'conversations.backgroundTasks.statusRunning',
+        pill: 'text-amber-700 dark:text-amber-300',
+      };
     case 'error':
-      return { dot: 'bg-red-500', label: 'Failed', pill: 'text-red-700 dark:text-red-300' };
+      return {
+        dot: 'bg-red-500',
+        labelKey: 'conversations.backgroundTasks.statusFailed',
+        pill: 'text-red-700 dark:text-red-300',
+      };
     case 'awaiting_user':
-      return { dot: 'bg-blue-500', label: 'Needs you', pill: 'text-blue-700 dark:text-blue-300' };
+      return {
+        dot: 'bg-blue-500',
+        labelKey: 'conversations.backgroundTasks.statusNeedsYou',
+        pill: 'text-blue-700 dark:text-blue-300',
+      };
     default:
-      return { dot: 'bg-sage-500', label: 'Done', pill: 'text-sage-700 dark:text-sage-300' };
+      return {
+        dot: 'bg-sage-500',
+        labelKey: 'conversations.backgroundTasks.statusDone',
+        pill: 'text-sage-700 dark:text-sage-300',
+      };
   }
 }
 
@@ -82,6 +105,8 @@ export function BackgroundProcessesPanel({
   onClose: () => void;
   onOpenProcess: (taskId: string) => void;
 }) {
+  const { t } = useT();
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -94,6 +119,11 @@ export function BackgroundProcessesPanel({
   if (!open) return null;
 
   const running = processes.filter(p => p.status === 'running').length;
+  const runningLabel =
+    running > 0
+      ? t('conversations.backgroundTasks.running').replace('{count}', String(running))
+      : t('conversations.backgroundTasks.noneRunning');
+  const totalLabel = t('conversations.backgroundTasks.total').replace('{count}', String(processes.length));
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" data-testid="background-processes-panel">
@@ -101,14 +131,16 @@ export function BackgroundProcessesPanel({
       <aside className="relative flex h-full w-full max-w-sm flex-col bg-white dark:bg-neutral-900 shadow-xl">
         <header className="flex items-center justify-between border-b border-stone-100 px-4 py-3 dark:border-neutral-800">
           <div className="flex flex-col">
-            <h2 className="text-sm font-semibold text-stone-800 dark:text-neutral-100">Background tasks</h2>
+            <h2 className="text-sm font-semibold text-stone-800 dark:text-neutral-100">
+              {t('conversations.backgroundTasks.title')}
+            </h2>
             <span className="text-[11px] text-stone-400 dark:text-neutral-500">
-              {running > 0 ? `${running} running` : 'none running'} · {processes.length} total
+              {runningLabel} · {totalLabel}
             </span>
           </div>
           <button
             type="button"
-            aria-label="Close"
+            aria-label={t('conversations.backgroundTasks.close')}
             onClick={onClose}
             className="flex h-7 w-7 items-center justify-center rounded-lg text-stone-400 hover:bg-stone-100 hover:text-stone-600 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-300">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -119,12 +151,17 @@ export function BackgroundProcessesPanel({
 
         {processes.length === 0 ? (
           <div className="px-4 py-6 text-sm text-stone-400 dark:text-neutral-500">
-            No background tasks in this chat. Ask the assistant to do something in the background and it shows up here.
+            {t('conversations.backgroundTasks.empty')}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-2">
             {processes.map(p => {
               const s = statusStyle(p.status);
+              const toolCallLabel = (
+                p.toolCount === 1
+                  ? t('conversations.backgroundTasks.toolCallOne')
+                  : t('conversations.backgroundTasks.toolCallOther')
+              ).replace('{count}', String(p.toolCount));
               return (
                 <button
                   key={p.taskId}
@@ -136,7 +173,7 @@ export function BackgroundProcessesPanel({
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center justify-between gap-2">
                       <span className="truncate text-sm font-medium text-stone-800 dark:text-neutral-100">{p.name}</span>
-                      <span className={`shrink-0 text-[11px] font-medium ${s.pill}`}>{s.label}</span>
+                      <span className={`shrink-0 text-[11px] font-medium ${s.pill}`}>{t(s.labelKey)}</span>
                     </span>
                     {p.goal ? (
                       <span className="mt-0.5 line-clamp-2 block text-[12px] text-stone-500 dark:text-neutral-400">
@@ -144,8 +181,11 @@ export function BackgroundProcessesPanel({
                       </span>
                     ) : null}
                     <span className="mt-0.5 block text-[11px] text-stone-400 dark:text-neutral-500">
-                      {p.toolCount} tool {p.toolCount === 1 ? 'call' : 'calls'}
-                      {typeof p.iterations === 'number' ? ` · ${p.iterations} steps` : ''} · View details →
+                      {toolCallLabel}
+                      {typeof p.iterations === 'number'
+                        ? ` · ${t('conversations.backgroundTasks.steps').replace('{count}', String(p.iterations))}`
+                        : ''}{' '}
+                      · {t('conversations.backgroundTasks.viewDetails')}
                     </span>
                   </span>
                 </button>

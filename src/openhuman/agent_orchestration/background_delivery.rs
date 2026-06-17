@@ -107,16 +107,14 @@ async fn try_deliver(session: String) {
     delivering().lock().expect("delivering poisoned").remove(&session);
 
     if let Some((count, thread_id, notice)) = job {
-        tracing::info!(
-            session = %session,
-            thread_id = %thread_id,
-            count,
-            "[background_delivery] delivering batched background results"
+        log::info!(
+            "[background_delivery] delivering {count} batched background result(s) \
+             session={session} thread_id={thread_id}"
         );
         if let Err(e) =
             crate::openhuman::agent::task_dispatcher::run_system_turn_on_thread(thread_id, notice).await
         {
-            tracing::warn!(session = %session, error = %e, "[background_delivery] delivery turn failed");
+            log::warn!("[background_delivery] delivery turn failed session={session} error={e}");
         }
     }
 }
