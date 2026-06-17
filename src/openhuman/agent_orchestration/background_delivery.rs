@@ -81,6 +81,25 @@ fn schedule_delivery(session: String, delay: Duration) {
     });
 }
 
+/// Decide what to deliver for a session **right now** (sync, testable): if the
+/// session is idle, drain all ready results and return `(count, thread_id,
+/// notice)`. Returns `None` when busy (queue left intact, retried later),
+/// when nothing is pending, or when the batch is headless (no originating
+/// thread to stream into — dropped).
+fn plan_delivery(session: &str) -> Option<(usize, String, String)> {
+    if is_busy(session) {
+        return None;
+    }
+    let batch = background_completions::take_pending(session);
+    match (
+        background_completions::batch_thread_id(&batch),
+        background_completions::build_batched_notice(&batch),
+    ) {
+        (Some(thread_id), Some(notice)) => Some((batch.len(), thread_id, notice)),
+        _ => None,
+    }
+}
+
 /// Drain + deliver pending completions for a session — if idle and not already
 /// delivering. Batches everything ready at this instant into one system turn.
 async fn try_deliver(session: String) {
@@ -95,20 +114,8 @@ async fn try_deliver(session: String) {
         }
     }
 
-    // Re-check busy after claiming — a user turn may have started meanwhile.
-    let job = if is_busy(&session) {
-        None
-    } else {
-        let batch = background_completions::take_pending(&session);
-        match (
-            background_completions::batch_thread_id(&batch),
-            background_completions::build_batched_notice(&batch),
-        ) {
-            (Some(thread_id), Some(notice)) => Some((batch.len(), thread_id, notice)),
-            // No originating thread (headless) — nothing to stream into; drop.
-            _ => None,
-        }
-    };
+    // Re-check busy + drain under the claim — a user turn may have started.
+    let job = plan_delivery(&session);
 
     delivering()
         .lock()
@@ -134,4 +141,69 @@ async fn try_deliver(session: String) {
 pub fn register_background_delivery() {
     static HANDLE: OnceLock<Option<SubscriptionHandle>> = OnceLock::new();
     HANDLE.get_or_init(|| subscribe_global(Arc::new(BackgroundDeliveryHandler)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::openhuman::agent_orchestration::background_completions::record_completion;
+
+    #[test]
+    fn plan_delivers_batch_when_idle_with_thread() {
+        let s = "bd-ready";
+        record_completion(s, "sub-1", "researcher", "alpha", Some("thread-9".into()));
+        record_completion(s, "sub-2", "researcher", "beta", Some("thread-9".into()));
+
+        let (count, thread_id, notice) = plan_delivery(s).expect("plans a delivery");
+        assert_eq!(count, 2);
+        assert_eq!(thread_id, "thread-9");
+        assert!(notice.contains("sub-1") && notice.contains("sub-2"));
+        assert!(!background_completions::has_pending(s)); // drained
+    }
+
+    #[test]
+    fn plan_skips_when_busy_and_leaves_queue_intact() {
+        let s = "bd-busy";
+        record_completion(s, "sub-1", "researcher", "x", Some("t".into()));
+        busy().lock().expect("busy").insert(s.to_string());
+
+        assert!(plan_delivery(s).is_none());
+        assert!(background_completions::has_pending(s)); // NOT drained while busy
+
+        busy().lock().expect("busy").remove(s);
+        let _ = background_completions::take_pending(s); // cleanup
+    }
+
+    #[test]
+    fn plan_drops_headless_batch_with_no_thread() {
+        let s = "bd-headless";
+        record_completion(s, "sub-1", "researcher", "x", None);
+        assert!(plan_delivery(s).is_none()); // no thread → nothing to stream into
+    }
+
+    #[test]
+    fn plan_none_when_nothing_pending() {
+        assert!(plan_delivery("bd-empty-unique").is_none());
+    }
+
+    #[tokio::test]
+    async fn handler_tracks_busy_across_turn_events() {
+        let h = BackgroundDeliveryHandler;
+        let sid = "bd-turn".to_string();
+
+        h.handle(&DomainEvent::AgentTurnStarted {
+            session_id: sid.clone(),
+            channel: "test".into(),
+        })
+        .await;
+        assert!(is_busy(&sid));
+
+        h.handle(&DomainEvent::AgentTurnCompleted {
+            session_id: sid.clone(),
+            text_chars: 0,
+            iterations: 0,
+        })
+        .await;
+        assert!(!is_busy(&sid));
+    }
 }
