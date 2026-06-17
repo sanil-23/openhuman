@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -126,5 +126,42 @@ describe('BackgroundProcessesPanel', () => {
       <BackgroundProcessesPanel open processes={[]} onClose={vi.fn()} onOpenProcess={vi.fn()} />
     );
     expect(screen.getByText(/No background tasks in this chat/i)).toBeInTheDocument();
+  });
+
+  it('renders every status variant (running / done / failed / needs-you)', () => {
+    const all: BackgroundProcess[] = [
+      { taskId: 'r', name: 'R', goal: 'g', status: 'running', toolCount: 2 },
+      { taskId: 'd', name: 'D', goal: 'g', status: 'success', toolCount: 2 },
+      { taskId: 'e', name: 'E', goal: 'g', status: 'error', toolCount: 2 },
+      { taskId: 'a', name: 'A', goal: 'g', status: 'awaiting_user', toolCount: 2 },
+    ];
+    render(
+      <BackgroundProcessesPanel open processes={all} onClose={vi.fn()} onOpenProcess={vi.fn()} />
+    );
+    expect(screen.getByText('Running')).toBeInTheDocument();
+    expect(screen.getByText('Done')).toBeInTheDocument();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
+    expect(screen.getByText('Needs you')).toBeInTheDocument();
+  });
+
+  it('renders singular tool-call wording, step count, and a goal-less row', () => {
+    const one: BackgroundProcess[] = [
+      { taskId: 's1', name: 'One', goal: '', status: 'running', toolCount: 1, iterations: 3 },
+    ];
+    const { container } = render(
+      <BackgroundProcessesPanel open processes={one} onClose={vi.fn()} onOpenProcess={vi.fn()} />
+    );
+    expect(container.textContent).toContain('1 tool call'); // singular branch
+    expect(container.textContent).toContain('3 steps'); // iterations branch
+    expect(container.textContent).not.toContain('research the Eiffel Tower'); // goal-less
+  });
+
+  it('closes on Escape', () => {
+    const onClose = vi.fn();
+    render(
+      <BackgroundProcessesPanel open processes={procs} onClose={onClose} onOpenProcess={vi.fn()} />
+    );
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
   });
 });
