@@ -7,12 +7,14 @@
 //! per row, dropping the repeated key names and JSON punctuation.
 //!
 //! Up to [`ROW_DROP_THRESHOLD`] rows the transform is **lossless** — every
-//! value is preserved (nested values render as compact JSON in their cell).
-//! Above it, the table is additionally **row-dropped** (head + tail kept) and
-//! the full original is offloaded to the CCR store ([`super::store`]) behind a
-//! `retrieve_tool_output("<hash>")` marker, so the dropped middle stays
+//! value is preserved (nested values render as compact JSON in their cell) —
+//! and returned as [`Compacted::lossless`]. Above it, the table is additionally
+//! **row-dropped** (head + tail kept) and returned as [`Compacted::lossy`]; the
+//! caller (`compact_tool_output`) then offloads the full original to CCR behind
+//! a `retrieve_tool_output("<hash>")` footer, so the dropped middle stays
 //! recoverable on demand and aggressive compaction is safe always-on.
 
+use super::Compacted;
 use serde_json::Value;
 use std::fmt::Write as _;
 
@@ -28,7 +30,11 @@ pub const TAIL_ROWS: usize = 10;
 
 /// Compress a JSON array-of-objects into a compact table. Returns `None` when
 /// the content isn't a uniform-enough array of objects or wouldn't shrink.
-pub fn compress(content: &str) -> Option<String> {
+///
+/// Lossless (only reformats) up to [`ROW_DROP_THRESHOLD`] rows; above it the
+/// middle rows are dropped and the result is marked `lossy` so the caller
+/// offloads the original to CCR behind the retrieval footer.
+pub fn compress(content: &str) -> Option<Compacted> {
     let value: Value = serde_json::from_str(content.trim()).ok()?;
     let array = value.as_array()?;
     if array.len() < MIN_ROWS {
@@ -79,17 +85,14 @@ pub fn compress(content: &str) -> Option<String> {
     let _ = writeln!(out, "{}", columns.join(" | "));
 
     if lossy {
-        // Keep head + tail; offload the full original so the dropped middle is
-        // recoverable via the retrieve_tool_output tool.
-        let hash = super::store::offload(content);
+        // Keep head + tail; the caller offloads the full original to CCR and
+        // appends the retrieve_tool_output footer, so the dropped middle stays
+        // recoverable. The inline marker here just shows where rows were cut.
         let dropped = rows.len() - HEAD_ROWS - TAIL_ROWS;
         for row in rows.iter().take(HEAD_ROWS) {
             let _ = writeln!(out, "{row}");
         }
-        let _ = writeln!(
-            out,
-            "[... {dropped} rows omitted · full original via retrieve_tool_output(\"{hash}\") ...]"
-        );
+        let _ = writeln!(out, "[... {dropped} middle rows omitted ...]");
         for row in rows.iter().skip(rows.len() - TAIL_ROWS) {
             let _ = writeln!(out, "{row}");
         }
@@ -102,8 +105,10 @@ pub fn compress(content: &str) -> Option<String> {
     let out = out.trim_end().to_string();
     if out.len() >= content.len() {
         None
+    } else if lossy {
+        Some(Compacted::lossy(out))
     } else {
-        Some(out)
+        Some(Compacted::lossless(out))
     }
 }
 
@@ -132,7 +137,7 @@ mod tests {
             ));
         }
         let input = format!("[{}]", rows.join(","));
-        let out = compress(&input).expect("compresses");
+        let out = compress(&input).expect("compresses").text;
         // Header + key names appear once, not 20× (column order is whatever
         // serde_json yields — don't assume insertion order here).
         assert_eq!(out.matches("status").count(), 1, "{out}");
@@ -152,7 +157,7 @@ mod tests {
           {"id":2,"tags":["c"],"meta":{"k":2}},
           {"id":3,"tags":[],"meta":{"k":3}}
         ]"#;
-        let out = compress(input).expect("compresses");
+        let out = compress(input).expect("compresses").text;
         assert!(out.contains(r#"["a","b"]"#), "{out}");
         assert!(out.contains(r#"{"k":1}"#), "{out}");
     }
@@ -168,7 +173,7 @@ mod tests {
         }
         rows.push(r#"{"alpha":99}"#.to_string()); // missing bravo/charlie
         let input = format!("[{}]", rows.join(","));
-        let out = compress(&input).expect("compresses");
+        let out = compress(&input).expect("compresses").text;
         let header = out.lines().nth(1).unwrap();
         for col in ["alpha", "bravo", "charlie"] {
             assert!(header.contains(col), "header missing {col}: {header}");
@@ -177,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn large_array_row_drops_with_recoverable_ccr() {
+    fn large_array_row_drops_and_is_marked_lossy() {
         let mut rows = Vec::new();
         for i in 0..200 {
             rows.push(format!(
@@ -185,36 +190,36 @@ mod tests {
             ));
         }
         let input = format!("[{}]", rows.join(","));
-        let out = compress(&input).expect("compresses");
+        let c = compress(&input).expect("compresses");
 
-        // Row-drop marker present with a retrieval hash.
-        assert!(out.contains("rows omitted"), "{out}");
-        let marker = out
-            .lines()
-            .find(|l| l.contains("retrieve_tool_output("))
-            .expect("has retrieval marker");
-        let hash = marker
-            .split("retrieve_tool_output(\"")
-            .nth(1)
-            .unwrap()
-            .split('"')
-            .next()
-            .unwrap();
+        // Marked lossy → the caller (compact_tool_output) offloads to CCR and
+        // appends the retrieve footer. The CCR round-trip is covered at the
+        // mod.rs level (lossy_outputs_are_recoverable).
+        assert!(c.lossy, "row-dropped output must be lossy");
+        assert!(c.text.contains("middle rows omitted"), "{}", c.text);
 
         // Head + tail rows survive; the middle is dropped.
-        assert!(out.contains("record number 0"), "{out}");
-        assert!(out.contains("record number 199"), "{out}");
+        assert!(c.text.contains("record number 0"), "{}", c.text);
+        assert!(c.text.contains("record number 199"), "{}", c.text);
         assert!(
-            !out.contains("record number 100"),
+            !c.text.contains("record number 100"),
             "middle should be dropped"
         );
+        assert!(c.text.len() < input.len());
+    }
 
-        // CCR round-trip returns the exact original.
-        assert_eq!(
-            super::super::store::retrieve(hash).as_deref(),
-            Some(input.as_str())
-        );
-        assert!(out.len() < input.len());
+    #[test]
+    fn small_table_is_lossless() {
+        let mut rows = Vec::new();
+        for i in 0..10 {
+            rows.push(format!(
+                r#"{{"id":{i},"name":"row {i} with a reasonably long value","kind":"sample"}}"#
+            ));
+        }
+        let input = format!("[{}]", rows.join(","));
+        let c = compress(&input).expect("compresses");
+        assert!(!c.lossy, "a full table drops no data");
+        assert!(!c.text.contains("omitted"));
     }
 
     #[test]

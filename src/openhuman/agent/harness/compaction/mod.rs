@@ -38,11 +38,32 @@ mod demo;
 mod measure;
 
 use detect::{hint_for_tool, resolve, ContentType};
+use std::fmt::Write as _;
 
 /// Outputs below this many bytes are never compressed — they're already cheap
 /// and the structural compressors add overhead (markers) that can outweigh the
 /// saving. Matches the spirit of the plan's `min_bytes_to_compress`.
 pub const MIN_BYTES_TO_COMPRESS: usize = 2048;
+
+/// Result of a single compressor: the compacted body plus whether any data was
+/// dropped from it. `lossy` drives reversibility — a lossy body has its
+/// original offloaded to the CCR store and gets the retrieval footer, a
+/// lossless one (e.g. the JSON table, which only reformats) does not.
+pub struct Compacted {
+    pub text: String,
+    pub lossy: bool,
+}
+
+impl Compacted {
+    /// All information preserved — only formatting/whitespace changed.
+    pub fn lossless(text: String) -> Self {
+        Self { text, lossy: false }
+    }
+    /// Data was dropped — the original must be offloaded for recovery.
+    pub fn lossy(text: String) -> Self {
+        Self { text, lossy: true }
+    }
+}
 
 /// Compress a tool's output for the model context, routed by the tool name.
 ///
@@ -50,6 +71,12 @@ pub const MIN_BYTES_TO_COMPRESS: usize = 2048;
 /// when: compaction is disabled, the output is small, the content type isn't
 /// one we compress, or compression wouldn't shrink it. The result still flows
 /// through the downstream byte budget, so this can only ever *help*.
+///
+/// **Reversibility / honesty:** whenever a compressor drops data (`lossy`), the
+/// full original is stashed in the [`store`] (CCR) and the returned text ends
+/// with an explicit footer telling the model this is a partial view and how to
+/// fetch the original via `retrieve_tool_output("<hash>")`. So the model is
+/// never silently handed a truncated result, and nothing is unrecoverable.
 pub fn compact_tool_output(content: String, tool_name: &str, enabled: bool) -> String {
     if !enabled || content.len() < MIN_BYTES_TO_COMPRESS {
         return content;
@@ -69,12 +96,26 @@ pub fn compact_tool_output(content: String, tool_name: &str, enabled: bool) -> S
     };
 
     match compressed {
-        Some(out) if out.len() < content.len() => {
+        Some(c) if c.text.len() < content.len() => {
+            let mut out = c.text;
+            if c.lossy {
+                // Offload the full original and tell the model — explicitly —
+                // that this is a partial view it can expand on demand.
+                let hash = store::offload(&content);
+                let _ = write!(
+                    out,
+                    "\n\n[compacted tool output — this is a partial view; \
+                     the full original ({} bytes) is available by calling \
+                     retrieve_tool_output(\"{hash}\")]",
+                    content.len()
+                );
+            }
             let ratio = 1.0 - (out.len() as f64 / content.len() as f64);
             // `::log` is the logging crate (the sibling `logs` module shadows
             // the bare `log` path inside this module).
             ::log::debug!(
-                "[compaction] tool={tool_name} type={content_type:?} in_bytes={} out_bytes={} ratio={ratio:.2}",
+                "[compaction] tool={tool_name} type={content_type:?} lossy={} in_bytes={} out_bytes={} ratio={ratio:.2}",
+                c.lossy,
                 content.len(),
                 out.len(),
             );
@@ -127,5 +168,103 @@ mod tests {
         let prose = "lorem ipsum ".repeat(400); // > MIN, but plain text
         let out = compact_tool_output(prose.clone(), "some_tool", true);
         assert_eq!(out, prose);
+    }
+
+    /// Pull the CCR hash out of the retrieval footer the model is shown.
+    fn footer_hash(out: &str) -> Option<&str> {
+        out.split("retrieve_tool_output(\"")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+    }
+
+    #[test]
+    fn every_lossy_output_tells_the_model_and_is_recoverable() {
+        // One representative input per lossy compressor. Each must (a) carry the
+        // explicit "partial view / retrieve_tool_output" footer, and (b) have
+        // its full original recoverable byte-for-byte from the CCR store — i.e.
+        // no information is actually lost, only deferred.
+        let mut grep = String::from("200 match(es)\n");
+        for f in 0..5 {
+            for i in 1..=20 {
+                let _ = writeln!(
+                    grep,
+                    "src/f{f}.rs:{i}:    let v_{i} = compute(payload_{i});"
+                );
+            }
+        }
+        let mut log = String::new();
+        for i in 0..200 {
+            let _ = writeln!(log, "   Compiling crate_{i} v0.{i}.0");
+        }
+        let _ = writeln!(log, "error: aborting");
+        let mut diff = String::from("diff --git a/x.rs b/x.rs\n@@ -1,60 +1,61 @@\n");
+        for i in 0..50 {
+            let _ = writeln!(
+                diff,
+                " unchanged context line {i} carried along by the diff"
+            );
+        }
+        let _ = writeln!(diff, "+changed");
+        let mut jrows = Vec::new();
+        for i in 0..120 {
+            jrows.push(format!(
+                r#"{{"id":{i},"name":"account_{i}","email":"a{i}@ex.com","tier":"gold"}}"#
+            ));
+        }
+        let json = format!("[{}]", jrows.join(","));
+
+        for (tool, input) in [
+            ("grep", grep),
+            ("run_tests", log),
+            ("read_diff", diff),
+            ("list_accounts", json),
+        ] {
+            let out = compact_tool_output(input.clone(), tool, true);
+            assert!(out.len() < input.len(), "{tool}: not compacted");
+            // (a) the model is explicitly told this is a partial view.
+            assert!(
+                out.contains("partial view") && out.contains("retrieve_tool_output("),
+                "{tool}: missing retrieval footer:\n{out}"
+            );
+            // (b) the full original is recoverable byte-for-byte.
+            let hash = footer_hash(&out).expect("footer has a hash");
+            assert_eq!(
+                store::retrieve(hash).as_deref(),
+                Some(input.as_str()),
+                "{tool}: CCR did not round-trip"
+            );
+        }
+    }
+
+    #[test]
+    fn lossless_table_preserves_every_value_and_has_no_footer() {
+        // A JSON list under the row-drop threshold is reformatted, not dropped:
+        // every value must still be present, and there must be NO retrieval
+        // footer (nothing was lost, so nothing to retrieve).
+        // 38 rows: above the 2048-byte floor, below the 40-row drop threshold
+        // → a full lossless table.
+        let mut rows = Vec::new();
+        for i in 0..38 {
+            rows.push(format!(
+                r#"{{"id":{i},"sku":"SKU-{i:05}","name":"widget number {i} in the catalog","warehouse":"east-region-1"}}"#
+            ));
+        }
+        let input = format!("[{}]", rows.join(","));
+        assert!(input.len() >= MIN_BYTES_TO_COMPRESS);
+        let out = compact_tool_output(input.clone(), "list_inventory", true);
+        assert!(out.len() < input.len(), "table should shrink");
+        assert!(
+            !out.contains("retrieve_tool_output("),
+            "lossless ⇒ no footer"
+        );
+        assert!(!out.contains("omitted"), "lossless ⇒ nothing omitted");
+        // Every row's identifying values survive the reformat.
+        for i in 0..38 {
+            assert!(out.contains(&format!("SKU-{i:05}")), "lost SKU {i}");
+            assert!(
+                out.contains(&format!("widget number {i} in the catalog")),
+                "lost name {i}"
+            );
+        }
     }
 }

@@ -18,6 +18,7 @@
 //! survive.
 
 use super::signals::{severity, Severity};
+use super::Compacted;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
@@ -29,7 +30,8 @@ pub const MAX_TOTAL_LINES: usize = 100;
 
 /// Compress a build/test/lint log. Returns `None` when nothing can be saved
 /// (few lines, or no reduction possible) so the caller passes it through.
-pub fn compress(content: &str) -> Option<String> {
+/// Lossy when it fires (drops lines); the caller offloads the original to CCR.
+pub fn compress(content: &str) -> Option<Compacted> {
     let lines: Vec<&str> = content.lines().collect();
     if lines.len() <= MAX_TOTAL_LINES {
         // Short enough already — the byte budget (if any) will handle it.
@@ -146,7 +148,7 @@ pub fn compress(content: &str) -> Option<String> {
     if out.len() >= content.len() {
         None
     } else {
-        Some(out.trim_end().to_string())
+        Some(Compacted::lossy(out.trim_end().to_string()))
     }
 }
 
@@ -234,7 +236,7 @@ mod tests {
     #[test]
     fn keeps_errors_and_summary_drops_noise() {
         let input = noisy_log();
-        let out = compress(&input).expect("compresses");
+        let out = compress(&input).expect("compresses").text;
         assert!(out.contains("error[E0382]"), "{out}");
         assert!(out.contains("error: aborting"), "{out}");
         assert!(out.contains("test result: FAILED"), "{out}");
@@ -250,7 +252,7 @@ mod tests {
             let _ = writeln!(s, "warning: unused variable at line {i}");
         }
         let _ = writeln!(s, "test result: ok. 1 passed; 0 failed");
-        let out = compress(&s).expect("compresses");
+        let out = compress(&s).expect("compresses").text;
         let warns = out.matches("unused variable").count();
         assert!(warns <= MAX_WARNINGS, "kept {warns} warnings");
     }
@@ -271,7 +273,7 @@ mod tests {
         for i in 0..120 {
             let _ = writeln!(s, "info: step {i}");
         }
-        let out = compress(&s).expect("compresses");
+        let out = compress(&s).expect("compresses").text;
         let frames = out.matches("    at frame_").count();
         assert!(frames <= STACK_TRACE_MAX_LINES, "{frames} frames kept");
     }

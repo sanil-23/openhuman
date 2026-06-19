@@ -13,10 +13,14 @@
 //!    more and can re-run with a narrower query.
 //!
 //! Lossy-but-bounded: first/last/highest-signal hits per file always survive,
-//! and the omitted count is always surfaced. No CCR needed at this stage.
+//! and the omitted count is surfaced inline. The result is marked `lossy`, so
+//! `compact_tool_output` offloads the full original to CCR and appends the
+//! `retrieve_tool_output("<hash>")` footer — the dropped matches stay
+//! recoverable on demand.
 
 use super::detect::parse_search_line;
 use super::signals::line_score;
+use super::Compacted;
 use std::fmt::Write as _;
 
 /// Max matches kept per file before the rest collapse into a summary line.
@@ -47,8 +51,9 @@ impl FileGroup {
 
 /// Compress grep/ripgrep output. Returns `None` when the content has no
 /// parseable matches (caller passes it through unchanged) or when compression
-/// would not shrink it.
-pub fn compress(content: &str) -> Option<String> {
+/// would not shrink it. Always lossy when it fires (it drops matches), so the
+/// caller offloads the original for retrieval.
+pub fn compress(content: &str) -> Option<Compacted> {
     // Preserve any header line the tool emitted before the matches (grep.rs
     // prints a "N match(es); scanned M file(s)" header) so the count survives.
     let mut header: Option<&str> = None;
@@ -148,7 +153,7 @@ pub fn compress(content: &str) -> Option<String> {
     if out.len() >= content.len() {
         None
     } else {
-        Some(out.trim_end().to_string())
+        Some(Compacted::lossy(out.trim_end().to_string()))
     }
 }
 
@@ -213,7 +218,7 @@ mod tests {
 
     #[test]
     fn caps_per_file_and_keeps_first_last() {
-        let out = compress(&big_search()).expect("compresses");
+        let out = compress(&big_search()).expect("compresses").text;
         // First and last match of a.rs must survive.
         assert!(out.contains("src/a.rs:1:"), "{out}");
         assert!(out.contains("src/a.rs:20:"), "{out}");
@@ -236,7 +241,7 @@ mod tests {
                 let _ = writeln!(s, "f{f}.rs:{i}:line {i}");
             }
         }
-        let out = compress(&s).expect("compresses");
+        let out = compress(&s).expect("compresses").text;
         let kept: usize = out
             .lines()
             .filter(|l| parse_search_line(l).is_some())
@@ -260,7 +265,7 @@ mod tests {
                 );
             }
         }
-        let out = compress(&s).expect("compresses");
+        let out = compress(&s).expect("compresses").text;
         assert!(out.contains("ERROR something went badly wrong"), "{out}");
     }
 

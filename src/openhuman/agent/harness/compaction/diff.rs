@@ -1,8 +1,8 @@
 //! Unified-diff compressor.
 //!
 //! Clean-room port of headroom's `DiffCompressor` (Apache-2.0), in the
-//! lossy-but-bounded style of [`super::search`] / [`super::logs`] (no CCR at
-//! this stage):
+//! lossy-but-bounded style of [`super::search`] / [`super::logs`] (the caller
+//! offloads the original to CCR for retrieval):
 //!
 //! - **Always keep** structural lines: `diff --git`, `index`, `---`/`+++`
 //!   file headers, and `@@` hunk headers.
@@ -17,6 +17,7 @@
 //! Changed lines are never dropped, so the diff stays faithful to *what
 //! changed* even when the surrounding context is trimmed.
 
+use super::Compacted;
 use std::fmt::Write as _;
 
 /// Context lines kept on each side of a changed run before collapsing.
@@ -25,8 +26,9 @@ pub const CONTEXT_ANCHOR: usize = 3;
 pub const CONTEXT_COLLAPSE_THRESHOLD: usize = 8;
 
 /// Compress a unified diff. Returns `None` when there's nothing structural to
-/// work with or compression wouldn't shrink it.
-pub fn compress(content: &str) -> Option<String> {
+/// work with or compression wouldn't shrink it. Lossy when it fires (collapses
+/// context / summarizes hunks); the caller offloads the original to CCR.
+pub fn compress(content: &str) -> Option<Compacted> {
     let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() {
         return None;
@@ -101,7 +103,7 @@ pub fn compress(content: &str) -> Option<String> {
     if out.len() >= content.len() {
         None
     } else {
-        Some(out.trim_end().to_string())
+        Some(Compacted::lossy(out.trim_end().to_string()))
     }
 }
 
@@ -179,7 +181,7 @@ mod tests {
         for i in 0..20 {
             let _ = writeln!(s, " more context {i} unchanged");
         }
-        let out = compress(&s).expect("compresses");
+        let out = compress(&s).expect("compresses").text;
         assert!(out.contains("-old changed line"), "{out}");
         assert!(out.contains("+new changed line"), "{out}");
         assert!(out.contains("context line(s) omitted"), "{out}");
@@ -196,7 +198,7 @@ mod tests {
         for i in 0..20 {
             let _ = writeln!(s, "- old dep entry {i}");
         }
-        let out = compress(&s).expect("compresses");
+        let out = compress(&s).expect("compresses").text;
         assert!(out.contains("lockfile/bundle hunk"), "{out}");
         assert!(out.contains("Cargo.lock"));
         // Individual dep lines are gone.
