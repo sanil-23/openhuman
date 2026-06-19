@@ -30,6 +30,7 @@ pub mod json_crusher;
 pub mod logs;
 pub mod search;
 pub mod signals;
+pub mod store;
 
 use detect::{hint_for_tool, resolve, ContentType};
 

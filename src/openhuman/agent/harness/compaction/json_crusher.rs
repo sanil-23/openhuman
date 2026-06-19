@@ -6,17 +6,25 @@
 //! manifests). Re-rendering it as a table emits each key **once** instead of
 //! per row, dropping the repeated key names and JSON punctuation.
 //!
-//! This stage is deliberately **lossless** — every value is preserved (nested
-//! values are rendered as compact JSON in their cell) — so it is safe under
-//! the always-on default without CCR. The lossy row-dropping variant (with a
-//! reversible CCR sentinel) is a later enhancement; until then the existing
-//! byte budget handles anything still too large.
+//! Up to [`ROW_DROP_THRESHOLD`] rows the transform is **lossless** — every
+//! value is preserved (nested values render as compact JSON in their cell).
+//! Above it, the table is additionally **row-dropped** (head + tail kept) and
+//! the full original is offloaded to the CCR store ([`super::store`]) behind a
+//! `retrieve_tool_output("<hash>")` marker, so the dropped middle stays
+//! recoverable on demand and aggressive compaction is safe always-on.
 
 use serde_json::Value;
 use std::fmt::Write as _;
 
 /// Minimum rows before tabular rendering is worth the header overhead.
 pub const MIN_ROWS: usize = 3;
+/// Above this many rows the table is *also* row-dropped: head + tail rows are
+/// kept and the full original is offloaded to CCR behind a retrieval marker.
+pub const ROW_DROP_THRESHOLD: usize = 40;
+/// Rows kept from the head when row-dropping.
+pub const HEAD_ROWS: usize = 20;
+/// Rows kept from the tail when row-dropping.
+pub const TAIL_ROWS: usize = 10;
 
 /// Compress a JSON array-of-objects into a compact table. Returns `None` when
 /// the content isn't a uniform-enough array of objects or wouldn't shrink.
@@ -46,25 +54,49 @@ pub fn compress(content: &str) -> Option<String> {
         return None;
     }
 
+    // Render every row's cells up front so we can choose full vs. row-dropped.
+    let mut rows: Vec<String> = Vec::with_capacity(array.len());
+    for item in array {
+        let obj = item.as_object()?;
+        let cells: Vec<String> = columns
+            .iter()
+            .map(|col| match obj.get(col) {
+                None | Some(Value::Null) => String::new(),
+                Some(v) => render_cell(v),
+            })
+            .collect();
+        rows.push(cells.join(" | "));
+    }
+
+    let lossy = rows.len() > ROW_DROP_THRESHOLD;
     let mut out = String::with_capacity(content.len());
     let _ = writeln!(
         out,
         "[json table: {} rows × {} columns — values are JSON; empty = key absent]",
-        array.len(),
+        rows.len(),
         columns.len()
     );
     let _ = writeln!(out, "{}", columns.join(" | "));
 
-    for item in array {
-        let obj = item.as_object()?;
-        let mut cells: Vec<String> = Vec::with_capacity(columns.len());
-        for col in &columns {
-            match obj.get(col) {
-                None | Some(Value::Null) => cells.push(String::new()),
-                Some(v) => cells.push(render_cell(v)),
-            }
+    if lossy {
+        // Keep head + tail; offload the full original so the dropped middle is
+        // recoverable via the retrieve_tool_output tool.
+        let hash = super::store::offload(content);
+        let dropped = rows.len() - HEAD_ROWS - TAIL_ROWS;
+        for row in rows.iter().take(HEAD_ROWS) {
+            let _ = writeln!(out, "{row}");
         }
-        let _ = writeln!(out, "{}", cells.join(" | "));
+        let _ = writeln!(
+            out,
+            "[... {dropped} rows omitted · full original via retrieve_tool_output(\"{hash}\") ...]"
+        );
+        for row in rows.iter().skip(rows.len() - TAIL_ROWS) {
+            let _ = writeln!(out, "{row}");
+        }
+    } else {
+        for row in &rows {
+            let _ = writeln!(out, "{row}");
+        }
     }
 
     let out = out.trim_end().to_string();
@@ -141,6 +173,47 @@ mod tests {
         for col in ["alpha", "bravo", "charlie"] {
             assert!(header.contains(col), "header missing {col}: {header}");
         }
+        assert!(out.len() < input.len());
+    }
+
+    #[test]
+    fn large_array_row_drops_with_recoverable_ccr() {
+        let mut rows = Vec::new();
+        for i in 0..200 {
+            rows.push(format!(
+                r#"{{"id":{i},"name":"record number {i}","status":"active","note":"some detail {i}"}}"#
+            ));
+        }
+        let input = format!("[{}]", rows.join(","));
+        let out = compress(&input).expect("compresses");
+
+        // Row-drop marker present with a retrieval hash.
+        assert!(out.contains("rows omitted"), "{out}");
+        let marker = out
+            .lines()
+            .find(|l| l.contains("retrieve_tool_output("))
+            .expect("has retrieval marker");
+        let hash = marker
+            .split("retrieve_tool_output(\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+
+        // Head + tail rows survive; the middle is dropped.
+        assert!(out.contains("record number 0"), "{out}");
+        assert!(out.contains("record number 199"), "{out}");
+        assert!(
+            !out.contains("record number 100"),
+            "middle should be dropped"
+        );
+
+        // CCR round-trip returns the exact original.
+        assert_eq!(
+            super::super::store::retrieve(hash).as_deref(),
+            Some(input.as_str())
+        );
         assert!(out.len() < input.len());
     }
 
