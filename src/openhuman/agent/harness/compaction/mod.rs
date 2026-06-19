@@ -17,22 +17,25 @@
 //! ahead of it in `agent_tool_exec::run_agent_tool_call`.
 //!
 //! Compressors: search results, build/test logs, unified diffs, and JSON
-//! arrays (lossless tabular). The system-prompt cache-aligner
+//! arrays (tabular; large arrays additionally row-dropped with a reversible
+//! CCR offload — see [`store`]). The system-prompt cache-aligner
 //! ([`cache_align`]) runs warn-only from `ContextManager::build_system_prompt`.
-//! Lossy JSON row-dropping with reversible CCR offload is a later enhancement;
-//! today every compressor is lossless or first/last/high-signal-preserving, so
-//! it is safe under the always-on default.
+//! Every lossy path is first/last/high-signal-preserving or recoverable via
+//! the `retrieve_tool_output` tool, so it is safe under the always-on default.
 
 pub mod cache_align;
 pub mod detect;
 pub mod diff;
 pub mod json_crusher;
 pub mod logs;
-#[cfg(test)]
-mod measure;
 pub mod search;
 pub mod signals;
 pub mod store;
+
+#[cfg(test)]
+mod demo;
+#[cfg(test)]
+mod measure;
 
 use detect::{hint_for_tool, resolve, ContentType};
 
