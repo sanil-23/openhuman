@@ -261,7 +261,9 @@ impl ContextManager {
     /// the inference backend's prefix cache picks up the stable prefix
     /// automatically, so no boundary marker is emitted.
     pub fn build_system_prompt(&self, ctx: &PromptContext<'_>) -> Result<String> {
-        self.default_prompt_builder.build(ctx)
+        let prompt = self.default_prompt_builder.build(ctx)?;
+        self.warn_if_cache_unstable(&prompt);
+        Ok(prompt)
     }
 
     /// Assemble the system prompt via a caller-supplied builder.
@@ -276,7 +278,19 @@ impl ContextManager {
         builder: &SystemPromptBuilder,
         ctx: &PromptContext<'_>,
     ) -> Result<String> {
-        builder.build(ctx)
+        let prompt = builder.build(ctx)?;
+        self.warn_if_cache_unstable(&prompt);
+        Ok(prompt)
+    }
+
+    /// Cache-aligner (Stage 1a sibling, warn-only): flag volatile tokens in
+    /// the cache-hot system prompt that would silently break the provider
+    /// KV-cache prefix. Never mutates the prompt. Gated on the compaction
+    /// kill-switch so disabling compaction also silences this diagnostic.
+    fn warn_if_cache_unstable(&self, prompt: &str) {
+        if self.compaction_enabled {
+            crate::openhuman::agent::harness::compaction::cache_align::warn_if_volatile(prompt);
+        }
     }
 
     // ─── Reduction ─────────────────────────────────────────────────

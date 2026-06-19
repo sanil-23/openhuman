@@ -16,10 +16,17 @@
 //! in [`crate::openhuman::context::tool_result_budget`]; this stage runs just
 //! ahead of it in `agent_tool_exec::run_agent_tool_call`.
 //!
-//! Phase 1 ships search + log compression. JSON-array crushing, diffs, CCR
-//! reversibility, and the system-prompt cache-aligner land in later phases.
+//! Compressors: search results, build/test logs, unified diffs, and JSON
+//! arrays (lossless tabular). The system-prompt cache-aligner
+//! ([`cache_align`]) runs warn-only from `ContextManager::build_system_prompt`.
+//! Lossy JSON row-dropping with reversible CCR offload is a later enhancement;
+//! today every compressor is lossless or first/last/high-signal-preserving, so
+//! it is safe under the always-on default.
 
+pub mod cache_align;
 pub mod detect;
+pub mod diff;
+pub mod json_crusher;
 pub mod logs;
 pub mod search;
 pub mod signals;
@@ -48,9 +55,11 @@ pub fn compact_tool_output(content: String, tool_name: &str, enabled: bool) -> S
     let compressed = match content_type {
         ContentType::Search => search::compress(&content),
         ContentType::Log => logs::compress(&content),
-        // Phases 2–3: JSON crusher and diff compressor. Until then these pass
-        // through to the existing byte budget unchanged.
-        ContentType::Diff | ContentType::JsonArray | ContentType::PlainText => None,
+        ContentType::Diff => diff::compress(&content),
+        ContentType::JsonArray => json_crusher::compress(&content),
+        // Plain text has no structural compressor (the ML text compressor is
+        // intentionally out of scope) — pass through to the byte budget.
+        ContentType::PlainText => None,
     };
 
     match compressed {
