@@ -1240,3 +1240,59 @@ fn failed_runs_still_alert_even_when_empty() {
     assert!(!cron_result_should_alert(true, ""));
     assert!(!cron_result_should_alert(true, EMPTY_AGENT_OUTPUT));
 }
+
+fn proactive_job() -> CronJob {
+    let mut job = test_job("");
+    job.delivery = DeliveryConfig {
+        mode: "proactive".into(),
+        channel: None,
+        to: None,
+        best_effort: true,
+    };
+    job
+}
+
+async fn cron_alerts(config: &Config) -> usize {
+    crate::openhuman::notifications::store::list(config, 10, 0, Some("cron"), None)
+        .unwrap()
+        .len()
+}
+
+#[tokio::test]
+async fn deliver_if_configured_failure_skips_chat_but_alerts() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp).await;
+    let job = proactive_job();
+    // Failed run (non-empty canned error): no chat injection, but still alerts.
+    assert!(
+        deliver_if_configured(&config, &job, "Something went wrong.", false)
+            .await
+            .is_ok()
+    );
+    assert_eq!(cron_alerts(&config).await, 1);
+}
+
+#[tokio::test]
+async fn deliver_if_configured_empty_failure_alerts_with_fallback_body() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp).await;
+    let job = proactive_job();
+    // Empty failed run: still surfaces in /notifications with a fallback body.
+    assert!(deliver_if_configured(&config, &job, "", false)
+        .await
+        .is_ok());
+    let items =
+        crate::openhuman::notifications::store::list(&config, 10, 0, Some("cron"), None).unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(items[0].body.contains("failed without output"));
+}
+
+#[tokio::test]
+async fn deliver_if_configured_empty_success_skips_chat_and_alert() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp).await;
+    let job = proactive_job();
+    // Successful but empty: nothing delivered anywhere.
+    assert!(deliver_if_configured(&config, &job, "", true).await.is_ok());
+    assert_eq!(cron_alerts(&config).await, 0);
+}
