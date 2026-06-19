@@ -45,6 +45,13 @@ use std::fmt::Write as _;
 /// saving. Matches the spirit of the plan's `min_bytes_to_compress`.
 pub const MIN_BYTES_TO_COMPRESS: usize = 2048;
 
+/// Tools whose output must never be compacted. `retrieve_tool_output` exists
+/// precisely to return a previously-compacted original *in full* — running it
+/// back through Stage 1a would re-compact the recovery and the agent could
+/// never actually get the dropped data. Keep this in sync with the tool's
+/// `name()` in `tools/impl/system/retrieve_tool_output.rs`.
+pub const NEVER_COMPACT_TOOLS: &[&str] = &["retrieve_tool_output"];
+
 /// Result of a single compressor: the compacted body plus whether any data was
 /// dropped from it. `lossy` drives reversibility — a lossy body has its
 /// original offloaded to the CCR store and gets the retrieval footer, a
@@ -78,7 +85,8 @@ impl Compacted {
 /// fetch the original via `retrieve_tool_output("<hash>")`. So the model is
 /// never silently handed a truncated result, and nothing is unrecoverable.
 pub fn compact_tool_output(content: String, tool_name: &str, enabled: bool) -> String {
-    if !enabled || content.len() < MIN_BYTES_TO_COMPRESS {
+    if !enabled || content.len() < MIN_BYTES_TO_COMPRESS || NEVER_COMPACT_TOOLS.contains(&tool_name)
+    {
         return content;
     }
 
@@ -175,6 +183,40 @@ mod tests {
         out.split("retrieve_tool_output(\"")
             .nth(1)
             .and_then(|s| s.split('"').next())
+    }
+
+    #[test]
+    fn retrieval_returns_the_full_original_uncompacted() {
+        // End-to-end recovery: a large JSON result is compacted (lossy) and its
+        // original offloaded; the model reads the footer hash and calls
+        // retrieve_tool_output. That tool's output flows back through Stage 1a —
+        // and must NOT be re-compacted, or the agent could never see the full
+        // data it asked for.
+        let mut rows = Vec::new();
+        for i in 0..120 {
+            rows.push(format!(
+                r#"{{"id":{i},"name":"account_{i}","email":"a{i}@ex.com","tier":"gold"}}"#
+            ));
+        }
+        let original = format!("[{}]", rows.join(","));
+
+        // 1. First pass compacts + offloads.
+        let compacted = compact_tool_output(original.clone(), "list_accounts", true);
+        assert!(compacted.contains("retrieve_tool_output("));
+        let hash = footer_hash(&compacted).expect("footer hash");
+
+        // 2. The retrieve tool fetches the original from CCR.
+        let fetched = store::retrieve(hash).expect("CCR has it");
+        assert_eq!(fetched, original);
+
+        // 3. That fetched output passes through Stage 1a under the retrieve
+        //    tool's name — and must come back byte-for-byte, NOT re-compacted.
+        let delivered = compact_tool_output(fetched, "retrieve_tool_output", true);
+        assert_eq!(
+            delivered, original,
+            "recovery must deliver the full original"
+        );
+        assert!(!delivered.contains("partial view"));
     }
 
     #[test]
