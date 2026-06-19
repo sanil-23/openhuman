@@ -28,6 +28,8 @@ pub mod detect;
 pub mod diff;
 pub mod json_crusher;
 pub mod logs;
+#[cfg(test)]
+mod measure;
 pub mod search;
 pub mod signals;
 pub mod store;
