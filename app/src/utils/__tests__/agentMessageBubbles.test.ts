@@ -84,6 +84,54 @@ describe('splitAgentMessageIntoBubbles', () => {
     expect(splitAgentMessageIntoBubbles('___')).toEqual([]);
     expect(splitAgentMessageIntoBubbles('Before\n\n---\n\nAfter')).toEqual(['Before', 'After']);
   });
+
+  // Issue #3807: a heading and its body must never land in separate bubbles.
+  it('keeps an ATX heading together with its body in one bubble', () => {
+    expect(splitAgentMessageIntoBubbles('## 📅 Calendar\n\n- 9am standup')).toEqual([
+      '## 📅 Calendar\n\n- 9am standup',
+    ]);
+  });
+
+  it('keeps a bold-line heading together with its body in one bubble', () => {
+    expect(splitAgentMessageIntoBubbles('**Tasks**\n\n- Ship the PR')).toEqual([
+      '**Tasks**\n\n- Ship the PR',
+    ]);
+  });
+
+  it('renders a multi-section morning briefing as one bubble per section', () => {
+    const briefing = [
+      'Good morning! Here is what today looks like.',
+      '## 📅 Calendar',
+      '- 9:00 Standup\n- 14:00 Design review',
+      '## ✅ Tasks',
+      '- Finish the proposal (due today)',
+      '## 📧 Emails',
+      '2 unread threads from key contacts',
+    ].join('\n\n');
+
+    const bubbles = splitAgentMessageIntoBubbles(briefing);
+
+    expect(bubbles).toEqual([
+      'Good morning! Here is what today looks like.',
+      '## 📅 Calendar\n\n- 9:00 Standup\n- 14:00 Design review',
+      '## ✅ Tasks\n\n- Finish the proposal (due today)',
+      '## 📧 Emails\n\n2 unread threads from key contacts',
+    ]);
+
+    // No bubble is a heading with no body, and no body bubble lacks its heading.
+    for (const bubble of bubbles.slice(1)) {
+      const lines = bubble.split('\n').filter(line => line.trim().length > 0);
+      expect(lines.length).toBeGreaterThan(1);
+      expect(lines[0].startsWith('#')).toBe(true);
+    }
+  });
+
+  it('absorbs trailing closing lines into the final section bubble', () => {
+    const briefing = '## 📧 Emails\n\n2 unread threads\n\nHave a great day! ☀️';
+    expect(splitAgentMessageIntoBubbles(briefing)).toEqual([
+      '## 📧 Emails\n\n2 unread threads\n\nHave a great day! ☀️',
+    ]);
+  });
 });
 
 describe('parseMarkdownTable', () => {

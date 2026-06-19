@@ -1,3 +1,7 @@
+import debugFactory from 'debug';
+
+const debug = debugFactory('agent-message-bubbles');
+
 /**
  * Split an agent message into render-time bubble segments.
  *
@@ -5,6 +9,11 @@
  * newlines. Fenced code blocks stay intact as a single segment so
  * Markdown/code rendering does not fragment unexpectedly.
  * Markdown tables also stay grouped so they can render as dedicated table UI.
+ *
+ * Finally, regroup so a section heading and the body that follows it always
+ * share one bubble (issue #3807): structured output such as the morning
+ * briefing writes `## Heading\n\n- body…`, and splitting on the blank line
+ * would otherwise orphan every heading into its own content-less bubble.
  */
 export function splitAgentMessageIntoBubbles(content: string): string[] {
   const normalized = content
@@ -77,7 +86,61 @@ export function splitAgentMessageIntoBubbles(content: string): string[] {
   }
 
   flushCurrent();
-  return segments.filter(segment => !isVisualSeparatorOnly(segment));
+  const cleaned = segments.filter(segment => !isVisualSeparatorOnly(segment));
+  const grouped = groupSectionsUnderHeadings(cleaned);
+  debug(
+    '[bubbles] %d char message -> %d raw segment(s) -> %d bubble(s) after heading grouping',
+    content.length,
+    cleaned.length,
+    grouped.length
+  );
+  return grouped;
+}
+
+/**
+ * Merge each section heading with the body segments that follow it (up to the
+ * next heading) into a single bubble. A heading is never left in a bubble of
+ * its own, and the body below it is never orphaned from its heading. Segments
+ * before the first heading (e.g. a greeting) are left untouched.
+ */
+function groupSectionsUnderHeadings(segments: string[]): string[] {
+  const grouped: string[] = [];
+  let index = 0;
+
+  while (index < segments.length) {
+    if (!startsWithHeading(segments[index])) {
+      grouped.push(segments[index]);
+      index += 1;
+      continue;
+    }
+
+    const section = [segments[index]];
+    index += 1;
+    while (index < segments.length && !startsWithHeading(segments[index])) {
+      section.push(segments[index]);
+      index += 1;
+    }
+    grouped.push(section.join('\n\n'));
+  }
+
+  return grouped;
+}
+
+/** A segment "starts a section" when its first non-empty line is a heading. */
+function startsWithHeading(segment: string): boolean {
+  const firstLine = segment.split('\n').find(line => line.trim().length > 0) ?? '';
+  return isHeadingLine(firstLine);
+}
+
+/**
+ * Recognize the heading shapes structured agent output uses to label a
+ * section: Markdown ATX headings (`#`..`######`) and a single fully-bold line
+ * (`**Calendar**`), optionally with a trailing colon.
+ */
+function isHeadingLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (/^#{1,6}\s+\S/.test(trimmed)) return true;
+  return /^\*\*[^*]+\*\*:?$/.test(trimmed);
 }
 
 export interface ParsedMarkdownTable {
