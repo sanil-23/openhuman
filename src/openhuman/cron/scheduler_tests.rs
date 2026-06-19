@@ -1225,3 +1225,18 @@ fn chat_delivery_allowed_for_successful_nonempty_runs() {
         "Good morning! You have 3 meetings today."
     ));
 }
+
+#[test]
+fn failed_runs_still_alert_even_when_empty() {
+    // Failures must remain visible in /notifications even with no output.
+    assert!(cron_result_should_alert(false, ""));
+    assert!(cron_result_should_alert(false, EMPTY_AGENT_OUTPUT));
+    assert!(cron_result_should_alert(
+        false,
+        "Something went wrong. Please try again."
+    ));
+    // Successful non-empty runs alert; successful-but-empty runs do not.
+    assert!(cron_result_should_alert(true, "done"));
+    assert!(!cron_result_should_alert(true, ""));
+    assert!(!cron_result_should_alert(true, EMPTY_AGENT_OUTPUT));
+}

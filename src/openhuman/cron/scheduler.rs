@@ -721,6 +721,13 @@ fn should_deliver_cron_output_to_chat(success: bool, output: &str) -> bool {
     success && !cron_output_is_empty(output)
 }
 
+/// Whether a completed cron run should surface in the alerts tab
+/// (`/notifications`). Failures stay visible even when they produce no output;
+/// only successful-but-empty runs are dropped entirely.
+fn cron_result_should_alert(success: bool, output: &str) -> bool {
+    !success || !cron_output_is_empty(output)
+}
+
 async fn deliver_if_configured(
     config: &Config,
     job: &CronJob,
@@ -736,6 +743,23 @@ async fn deliver_if_configured(
     // and the run-history / health signals, which are recorded elsewhere.
     let is_empty = cron_output_is_empty(output);
     let deliver_to_chat = should_deliver_cron_output_to_chat(success, output);
+    if !deliver_to_chat {
+        tracing::debug!(
+            job_id = %job.id,
+            success,
+            is_empty,
+            "[cron] skipping chat delivery for failed/empty cron run"
+        );
+    }
+
+    // Failures must stay visible in /notifications even when they produce no
+    // output; only successful-but-empty runs are suppressed entirely.
+    let alert_to_notifications = cron_result_should_alert(success, output);
+    let alert_body = if is_empty {
+        "Scheduled job failed without output."
+    } else {
+        output
+    };
 
     let mode = delivery.mode.trim().to_ascii_lowercase();
     match mode.as_str() {
@@ -757,11 +781,11 @@ async fn deliver_if_configured(
                 });
             }
 
-            // Push to the alerts tab (/notifications) for any non-empty result,
-            // including failures, so a failed scheduled job is still visible
-            // even though it isn't injected into chat.
-            if !is_empty {
-                push_cron_alert(config, job, output);
+            // Surface in the alerts tab (/notifications) for any result that
+            // isn't a successful-but-empty run, so failed scheduled jobs stay
+            // visible even though they aren't injected into chat.
+            if alert_to_notifications {
+                push_cron_alert(config, job, alert_body);
             }
         }
 
@@ -791,8 +815,8 @@ async fn deliver_if_configured(
                 });
             }
 
-            if !is_empty {
-                push_cron_alert(config, job, output);
+            if alert_to_notifications {
+                push_cron_alert(config, job, alert_body);
             }
         }
 
