@@ -145,12 +145,20 @@ pub(crate) trait IncrementalSource: Send + Sync {
     /// Fetch one page of raw items for `scope` at `cursor` (`None` = first
     /// page). Return the items already unwrapped from the Composio envelope
     /// plus the opaque next-page token.
+    ///
+    /// Implementations **must record the page request against the daily budget**
+    /// (`state.record_requests(1)`) for any *completed* round-trip — including
+    /// one the provider reports as `successful == false` — before converting it
+    /// to an `Err`, so a broken/unauthorized connection cannot make unlimited
+    /// billable failed calls without hitting the per-day cap. A transport error
+    /// (no round-trip) must not be recorded.
     async fn fetch_page(
         &self,
         ctx: &ProviderContext,
         scope: &SyncScope,
         cursor: Option<&str>,
         reason: SyncReason,
+        state: &mut SyncState,
     ) -> Result<PageFetch, String>;
 
     /// Stable dedup key for one raw item. `None` drops the item (e.g. it has no
@@ -402,11 +410,13 @@ pub(crate) async fn run_sync<S: IncrementalSource + ?Sized>(
                 break 'scopes;
             }
 
-            // Persist whatever budget/dedup progress we have before propagating
-            // a page error — parity with the per-provider loops, which saved
-            // state before returning a failed-page error.
+            // `fetch_page` records the page request against the budget (incl.
+            // provider-reported failures) per its contract. On error we persist
+            // whatever budget/dedup progress we have before propagating —
+            // parity with the per-provider loops, which saved state before
+            // returning a failed-page error.
             let fetch = match source
-                .fetch_page(ctx, scope, cursor.as_deref(), reason)
+                .fetch_page(ctx, scope, cursor.as_deref(), reason, &mut state)
                 .await
             {
                 Ok(fetch) => fetch,
@@ -415,7 +425,6 @@ pub(crate) async fn run_sync<S: IncrementalSource + ?Sized>(
                     return Err(e);
                 }
             };
-            state.record_requests(1);
             total_fetched += fetch.items.len();
 
             if fetch.items.is_empty() {
@@ -559,6 +568,8 @@ mod tests {
     /// A minimal in-test [`IncrementalSource`] that proves a *future* toolkit
     /// inherits the cap + window for free. It synthesises items per scope (or
     /// returns explicit ones) and "ingests" by counting — no real memory tree.
+    /// `Default` keeps the per-test literals to just the field(s) they vary.
+    #[derive(Default)]
     struct FakeSource {
         scopes: Vec<SyncScope>,
         items_per_scope: usize,
@@ -568,9 +579,13 @@ mod tests {
         /// When true, `preamble` returns an error (exercises the preamble-error
         /// save-and-propagate path).
         fail_preamble: bool,
-        /// When true, `fetch_page` returns an error (exercises the page-error
-        /// save-and-propagate path).
+        /// When true, `fetch_page` returns a *transport* error (no round-trip →
+        /// not budget-recorded).
         fail_fetch: bool,
+        /// When true, `fetch_page` records the round-trip *then* returns a
+        /// provider-reported failure — pins that a failed page still consumes
+        /// the daily budget.
+        provider_fail_fetch: bool,
     }
 
     impl FakeSource {
@@ -578,9 +593,7 @@ mod tests {
             Self {
                 scopes: vec![SyncScope::flat()],
                 items_per_scope,
-                explicit_items: None,
-                fail_preamble: false,
-                fail_fetch: false,
+                ..Default::default()
             }
         }
     }
@@ -614,9 +627,18 @@ mod tests {
             scope: &SyncScope,
             cursor: Option<&str>,
             _reason: SyncReason,
+            state: &mut SyncState,
         ) -> Result<PageFetch, String> {
             if self.fail_fetch {
+                // Simulate a transport error (no completed round-trip) → not
+                // recorded, matching the contract.
                 return Err("fake fetch_page failure".to_string());
+            }
+            // A completed round-trip — record it against the budget.
+            state.record_requests(1);
+            if self.provider_fail_fetch {
+                // Completed but the provider reported failure — already recorded.
+                return Err("fake provider-reported page failure".to_string());
             }
             // Single page per scope: everything comes back on the first call.
             if cursor.is_some() {
@@ -727,10 +749,8 @@ mod tests {
         ];
         let source = FakeSource {
             scopes: vec![SyncScope::flat()],
-            items_per_scope: 0,
             explicit_items: Some(items),
-            fail_preamble: false,
-            fail_fetch: false,
+            ..Default::default()
         };
         let outcome = run_sync(&source, &ctx, SyncReason::Manual)
             .await
@@ -753,9 +773,7 @@ mod tests {
                 SyncScope::nested("s2", "Scope 2"),
             ],
             items_per_scope: 3,
-            explicit_items: None,
-            fail_preamble: false,
-            fail_fetch: false,
+            ..Default::default()
         };
         let outcome = run_sync(&source, &ctx, SyncReason::ConnectionCreated)
             .await
@@ -797,9 +815,7 @@ mod tests {
         let source = FakeSource {
             scopes: vec![], // preamble resolved no scopes to iterate
             items_per_scope: 5,
-            explicit_items: None,
-            fail_preamble: false,
-            fail_fetch: false,
+            ..Default::default()
         };
         let outcome = run_sync(&source, &ctx, SyncReason::Periodic)
             .await
@@ -819,9 +835,8 @@ mod tests {
         let source = FakeSource {
             scopes: vec![SyncScope::flat()],
             items_per_scope: 5,
-            explicit_items: None,
             fail_preamble: true,
-            fail_fetch: false,
+            ..Default::default()
         };
         let err = run_sync(&source, &ctx, SyncReason::Periodic)
             .await
@@ -836,14 +851,52 @@ mod tests {
         let source = FakeSource {
             scopes: vec![SyncScope::flat()],
             items_per_scope: 5,
-            explicit_items: None,
-            fail_preamble: false,
             fail_fetch: true,
+            ..Default::default()
         };
         let err = run_sync(&source, &ctx, SyncReason::Periodic)
             .await
             .expect_err("fetch_page failure must propagate");
         assert!(err.contains("fetch_page"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn provider_reported_page_failure_still_consumes_budget() {
+        // Parity with the per-provider loops (and the Codex review): a page that
+        // completes the round-trip but reports `successful == false` must count
+        // against the daily budget before the error propagates, so a broken
+        // connection can't make unlimited billable failed page calls.
+        let tmp = TempDir::new().unwrap();
+        let ctx = fake_ctx(&tmp, None, None);
+        let source = FakeSource {
+            scopes: vec![SyncScope::flat()],
+            items_per_scope: 5,
+            provider_fail_fetch: true,
+            ..Default::default()
+        };
+        let before = {
+            let memory = ctx.memory_client().expect("memory client");
+            SyncState::load(&memory, "faketoolkit", "conn-fake")
+                .await
+                .unwrap()
+                .budget_remaining()
+        };
+        let err = run_sync(&source, &ctx, SyncReason::Periodic)
+            .await
+            .expect_err("provider-reported failure must propagate");
+        assert!(err.contains("provider-reported"), "got: {err}");
+        // The orchestrator saved state on the page error; the failed page was
+        // recorded, so exactly one request was consumed.
+        let memory = ctx.memory_client().expect("memory client");
+        let after = SyncState::load(&memory, "faketoolkit", "conn-fake")
+            .await
+            .unwrap()
+            .budget_remaining();
+        assert_eq!(
+            before - after,
+            1,
+            "a completed-but-failed page must consume exactly one budget request"
+        );
     }
 
     #[test]

@@ -110,6 +110,7 @@ impl IncrementalSource for NotionSource {
         _scope: &SyncScope,
         cursor: Option<&str>,
         reason: SyncReason,
+        state: &mut SyncState,
     ) -> Result<PageFetch, String> {
         let mut args = json!({
             "page_size": self.page_size(reason),
@@ -120,10 +121,15 @@ impl IncrementalSource for NotionSource {
             args["start_cursor"] = json!(cursor);
         }
 
+        // A transport error never reached Composio — `?` returns before we
+        // record. A completed round-trip is recorded against the daily budget
+        // *before* we surface a provider-reported failure, so a broken
+        // connection cannot make unlimited billable failed page calls.
         let resp = ctx
             .execute(ACTION_FETCH_DATA, Some(args))
             .await
             .map_err(|e| format!("[composio:notion] {ACTION_FETCH_DATA}: {e:#}"))?;
+        state.record_requests(1);
 
         if !resp.successful {
             let err = resp
