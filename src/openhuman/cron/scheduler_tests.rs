@@ -540,7 +540,9 @@ async fn deliver_if_configured_skips_non_announce_mode() {
     let job = test_job("echo ok");
 
     // Default delivery mode is not "announce", so nothing is published.
-    assert!(deliver_if_configured(&config, &job, "x").await.is_ok());
+    assert!(deliver_if_configured(&config, &job, "x", true)
+        .await
+        .is_ok());
 }
 
 #[tokio::test]
@@ -596,7 +598,9 @@ async fn deliver_if_configured_publishes_event_for_announce_mode() {
     assert_eq!(received.load(Ordering::SeqCst), 1);
 
     // Also verify the function itself succeeds.
-    assert!(deliver_if_configured(&config, &job, "hello").await.is_ok());
+    assert!(deliver_if_configured(&config, &job, "hello", true)
+        .await
+        .is_ok());
 }
 
 #[test]
@@ -692,7 +696,9 @@ async fn deliver_if_configured_skips_empty_mode() {
     let config = test_config(&tmp).await;
     let mut job = test_job("echo ok");
     job.delivery.mode = "".into();
-    assert!(deliver_if_configured(&config, &job, "output").await.is_ok());
+    assert!(deliver_if_configured(&config, &job, "output", true)
+        .await
+        .is_ok());
 }
 
 #[tokio::test]
@@ -706,7 +712,7 @@ async fn deliver_if_configured_announce_missing_channel_errors() {
         to: Some("target".into()),
         best_effort: true,
     };
-    let result = deliver_if_configured(&config, &job, "out").await;
+    let result = deliver_if_configured(&config, &job, "out", true).await;
     assert!(result.is_err());
 }
 
@@ -721,7 +727,7 @@ async fn deliver_if_configured_announce_missing_target_errors() {
         to: None,
         best_effort: true,
     };
-    let result = deliver_if_configured(&config, &job, "out").await;
+    let result = deliver_if_configured(&config, &job, "out", true).await;
     assert!(result.is_err());
 }
 
@@ -736,7 +742,9 @@ async fn deliver_if_configured_proactive_mode_succeeds() {
         to: None,
         best_effort: true,
     };
-    assert!(deliver_if_configured(&config, &job, "hello").await.is_ok());
+    assert!(deliver_if_configured(&config, &job, "hello", true)
+        .await
+        .is_ok());
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -1181,4 +1189,39 @@ async fn scheduler_tick_once_does_not_re_emit_recovery_signal_on_steady_state() 
             "tick #{tick} must leave the tracker at Some(true) (steady state, no publish)"
         );
     }
+}
+
+// ── Chat-delivery gating (skip failed + empty cron runs) ────────────────────
+
+#[test]
+fn chat_delivery_skipped_for_failed_runs() {
+    // A failed cron turn (e.g. a transient network/DNS error) yields a
+    // non-empty canned message; it must NOT be injected into the chat thread.
+    assert!(!should_deliver_cron_output_to_chat(
+        false,
+        "Something went wrong. Please try again."
+    ));
+}
+
+#[test]
+fn chat_delivery_skipped_for_empty_runs() {
+    assert!(!should_deliver_cron_output_to_chat(true, ""));
+    assert!(!should_deliver_cron_output_to_chat(true, "   \n  "));
+    // The empty-run placeholder counts as empty and is not delivered.
+    assert!(cron_output_is_empty(EMPTY_AGENT_OUTPUT));
+    assert!(!should_deliver_cron_output_to_chat(
+        true,
+        EMPTY_AGENT_OUTPUT
+    ));
+}
+
+#[test]
+fn chat_delivery_allowed_for_successful_nonempty_runs() {
+    assert!(!cron_output_is_empty(
+        "Good morning! You have 3 meetings today."
+    ));
+    assert!(should_deliver_cron_output_to_chat(
+        true,
+        "Good morning! You have 3 meetings today."
+    ));
 }

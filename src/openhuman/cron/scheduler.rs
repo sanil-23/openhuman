@@ -255,9 +255,11 @@ pub(crate) async fn tick_once(
 
 /// Public entry point for delivering a job's output via the configured
 /// delivery mode (proactive / announce). Called by `cron_run` ("Run Now")
-/// so manual runs also push notifications and alerts.
+/// so manual runs also push notifications and alerts. Manual runs are treated
+/// as `success = true` so the user always sees the result they explicitly
+/// triggered (empty output is still skipped).
 pub async fn deliver_job(config: &Config, job: &CronJob, output: &str) {
-    if let Err(e) = deliver_if_configured(config, job, output).await {
+    if let Err(e) = deliver_if_configured(config, job, output, true).await {
         if job.delivery.best_effort {
             tracing::warn!("[cron] delivery failed (best_effort, Run Now): {e}");
         } else {
@@ -594,7 +596,7 @@ async fn run_agent_job(config: &Config, job: &CronJob) -> (bool, String, Option<
         Ok(response) => (
             true,
             if response.trim().is_empty() {
-                "agent job executed".to_string()
+                EMPTY_AGENT_OUTPUT.to_string()
             } else {
                 response
             },
@@ -614,6 +616,10 @@ async fn run_agent_job(config: &Config, job: &CronJob) -> (bool, String, Option<
     }
 }
 
+/// Placeholder recorded in run history when an agent job succeeds but returns
+/// no text. Never delivered to chat — used only for the run-history record.
+const EMPTY_AGENT_OUTPUT: &str = "agent job executed";
+
 async fn persist_job_result(
     config: &Config,
     job: &CronJob,
@@ -624,7 +630,7 @@ async fn persist_job_result(
 ) -> bool {
     let duration_ms = (finished_at - started_at).num_milliseconds();
 
-    if let Err(e) = deliver_if_configured(config, job, output).await {
+    if let Err(e) = deliver_if_configured(config, job, output, success).await {
         if job.delivery.best_effort {
             tracing::warn!("Cron delivery failed (best_effort): {e}");
         } else {
@@ -702,8 +708,34 @@ fn warn_if_high_frequency_agent_job(job: &CronJob) {
     }
 }
 
-async fn deliver_if_configured(config: &Config, job: &CronJob, output: &str) -> Result<()> {
+/// True when an agent job produced no meaningful text — blank output or the
+/// [`EMPTY_AGENT_OUTPUT`] placeholder. Such runs are never injected into chat.
+fn cron_output_is_empty(output: &str) -> bool {
+    output.trim().is_empty() || output == EMPTY_AGENT_OUTPUT
+}
+
+/// Whether a cron job's output should be injected into the user's chat thread.
+/// Skips failed runs and empty/placeholder output; failures still surface in
+/// the alerts tab and run history (handled separately by the caller).
+fn should_deliver_cron_output_to_chat(success: bool, output: &str) -> bool {
+    success && !cron_output_is_empty(output)
+}
+
+async fn deliver_if_configured(
+    config: &Config,
+    job: &CronJob,
+    output: &str,
+    success: bool,
+) -> Result<()> {
     let delivery: &DeliveryConfig = &job.delivery;
+
+    // Don't post failed or empty cron runs into the user's chat: a failed turn
+    // (e.g. a transient network error) would otherwise deliver a canned
+    // "Something went wrong" message into the conversation with no user
+    // message behind it. Failures still reach the alerts tab (`push_cron_alert`)
+    // and the run-history / health signals, which are recorded elsewhere.
+    let is_empty = cron_output_is_empty(output);
+    let deliver_to_chat = should_deliver_cron_output_to_chat(success, output);
 
     let mode = delivery.mode.trim().to_ascii_lowercase();
     match mode.as_str() {
@@ -711,48 +743,57 @@ async fn deliver_if_configured(config: &Config, job: &CronJob, output: &str) -> 
         // Used by morning briefings, welcome messages, and other
         // user-facing proactive agents.
         "proactive" => {
-            let source = format!("cron:{}", job.id);
-            tracing::debug!(
-                job_id = %job.id,
-                source = %source,
-                "[cron] publishing ProactiveMessageRequested event"
-            );
-            publish_global(DomainEvent::ProactiveMessageRequested {
-                source,
-                message: output.to_string(),
-                job_name: job.name.clone(),
-            });
+            if deliver_to_chat {
+                let source = format!("cron:{}", job.id);
+                tracing::debug!(
+                    job_id = %job.id,
+                    source = %source,
+                    "[cron] publishing ProactiveMessageRequested event"
+                );
+                publish_global(DomainEvent::ProactiveMessageRequested {
+                    source,
+                    message: output.to_string(),
+                    job_name: job.name.clone(),
+                });
+            }
 
-            // Also push to the alerts tab so the user sees it in /notifications.
-            push_cron_alert(config, job, output);
+            // Push to the alerts tab (/notifications) for any non-empty result,
+            // including failures, so a failed scheduled job is still visible
+            // even though it isn't injected into chat.
+            if !is_empty {
+                push_cron_alert(config, job, output);
+            }
         }
 
         // Announce delivery — the cron job specifies the exact channel
         // and target. Used for explicit channel-targeted output.
         "announce" => {
-            let channel = delivery
-                .channel
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("delivery.channel is required for announce mode"))?;
-            let target = delivery
-                .to
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("delivery.to is required for announce mode"))?;
+            if deliver_to_chat {
+                let channel = delivery.channel.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("delivery.channel is required for announce mode")
+                })?;
+                let target = delivery
+                    .to
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("delivery.to is required for announce mode"))?;
 
-            tracing::debug!(
-                job_id = %job.id,
-                channel = %channel,
-                target = %target,
-                "[cron] publishing CronDeliveryRequested event"
-            );
-            publish_global(DomainEvent::CronDeliveryRequested {
-                job_id: job.id.clone(),
-                channel: channel.to_string(),
-                target: target.to_string(),
-                output: output.to_string(),
-            });
+                tracing::debug!(
+                    job_id = %job.id,
+                    channel = %channel,
+                    target = %target,
+                    "[cron] publishing CronDeliveryRequested event"
+                );
+                publish_global(DomainEvent::CronDeliveryRequested {
+                    job_id: job.id.clone(),
+                    channel: channel.to_string(),
+                    target: target.to_string(),
+                    output: output.to_string(),
+                });
+            }
 
-            push_cron_alert(config, job, output);
+            if !is_empty {
+                push_cron_alert(config, job, output);
+            }
         }
 
         // No delivery configured — output is stored in last_output only.
