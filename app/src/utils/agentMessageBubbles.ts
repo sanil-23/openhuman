@@ -99,28 +99,58 @@ export function splitAgentMessageIntoBubbles(content: string): string[] {
 
 /**
  * Merge each section heading with the body segments that follow it (up to the
- * next heading) into a single bubble. A heading is never left in a bubble of
- * its own, and the body below it is never orphaned from its heading. Segments
- * before the first heading (e.g. a greeting) are left untouched.
+ * next heading) into a single bubble, so a heading is never stranded in a
+ * content-less bubble of its own. Segments before the first heading (e.g. a
+ * greeting) are left untouched.
+ *
+ * Tables are deliberately NOT absorbed into a heading bubble: `AgentMessageBubble`
+ * only renders the dedicated table UI when the table sits at the start of the
+ * bubble (`parseMarkdownTable`), and the Markdown renderer has no GFM-table
+ * support, so folding a table behind a heading would render it as raw pipe
+ * text. A table therefore stays its own bubble and ends the current section.
  */
 function groupSectionsUnderHeadings(segments: string[]): string[] {
   const grouped: string[] = [];
   let index = 0;
 
   while (index < segments.length) {
-    if (!startsWithHeading(segments[index])) {
-      grouped.push(segments[index]);
+    const segment = segments[index];
+
+    if (!startsWithHeading(segment)) {
+      grouped.push(segment);
       index += 1;
       continue;
     }
 
-    const section = [segments[index]];
+    // Absorb the body paragraphs below this heading — but stop at the next
+    // heading or a table, both of which must begin their own bubble.
+    const body: string[] = [];
     index += 1;
-    while (index < segments.length && !startsWithHeading(segments[index])) {
-      section.push(segments[index]);
+    while (
+      index < segments.length &&
+      !startsWithHeading(segments[index]) &&
+      !isTableSegment(segments[index])
+    ) {
+      body.push(segments[index]);
       index += 1;
     }
-    grouped.push(section.join('\n\n'));
+
+    if (body.length > 0) {
+      grouped.push([segment, ...body].join('\n\n'));
+      continue;
+    }
+
+    // Heading with no inline body. Avoid an orphan heading bubble: when the
+    // next segment is a table the heading labels it from the bubble directly
+    // above (and must not be folded into the table); otherwise fold the
+    // heading into the previous bubble, unless that bubble is itself a table.
+    const nextIsTable = index < segments.length && isTableSegment(segments[index]);
+    const previous = grouped[grouped.length - 1];
+    if (!nextIsTable && previous !== undefined && !isTableSegment(previous)) {
+      grouped[grouped.length - 1] = `${previous}\n\n${segment}`;
+    } else {
+      grouped.push(segment);
+    }
   }
 
   return grouped;
@@ -130,6 +160,14 @@ function groupSectionsUnderHeadings(segments: string[]): string[] {
 function startsWithHeading(segment: string): boolean {
   const firstLine = segment.split('\n').find(line => line.trim().length > 0) ?? '';
   return isHeadingLine(firstLine);
+}
+
+/** A segment is a table when its first non-empty line begins a markdown table. */
+function isTableSegment(segment: string): boolean {
+  const lines = segment.split('\n');
+  let index = 0;
+  while (index < lines.length && lines[index].trim().length === 0) index += 1;
+  return isMarkdownTableStart(lines, index);
 }
 
 /**

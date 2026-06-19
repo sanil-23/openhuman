@@ -132,6 +132,33 @@ describe('splitAgentMessageIntoBubbles', () => {
       '## 📧 Emails\n\n2 unread threads\n\nHave a great day! ☀️',
     ]);
   });
+
+  it('keeps a table out of the heading bubble so the table renderer still fires', () => {
+    // A table folded behind a heading would not sit at the bubble start and
+    // would render as raw pipe text, so it stays its own segment.
+    const content = '## 📅 Calendar\n\n| Time | Event |\n| --- | --- |\n| 9:00 | Standup |';
+    expect(splitAgentMessageIntoBubbles(content)).toEqual([
+      '## 📅 Calendar',
+      '| Time | Event |\n| --- | --- |\n| 9:00 | Standup |',
+    ]);
+  });
+
+  it('still groups body paragraphs that follow a table under their heading', () => {
+    const content =
+      '## 📅 Calendar\n\n| Time | Event |\n| --- | --- |\n| 9:00 | Standup |\n\n## ✅ Tasks\n\n- Ship the PR';
+    expect(splitAgentMessageIntoBubbles(content)).toEqual([
+      '## 📅 Calendar',
+      '| Time | Event |\n| --- | --- |\n| 9:00 | Standup |',
+      '## ✅ Tasks\n\n- Ship the PR',
+    ]);
+  });
+
+  it('folds a trailing body-less heading into the previous bubble', () => {
+    const content = '## 📅 Calendar\n\n- 9:00 Standup\n\n## ✅ Tasks';
+    expect(splitAgentMessageIntoBubbles(content)).toEqual([
+      '## 📅 Calendar\n\n- 9:00 Standup\n\n## ✅ Tasks',
+    ]);
+  });
 });
 
 describe('parseMarkdownTable', () => {
