@@ -565,6 +565,12 @@ mod tests {
         /// When set, returned verbatim for the first page of the (single) scope
         /// instead of synthesised items — used by the depth-window test.
         explicit_items: Option<Vec<Value>>,
+        /// When true, `preamble` returns an error (exercises the preamble-error
+        /// save-and-propagate path).
+        fail_preamble: bool,
+        /// When true, `fetch_page` returns an error (exercises the page-error
+        /// save-and-propagate path).
+        fail_fetch: bool,
     }
 
     impl FakeSource {
@@ -573,6 +579,8 @@ mod tests {
                 scopes: vec![SyncScope::flat()],
                 items_per_scope,
                 explicit_items: None,
+                fail_preamble: false,
+                fail_fetch: false,
             }
         }
     }
@@ -591,8 +599,13 @@ mod tests {
         async fn preamble(
             &self,
             _ctx: &ProviderContext,
-            _state: &mut SyncState,
+            state: &mut SyncState,
         ) -> Result<Vec<SyncScope>, String> {
+            if self.fail_preamble {
+                // Spend a request first so the save-on-error path persists it.
+                state.record_requests(1);
+                return Err("fake preamble failure".to_string());
+            }
             Ok(self.scopes.clone())
         }
         async fn fetch_page(
@@ -602,6 +615,9 @@ mod tests {
             cursor: Option<&str>,
             _reason: SyncReason,
         ) -> Result<PageFetch, String> {
+            if self.fail_fetch {
+                return Err("fake fetch_page failure".to_string());
+            }
             // Single page per scope: everything comes back on the first call.
             if cursor.is_some() {
                 return Ok(PageFetch {
@@ -713,6 +729,8 @@ mod tests {
             scopes: vec![SyncScope::flat()],
             items_per_scope: 0,
             explicit_items: Some(items),
+            fail_preamble: false,
+            fail_fetch: false,
         };
         let outcome = run_sync(&source, &ctx, SyncReason::Manual)
             .await
@@ -736,6 +754,8 @@ mod tests {
             ],
             items_per_scope: 3,
             explicit_items: None,
+            fail_preamble: false,
+            fail_fetch: false,
         };
         let outcome = run_sync(&source, &ctx, SyncReason::ConnectionCreated)
             .await
@@ -768,6 +788,62 @@ mod tests {
             "exhausted-budget run must report a skip, got: {}",
             outcome.summary
         );
+    }
+
+    #[tokio::test]
+    async fn empty_scopes_short_circuit_to_a_skip_outcome() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = fake_ctx(&tmp, None, None);
+        let source = FakeSource {
+            scopes: vec![], // preamble resolved no scopes to iterate
+            items_per_scope: 5,
+            explicit_items: None,
+            fail_preamble: false,
+            fail_fetch: false,
+        };
+        let outcome = run_sync(&source, &ctx, SyncReason::Periodic)
+            .await
+            .expect("run_sync");
+        assert_eq!(outcome.items_ingested, 0);
+        assert!(
+            outcome.summary.contains("no scopes"),
+            "empty scopes must report a skip, got: {}",
+            outcome.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn preamble_error_propagates() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = fake_ctx(&tmp, None, None);
+        let source = FakeSource {
+            scopes: vec![SyncScope::flat()],
+            items_per_scope: 5,
+            explicit_items: None,
+            fail_preamble: true,
+            fail_fetch: false,
+        };
+        let err = run_sync(&source, &ctx, SyncReason::Periodic)
+            .await
+            .expect_err("preamble failure must propagate");
+        assert!(err.contains("preamble"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn fetch_page_error_propagates() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = fake_ctx(&tmp, None, None);
+        let source = FakeSource {
+            scopes: vec![SyncScope::flat()],
+            items_per_scope: 5,
+            explicit_items: None,
+            fail_preamble: false,
+            fail_fetch: true,
+        };
+        let err = run_sync(&source, &ctx, SyncReason::Periodic)
+            .await
+            .expect_err("fetch_page failure must propagate");
+        assert!(err.contains("fetch_page"), "got: {err}");
     }
 
     #[test]
