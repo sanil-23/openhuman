@@ -16,19 +16,22 @@
 //! in [`crate::openhuman::context::tool_result_budget`]; this stage runs just
 //! ahead of it in `agent_tool_exec::run_agent_tool_call`.
 //!
-//! Compressors: search results, build/test logs, unified diffs, and JSON
-//! arrays (tabular; large arrays additionally row-dropped with a reversible
-//! CCR offload — see [`store`]). The system-prompt cache-aligner
-//! ([`cache_align`]) runs warn-only from `ContextManager::build_system_prompt`.
-//! Every lossy path is first/last/high-signal-preserving or recoverable via
-//! the `retrieve_tool_output` tool, so it is safe under the always-on default.
+//! Compressors: build/test logs, unified diffs, and JSON arrays (tabular;
+//! large arrays additionally row-dropped with a reversible CCR offload — see
+//! [`store`]). The system-prompt cache-aligner ([`cache_align`]) runs warn-only
+//! from `ContextManager::build_system_prompt`. Every lossy path is recoverable
+//! via the `retrieve_tool_output` tool, so it is safe under the always-on
+//! default.
+//!
+//! **Search/grep output is intentionally not compacted** — see the router in
+//! [`compact_tool_output`]. It's a completeness tool; structured match-dropping
+//! does more harm than the tokens it saves.
 
 pub mod cache_align;
 pub mod detect;
 pub mod diff;
 pub mod json_crusher;
 pub mod logs;
-pub mod search;
 pub mod signals;
 pub mod store;
 
@@ -94,7 +97,14 @@ pub fn compact_tool_output(content: String, tool_name: &str, enabled: bool) -> S
     let content_type = resolve(hint, &content);
 
     let compressed = match content_type {
-        ContentType::Search => search::compress(&content),
+        // Search/grep output is deliberately NOT compacted. grep is a
+        // completeness tool — the agent runs it to find *every* call site —
+        // and dropping matches (even with a recovery footer) risks it acting
+        // on a partial set, with a relevance heuristic that doesn't apply to
+        // search results anyway. Large grep output is left to the downstream
+        // byte budget, which persists the full result to a `file_read`-able
+        // artifact rather than dropping it. See the design note in the PR.
+        ContentType::Search => None,
         ContentType::Log => logs::compress(&content),
         ContentType::Diff => diff::compress(&content),
         ContentType::JsonArray => json_crusher::compress(&content),
@@ -151,7 +161,9 @@ mod tests {
     }
 
     #[test]
-    fn large_search_is_compacted() {
+    fn search_output_is_not_compacted() {
+        // grep is a completeness tool — its output must pass through untouched
+        // even when large, so the agent never acts on a silently-dropped subset.
         let mut s = String::from("80 match(es); scanned 2 file(s)\n");
         for i in 1..=40 {
             let _ = writeln!(
@@ -167,8 +179,7 @@ mod tests {
         }
         assert!(s.len() >= MIN_BYTES_TO_COMPRESS);
         let out = compact_tool_output(s.clone(), "grep", true);
-        assert!(out.len() < s.len(), "expected compaction");
-        assert!(out.contains("more match(es) in"));
+        assert_eq!(out, s, "search output must pass through unchanged");
     }
 
     #[test]
@@ -224,16 +235,8 @@ mod tests {
         // One representative input per lossy compressor. Each must (a) carry the
         // explicit "partial view / retrieve_tool_output" footer, and (b) have
         // its full original recoverable byte-for-byte from the CCR store — i.e.
-        // no information is actually lost, only deferred.
-        let mut grep = String::from("200 match(es)\n");
-        for f in 0..5 {
-            for i in 1..=20 {
-                let _ = writeln!(
-                    grep,
-                    "src/f{f}.rs:{i}:    let v_{i} = compute(payload_{i});"
-                );
-            }
-        }
+        // no information is actually lost, only deferred. (grep is excluded —
+        // search output is intentionally never compacted.)
         let mut log = String::new();
         for i in 0..200 {
             let _ = writeln!(log, "   Compiling crate_{i} v0.{i}.0");
@@ -256,7 +259,6 @@ mod tests {
         let json = format!("[{}]", jrows.join(","));
 
         for (tool, input) in [
-            ("grep", grep),
             ("run_tests", log),
             ("read_diff", diff),
             ("list_accounts", json),

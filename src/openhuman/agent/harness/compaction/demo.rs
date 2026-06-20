@@ -62,7 +62,8 @@ fn print_head_tail(text: &str, head: usize, tail: usize) {
 
 #[test]
 fn demo_all_content_types() {
-    // 1 ── grep / code search: 48 matches across 4 files.
+    // 1 ── grep / code search is INTENTIONALLY NOT compacted (completeness
+    //    tool). Demonstrate that it passes through untouched even when large.
     let mut grep = String::from("48 match(es); scanned 4 file(s)\n");
     for f in 0..4 {
         for i in 1..=12 {
@@ -72,7 +73,15 @@ fn demo_all_content_types() {
             );
         }
     }
-    show("Code search (grep)", "grep", &grep);
+    let grep_out = compact_tool_output(grep.clone(), "grep", true);
+    println!("\n══════════════════════════════════════════════════════════════");
+    println!("▶ Code search (grep) — intentionally NOT compacted");
+    println!(
+        "  {} bytes → {} bytes   (unchanged: {})",
+        grep.len(),
+        grep_out.len(),
+        grep_out == grep
+    );
 
     // 2 ── build/test log: noise + warnings + a real error + summary.
     let mut log = String::new();

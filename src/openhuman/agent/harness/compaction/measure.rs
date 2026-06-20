@@ -54,20 +54,7 @@ impl Sample {
 }
 
 // ── Representative fixtures (the loud tool families from the plan) ──────────
-
-fn grep_fixture() -> String {
-    // 120 matches across 6 files — the shape `grep.rs` emits (default cap 200).
-    let mut s = String::from("120 match(es); scanned 6 file(s)\n");
-    for f in 0..6 {
-        for i in 1..=20 {
-            let _ = writeln!(
-                s,
-                "src/module_{f}/handler.rs:{i}:    let result = process_request(&ctx, payload_{i})?;"
-            );
-        }
-    }
-    s
-}
+// Note: grep/search is intentionally not compacted, so it is not measured here.
 
 fn cargo_test_log_fixture() -> String {
     let mut s = String::new();
@@ -113,7 +100,6 @@ fn diff_fixture() -> String {
 #[test]
 fn ab_token_savings_report() {
     let samples = vec![
-        Sample::run("code search (120 hits)", "grep", grep_fixture()),
         Sample::run("cargo test failure", "run_tests", cargo_test_log_fixture()),
         Sample::run("JSON list (150 rows)", "list_records", json_list_fixture()),
         Sample::run("git diff (large context)", "read_diff", diff_fixture()),
@@ -156,9 +142,9 @@ fn ab_token_savings_report() {
 #[test]
 fn disabled_yields_zero_savings() {
     // Sanity: with the kill-switch off, the harness sees no reduction — this is
-    // the control arm of the A/B.
-    let raw = grep_fixture();
+    // the control arm of the A/B. (Uses a fixture that *would* compact when on.)
+    let raw = cargo_test_log_fixture();
     let before = estimate_tokens(&raw);
-    let after = estimate_tokens(&compact_tool_output(raw, "grep", false));
+    let after = estimate_tokens(&compact_tool_output(raw, "run_tests", false));
     assert_eq!(before, after);
 }
