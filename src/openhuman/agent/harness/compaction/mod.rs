@@ -56,20 +56,22 @@ pub const MIN_BYTES_TO_COMPRESS: usize = 2048;
 pub const NEVER_COMPACT_TOOLS: &[&str] = &["retrieve_tool_output"];
 
 /// Result of a single compressor: the compacted body plus whether any data was
-/// dropped from it. `lossy` drives reversibility — a lossy body has its
-/// original offloaded to the CCR store and gets the retrieval footer, a
-/// lossless one (e.g. the JSON table, which only reformats) does not.
+/// actually dropped. Both kinds offload the original to CCR and carry a recovery
+/// footer (see [`compact_tool_output`]); `lossy` only changes the wording —
+/// "partial view" vs "faithful reformat" — so the model knows whether it's
+/// missing data or just exact formatting.
 pub struct Compacted {
     pub text: String,
     pub lossy: bool,
 }
 
 impl Compacted {
-    /// All information preserved — only formatting/whitespace changed.
-    pub fn lossless(text: String) -> Self {
+    /// All values preserved — only structure/formatting changed (e.g. the JSON
+    /// table). The exact original is still offered for recovery.
+    pub fn reformatted(text: String) -> Self {
         Self { text, lossy: false }
     }
-    /// Data was dropped — the original must be offloaded for recovery.
+    /// Data was dropped — the original is offloaded so it stays recoverable.
     pub fn lossy(text: String) -> Self {
         Self { text, lossy: true }
     }
@@ -116,15 +118,25 @@ pub fn compact_tool_output(content: String, tool_name: &str, enabled: bool) -> S
     match compressed {
         Some(c) if c.text.len() < content.len() => {
             let mut out = c.text;
+            // Always offload the original and tell the model how to get it back.
+            // Lossy outputs are a partial view (data dropped); reformatted ones
+            // (the JSON table) keep every value but change layout — either way
+            // the exact original is one retrieve_tool_output call away.
+            let hash = store::offload(&content);
             if c.lossy {
-                // Offload the full original and tell the model — explicitly —
-                // that this is a partial view it can expand on demand.
-                let hash = store::offload(&content);
                 let _ = write!(
                     out,
-                    "\n\n[compacted tool output — this is a partial view; \
-                     the full original ({} bytes) is available by calling \
+                    "\n\n[compacted tool output — this is a PARTIAL view; the \
+                     full original ({} bytes) is available by calling \
                      retrieve_tool_output(\"{hash}\")]",
+                    content.len()
+                );
+            } else {
+                let _ = write!(
+                    out,
+                    "\n\n[reformatted tool output — no data lost, but layout \
+                     changed; the exact original ({} bytes, e.g. raw JSON) is \
+                     available by calling retrieve_tool_output(\"{hash}\")]",
                     content.len()
                 );
             }
@@ -267,7 +279,7 @@ mod tests {
             assert!(out.len() < input.len(), "{tool}: not compacted");
             // (a) the model is explicitly told this is a partial view.
             assert!(
-                out.contains("partial view") && out.contains("retrieve_tool_output("),
+                out.contains("PARTIAL view") && out.contains("retrieve_tool_output("),
                 "{tool}: missing retrieval footer:\n{out}"
             );
             // (b) the full original is recoverable byte-for-byte.
@@ -281,12 +293,13 @@ mod tests {
     }
 
     #[test]
-    fn lossless_table_preserves_every_value_and_has_no_footer() {
+    fn reformatted_table_preserves_values_and_offers_exact_recovery() {
         // A JSON list under the row-drop threshold is reformatted, not dropped:
-        // every value must still be present, and there must be NO retrieval
-        // footer (nothing was lost, so nothing to retrieve).
-        // 38 rows: above the 2048-byte floor, below the 40-row drop threshold
-        // → a full lossless table.
+        // every value is present (no "omitted"), it's framed as a faithful
+        // reformat (not a "partial view"), and the EXACT original JSON is
+        // recoverable via the retrieve footer — that's how the agent asks for
+        // exact bytes.
+        // 38 rows: above the 2048-byte floor, below the 40-row drop threshold.
         let mut rows = Vec::new();
         for i in 0..38 {
             rows.push(format!(
@@ -296,12 +309,12 @@ mod tests {
         let input = format!("[{}]", rows.join(","));
         assert!(input.len() >= MIN_BYTES_TO_COMPRESS);
         let out = compact_tool_output(input.clone(), "list_inventory", true);
+
         assert!(out.len() < input.len(), "table should shrink");
-        assert!(
-            !out.contains("retrieve_tool_output("),
-            "lossless ⇒ no footer"
-        );
-        assert!(!out.contains("omitted"), "lossless ⇒ nothing omitted");
+        assert!(!out.contains("omitted"), "reformat ⇒ nothing dropped");
+        // Framed as a faithful reformat, not a lossy partial view.
+        assert!(out.contains("no data lost"), "{out}");
+        assert!(!out.contains("PARTIAL view"), "{out}");
         // Every row's identifying values survive the reformat.
         for i in 0..38 {
             assert!(out.contains(&format!("SKU-{i:05}")), "lost SKU {i}");
@@ -310,5 +323,8 @@ mod tests {
                 "lost name {i}"
             );
         }
+        // The agent can fetch the exact original JSON back, byte-for-byte.
+        let hash = footer_hash(&out).expect("reformat footer has a hash");
+        assert_eq!(store::retrieve(hash).as_deref(), Some(input.as_str()));
     }
 }

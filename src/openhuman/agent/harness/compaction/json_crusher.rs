@@ -6,13 +6,13 @@
 //! manifests). Re-rendering it as a table emits each key **once** instead of
 //! per row, dropping the repeated key names and JSON punctuation.
 //!
-//! Up to [`ROW_DROP_THRESHOLD`] rows the transform is **lossless** — every
-//! value is preserved (nested values render as compact JSON in their cell) —
-//! and returned as [`Compacted::lossless`]. Above it, the table is additionally
-//! **row-dropped** (head + tail kept) and returned as [`Compacted::lossy`]; the
-//! caller (`compact_tool_output`) then offloads the full original to CCR behind
-//! a `retrieve_tool_output("<hash>")` footer, so the dropped middle stays
-//! recoverable on demand and aggressive compaction is safe always-on.
+//! Up to [`ROW_DROP_THRESHOLD`] rows every value is preserved (nested values
+//! render as compact JSON in their cell); the array→table reformat changes only
+//! layout, so it returns [`Compacted::reformatted`]. Above the threshold the
+//! table is additionally **row-dropped** (head + tail kept) and returns
+//! [`Compacted::lossy`]. Either way the caller (`compact_tool_output`) offloads
+//! the full original to CCR behind a `retrieve_tool_output("<hash>")` footer, so
+//! the agent can always fetch the exact original JSON back on demand.
 
 use super::Compacted;
 use serde_json::Value;
@@ -108,7 +108,10 @@ pub fn compress(content: &str) -> Option<Compacted> {
     } else if lossy {
         Some(Compacted::lossy(out))
     } else {
-        Some(Compacted::lossless(out))
+        // All values preserved, but the array→table reformat changes layout
+        // (key order, quoting). Reported as `reformatted` so the caller still
+        // offloads the original — the agent can fetch exact JSON bytes back.
+        Some(Compacted::reformatted(out))
     }
 }
 
