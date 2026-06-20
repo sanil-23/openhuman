@@ -71,6 +71,10 @@ impl IncrementalSource for LinearSource {
         MAX_PAGES_PER_SYNC
     }
 
+    fn detail_noun(&self) -> &'static str {
+        "issues"
+    }
+
     /// Resolve the viewer id and return it as the single scope's id.
     async fn preamble(
         &self,

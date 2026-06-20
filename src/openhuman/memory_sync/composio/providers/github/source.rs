@@ -115,6 +115,10 @@ impl IncrementalSource for GitHubSource {
         true
     }
 
+    fn detail_noun(&self) -> &'static str {
+        "issues"
+    }
+
     /// Resolve the login and carry it as the single scope's id.
     async fn preamble(
         &self,

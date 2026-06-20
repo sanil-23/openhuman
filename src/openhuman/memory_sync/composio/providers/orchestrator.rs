@@ -179,6 +179,15 @@ pub(crate) trait IncrementalSource: Send + Sync {
         floor.to_rfc3339()
     }
 
+    /// Noun used for this provider's `{noun}_fetched` / `{noun}_persisted`
+    /// keys in the [`SyncOutcome::details`] diagnostic blob, preserving each
+    /// provider's historical detail shape (notion: `results`, github/linear:
+    /// `issues`, clickup: `tasks`, …). `details` is for logging/UI status only;
+    /// nothing reads these keys in production.
+    fn detail_noun(&self) -> &'static str {
+        "results"
+    }
+
     /// Whether the provider applies the `sync_depth_days` window **itself**
     /// (server-side — e.g. GitHub's `updated:>{date}` search qualifier),
     /// rather than relying on the orchestrator's client-side timestamp
@@ -558,6 +567,20 @@ pub(crate) async fn run_sync<S: IncrementalSource + ?Sized>(
         "[composio:sync_orch] incremental sync complete"
     );
 
+    // Provider-named `{noun}_fetched` / `{noun}_persisted` keys preserve each
+    // provider's historical `details` shape (notion `results`, github/linear
+    // `issues`, …). Built dynamically since `json!` can't take runtime keys.
+    let noun = source.detail_noun();
+    let mut details = json!({
+        "budget_remaining": state.budget_remaining(),
+        "cursor": state.cursor,
+        "synced_ids_total": state.synced_ids.len(),
+    });
+    if let Some(obj) = details.as_object_mut() {
+        obj.insert(format!("{noun}_fetched"), json!(total_fetched));
+        obj.insert(format!("{noun}_persisted"), json!(total_persisted));
+    }
+
     Ok(SyncOutcome {
         toolkit: toolkit.to_string(),
         connection_id: Some(connection_id),
@@ -566,13 +589,7 @@ pub(crate) async fn run_sync<S: IncrementalSource + ?Sized>(
         started_at_ms,
         finished_at_ms,
         summary,
-        details: json!({
-            "results_fetched": total_fetched,
-            "results_persisted": total_persisted,
-            "budget_remaining": state.budget_remaining(),
-            "cursor": state.cursor,
-            "synced_ids_total": state.synced_ids.len(),
-        }),
+        details,
     })
 }
 
