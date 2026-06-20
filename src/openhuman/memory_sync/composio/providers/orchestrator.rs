@@ -173,10 +173,22 @@ pub(crate) trait IncrementalSource: Send + Sync {
     /// Build the `sync_depth_days` floor in the *same representation* as
     /// [`Self::item_sort_ts`] so the lexicographic compare is valid. Default is
     /// RFC3339 UTC; providers whose timestamps are epoch-millis strings
-    /// (clickup) override.
+    /// (clickup) override. Unused when [`Self::server_side_depth`] is `true`.
     fn depth_floor(&self, days: u32) -> String {
         let floor = chrono::Utc::now() - chrono::Duration::days(days as i64);
         floor.to_rfc3339()
+    }
+
+    /// Whether the provider applies the `sync_depth_days` window **itself**
+    /// (server-side — e.g. GitHub's `updated:>{date}` search qualifier),
+    /// rather than relying on the orchestrator's client-side timestamp
+    /// truncation. When `true`, the orchestrator skips its client-side depth
+    /// filter and the provider must inject the window inside
+    /// [`Self::fetch_page`] (typically only on the first sync, before a cursor
+    /// exists). Default `false` — the orchestrator filters client-side via
+    /// [`Self::depth_floor`].
+    fn server_side_depth(&self) -> bool {
+        false
     }
 
     /// Whether to hold (not advance) the cursor when an ingest reported a
@@ -376,17 +388,23 @@ pub(crate) async fn run_sync<S: IncrementalSource + ?Sized>(
         );
     }
 
-    let depth_floor: Option<String> = ctx.sync_depth_days.map(|days| {
-        let floor = source.depth_floor(days);
-        tracing::debug!(
-            toolkit,
-            connection_id = %connection_id,
-            sync_depth_days = days,
-            oldest_allowed = %floor,
-            "[composio:sync_orch] [memory_sync] applying sync_depth_days floor"
-        );
-        floor
-    });
+    // Server-side-depth providers (GitHub) inject the window into the request
+    // in `fetch_page`, so the orchestrator skips its client-side floor for them.
+    let depth_floor: Option<String> = if source.server_side_depth() {
+        None
+    } else {
+        ctx.sync_depth_days.map(|days| {
+            let floor = source.depth_floor(days);
+            tracing::debug!(
+                toolkit,
+                connection_id = %connection_id,
+                sync_depth_days = days,
+                oldest_allowed = %floor,
+                "[composio:sync_orch] [memory_sync] applying sync_depth_days floor"
+            );
+            floor
+        })
+    };
 
     // ── Step 5: scope × page loop ───────────────────────────────────────
     let mut total_fetched: usize = 0;
@@ -586,6 +604,9 @@ mod tests {
         /// provider-reported failure — pins that a failed page still consumes
         /// the daily budget.
         provider_fail_fetch: bool,
+        /// When true, advertise server-side depth so the orchestrator skips its
+        /// client-side window filter (GitHub's behaviour).
+        server_side_depth: bool,
     }
 
     impl FakeSource {
@@ -668,6 +689,9 @@ mod tests {
         }
         fn item_sort_ts(&self, item: &Value) -> Option<String> {
             item.get("ts").and_then(Value::as_str).map(str::to_string)
+        }
+        fn server_side_depth(&self) -> bool {
+            self.server_side_depth
         }
         async fn ingest(
             &self,
@@ -758,6 +782,33 @@ mod tests {
         assert_eq!(
             outcome.items_ingested, 2,
             "sync_depth_days=7 must drop the three ancient items"
+        );
+    }
+
+    #[tokio::test]
+    async fn server_side_depth_skips_the_client_side_filter() {
+        // Same ancient items, but the source advertises server-side depth — so
+        // the orchestrator must NOT client-side-truncate (the provider would
+        // have filtered in fetch_page). All five survive here.
+        let tmp = TempDir::new().unwrap();
+        let ctx = fake_ctx(&tmp, None, Some(7));
+        let items = vec![
+            json!({ "id": "a", "ts": "2099-01-02T00:00:00Z" }),
+            json!({ "id": "b", "ts": "2000-01-01T00:00:00Z" }),
+            json!({ "id": "c", "ts": "2000-01-02T00:00:00Z" }),
+        ];
+        let source = FakeSource {
+            scopes: vec![SyncScope::flat()],
+            explicit_items: Some(items),
+            server_side_depth: true,
+            ..Default::default()
+        };
+        let outcome = run_sync(&source, &ctx, SyncReason::Manual)
+            .await
+            .expect("run_sync");
+        assert_eq!(
+            outcome.items_ingested, 3,
+            "server_side_depth must skip the orchestrator's client-side window filter"
         );
     }
 
