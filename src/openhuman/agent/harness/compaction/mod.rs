@@ -48,12 +48,20 @@ use std::fmt::Write as _;
 /// saving. Matches the spirit of the plan's `min_bytes_to_compress`.
 pub const MIN_BYTES_TO_COMPRESS: usize = 2048;
 
-/// Tools whose output must never be compacted. `retrieve_tool_output` exists
-/// precisely to return a previously-compacted original *in full* — running it
-/// back through Stage 1a would re-compact the recovery and the agent could
-/// never actually get the dropped data. Keep this in sync with the tool's
-/// `name()` in `tools/impl/system/retrieve_tool_output.rs`.
-pub const NEVER_COMPACT_TOOLS: &[&str] = &["retrieve_tool_output"];
+/// The CCR recovery tool's name (its `name()` in
+/// `tools/impl/system/retrieve_tool_output.rs`). It has two cross-cutting
+/// requirements, both keyed off this constant:
+///
+/// 1. Its own output is **never compacted** ([`NEVER_COMPACT_TOOLS`]) — it
+///    exists to return a previously-compacted original *in full*.
+/// 2. It is **always advertised** to every agent regardless of `ToolScope`,
+///    because compaction applies to every agent's tool output — so any agent
+///    that sees a `retrieve_tool_output("…")` footer must actually be able to
+///    call it (enforced in the tool-visibility filters).
+pub const RECOVERY_TOOL_NAME: &str = "retrieve_tool_output";
+
+/// Tools whose output must never be re-compacted. See [`RECOVERY_TOOL_NAME`].
+pub const NEVER_COMPACT_TOOLS: &[&str] = &[RECOVERY_TOOL_NAME];
 
 /// Result of a single compressor: the compacted body plus whether any data was
 /// actually dropped. Both kinds offload the original to CCR and carry a recovery

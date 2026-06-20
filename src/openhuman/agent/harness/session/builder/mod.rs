@@ -59,8 +59,14 @@ pub(super) fn visible_tool_specs_for_policy(
     tool_specs
         .iter()
         .filter(|spec| {
-            (visible_names.is_empty() || visible_names.contains(&spec.name))
-                && tool_policy.is_allowed(&spec.name)
+            // The CCR recovery tool is always advertised (compaction applies to
+            // every agent, so the retrieve footer must be actionable), bypassing
+            // the visibility allowlist but still honoring tool policy.
+            let visible = spec.name
+                == crate::openhuman::agent::harness::compaction::RECOVERY_TOOL_NAME
+                || visible_names.is_empty()
+                || visible_names.contains(&spec.name);
+            visible && tool_policy.is_allowed(&spec.name)
         })
         .cloned()
         .collect()
