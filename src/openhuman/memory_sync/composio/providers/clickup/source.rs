@@ -86,6 +86,11 @@ impl ClickUpSource {
         ctx: &ProviderContext,
         state: &mut SyncState,
     ) -> Result<String, String> {
+        tracing::debug!(
+            connection_id = ?ctx.connection_id,
+            "[composio:clickup] resolve_user_id via {ACTION_GET_AUTHORIZED_USER}"
+        );
+
         let resp = ctx
             .execute(ACTION_GET_AUTHORIZED_USER, Some(json!({})))
             .await
@@ -104,9 +109,15 @@ impl ClickUpSource {
             ));
         }
 
-        sync::extract_user_id(&resp.data).ok_or_else(|| {
+        let user_id = sync::extract_user_id(&resp.data).ok_or_else(|| {
             "[composio:clickup] CLICKUP_GET_AUTHORIZED_USER returned no user.id".to_string()
-        })
+        })?;
+
+        tracing::debug!(
+            connection_id = ?ctx.connection_id,
+            "[composio:clickup] resolve_user_id complete"
+        );
+        Ok(user_id)
     }
 
     /// Look up (and budget-record) the workspace (team) ids visible to this
@@ -116,6 +127,11 @@ impl ClickUpSource {
         ctx: &ProviderContext,
         state: &mut SyncState,
     ) -> Result<Vec<String>, String> {
+        tracing::debug!(
+            connection_id = ?ctx.connection_id,
+            "[composio:clickup] resolve_workspaces via {ACTION_GET_AUTHORIZED_TEAMS_WORKSPACES}"
+        );
+
         let resp = ctx
             .execute(ACTION_GET_AUTHORIZED_TEAMS_WORKSPACES, Some(json!({})))
             .await
@@ -134,7 +150,13 @@ impl ClickUpSource {
             ));
         }
 
-        Ok(sync::extract_workspace_ids(&resp.data))
+        let workspaces = sync::extract_workspace_ids(&resp.data);
+        tracing::debug!(
+            connection_id = ?ctx.connection_id,
+            count = workspaces.len(),
+            "[composio:clickup] resolve_workspaces complete"
+        );
+        Ok(workspaces)
     }
 }
 
@@ -225,6 +247,14 @@ impl IncrementalSource for ClickUpSource {
             "subtasks": true,
         });
 
+        tracing::debug!(
+            connection_id = ?ctx.connection_id,
+            workspace_id = %workspace_id,
+            page_num,
+            page_size,
+            "[composio:clickup] fetch_page via {ACTION_GET_FILTERED_TEAM_TASKS}"
+        );
+
         let resp = ctx
             .execute(ACTION_GET_FILTERED_TEAM_TASKS, Some(args))
             .await
@@ -255,6 +285,15 @@ impl IncrementalSource for ClickUpSource {
         } else {
             Some((page_num + 1).to_string())
         };
+
+        tracing::debug!(
+            connection_id = ?ctx.connection_id,
+            workspace_id = %workspace_id,
+            page_num,
+            fetched = tasks.len(),
+            has_next = next.is_some(),
+            "[composio:clickup] fetch_page complete"
+        );
 
         Ok(PageFetch { items: tasks, next })
     }
