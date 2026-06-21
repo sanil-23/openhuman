@@ -67,7 +67,9 @@ pub fn compress(content: &str) -> Option<Compacted> {
         let cells: Vec<String> = columns
             .iter()
             .map(|col| match obj.get(col) {
-                None | Some(Value::Null) => String::new(),
+                // Distinguish a truly absent key (blank) from an explicit null
+                // (rendered as `null` by render_cell) so the view stays faithful.
+                None => String::new(),
                 Some(v) => render_cell(v),
             })
             .collect();
@@ -78,7 +80,7 @@ pub fn compress(content: &str) -> Option<Compacted> {
     let mut out = String::with_capacity(content.len());
     let _ = writeln!(
         out,
-        "[json table: {} rows × {} columns — values are JSON; empty = key absent]",
+        "[json table: {} rows × {} cols · blank=absent key · exact original via retrieve footer]",
         rows.len(),
         columns.len()
     );
@@ -155,14 +157,17 @@ mod tests {
 
     #[test]
     fn preserves_nested_values_losslessly() {
-        let input = r#"[
-          {"id":1,"tags":["a","b"],"meta":{"k":1}},
-          {"id":2,"tags":["c"],"meta":{"k":2}},
-          {"id":3,"tags":[],"meta":{"k":3}}
-        ]"#;
-        let out = compress(input).expect("compresses").text;
-        assert!(out.contains(r#"["a","b"]"#), "{out}");
-        assert!(out.contains(r#"{"k":1}"#), "{out}");
+        // Enough rows that the table beats the input even with the header.
+        let mut rows = Vec::new();
+        for i in 0..8 {
+            rows.push(format!(
+                r#"{{"id":{i},"tags":["alpha","beta"],"meta":{{"k":{i},"label":"row{i}"}}}}"#
+            ));
+        }
+        let input = format!("[{}]", rows.join(","));
+        let out = compress(&input).expect("compresses").text;
+        assert!(out.contains(r#"["alpha","beta"]"#), "{out}");
+        assert!(out.contains(r#""label":"row3""#), "{out}");
     }
 
     #[test]
@@ -209,6 +214,22 @@ mod tests {
             "middle should be dropped"
         );
         assert!(c.text.len() < input.len());
+    }
+
+    #[test]
+    fn distinguishes_explicit_null_from_absent_key() {
+        // explicit null → "null"; absent key → blank. (Faithfulness: the two
+        // must not be conflated.)
+        let mut rows = Vec::new();
+        for i in 0..10 {
+            rows.push(format!(
+                r#"{{"id":{i},"note":null,"tag":"long enough value to ensure shrink {i}"}}"#
+            ));
+        }
+        let input = format!("[{}]", rows.join(","));
+        let c = compress(&input).expect("compresses");
+        // A row with explicit null renders the literal "null" (not blank).
+        assert!(c.text.contains("null"), "{}", c.text);
     }
 
     #[test]

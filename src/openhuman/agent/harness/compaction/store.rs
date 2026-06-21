@@ -21,9 +21,12 @@ use std::sync::{Mutex, OnceLock};
 /// Max originals retained. ~256 large tool outputs is plenty for a session's
 /// recent history while bounding worst-case memory.
 const MAX_ENTRIES: usize = 256;
-/// Bytes of the SHA-256 digest used for the key (→ 12 hex chars). Collision
-/// risk at this length over a few hundred live entries is negligible.
-const HASH_BYTES: usize = 6;
+/// Bytes of the SHA-256 digest used for the key (→ 32 hex chars). Wide enough
+/// that (a) collisions are infeasible and (b) the hash doubles as an
+/// unguessable capability token — a session can only retrieve content whose
+/// hash it was shown, so the process-global store can't be brute-force probed
+/// across sessions. (Full per-session key namespacing is a tracked follow-up.)
+const HASH_BYTES: usize = 16;
 
 struct Inner {
     map: HashMap<String, String>,

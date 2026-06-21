@@ -40,7 +40,7 @@ mod demo;
 #[cfg(test)]
 mod measure;
 
-use detect::{hint_for_tool, resolve, ContentType};
+use detect::{hint_for_tool, resolve, ContentHint, ContentType};
 use std::fmt::Write as _;
 
 /// Outputs below this many bytes are never compressed — they're already cheap
@@ -104,7 +104,13 @@ pub fn compact_tool_output(content: String, tool_name: &str, enabled: bool) -> S
     }
 
     let hint = hint_for_tool(tool_name);
-    let content_type = resolve(hint, &content);
+    // A Search hint is absolute: grep output is never compacted, even if its
+    // body happens to look diff-like — don't let `resolve` remap it to Diff.
+    let content_type = if matches!(hint, ContentHint::Search) {
+        ContentType::Search
+    } else {
+        resolve(hint, &content)
+    };
 
     let compressed = match content_type {
         // Search/grep output is deliberately NOT compacted. grep is a
@@ -147,6 +153,12 @@ pub fn compact_tool_output(content: String, tool_name: &str, enabled: bool) -> S
                      available by calling retrieve_tool_output(\"{hash}\")]",
                     content.len()
                 );
+            }
+            // The shrink check above ran on the compressed body; the recovery
+            // footer adds bytes, so re-check the final size and fall back to the
+            // original if the footer tipped it over (marginal inputs only).
+            if out.len() >= content.len() {
+                return content;
             }
             let ratio = 1.0 - (out.len() as f64 / content.len() as f64);
             // `::log` is the logging crate (the sibling `logs` module shadows
