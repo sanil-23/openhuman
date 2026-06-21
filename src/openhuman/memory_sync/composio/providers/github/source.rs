@@ -22,6 +22,7 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::Mutex;
 
 use super::provider::{build_search_query_with_depth, ACTION_SEARCH_ISSUES};
 use super::sync;
@@ -43,14 +44,17 @@ const INITIAL_PAGE_SIZE: u32 = 100;
 const MAX_PAGES: u32 = 20;
 
 /// GitHub's [`IncrementalSource`].
-pub(crate) struct GitHubSource;
+#[derive(Default)]
+pub(crate) struct GitHubSource {
+    depth_fragment: Mutex<Option<String>>,
+}
 
 /// Entry point used by [`super::provider::GitHubProvider::sync`].
 pub(crate) async fn run_github_sync(
     ctx: &ProviderContext,
     reason: SyncReason,
 ) -> Result<SyncOutcome, String> {
-    orchestrator::run_sync(&GitHubSource, ctx, reason).await
+    orchestrator::run_sync(&GitHubSource::default(), ctx, reason).await
 }
 
 impl GitHubSource {
@@ -62,6 +66,12 @@ impl GitHubSource {
         ctx: &ProviderContext,
         state: &mut SyncState,
     ) -> Result<String, String> {
+        tracing::debug!(
+            connection_id = ?ctx.connection_id,
+            "[composio:github] resolve_login via {}",
+            super::provider::ACTION_GET_AUTHENTICATED_USER
+        );
+
         let resp = ctx
             .execute(
                 super::provider::ACTION_GET_AUTHENTICATED_USER,
@@ -87,9 +97,30 @@ impl GitHubSource {
             ));
         }
 
-        sync::extract_user_login(&resp.data).ok_or_else(|| {
+        let login = sync::extract_user_login(&resp.data).ok_or_else(|| {
             "[composio:github] GITHUB_GET_THE_AUTHENTICATED_USER returned no login".to_string()
-        })
+        })?;
+
+        tracing::debug!(
+            connection_id = ?ctx.connection_id,
+            "[composio:github] resolve_login complete"
+        );
+        Ok(login)
+    }
+
+    fn set_depth_fragment(&self, fragment: Option<String>) {
+        let mut guard = self
+            .depth_fragment
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard = fragment;
+    }
+
+    fn depth_fragment(&self) -> Option<String> {
+        self.depth_fragment
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -125,6 +156,16 @@ impl IncrementalSource for GitHubSource {
         ctx: &ProviderContext,
         state: &mut SyncState,
     ) -> Result<Vec<SyncScope>, String> {
+        let depth_fragment = if state.cursor.is_none() {
+            ctx.sync_depth_days.map(|days| {
+                let floor = chrono::Utc::now() - chrono::Duration::days(days as i64);
+                format!("updated:>{}", floor.format("%Y-%m-%dT%H:%M:%SZ"))
+            })
+        } else {
+            None
+        };
+        self.set_depth_fragment(depth_fragment);
+
         let login = self.resolve_login(ctx, state).await?;
         let label = format!("involves:{login}");
         Ok(vec![SyncScope::nested(login, label)])
@@ -144,17 +185,9 @@ impl IncrementalSource for GitHubSource {
         let page_num: u32 = cursor.and_then(|c| c.parse().ok()).unwrap_or(1);
         let page_size = self.page_size(reason);
 
-        // Inject the `sync_depth_days` window server-side, but only on the first
-        // sync (no cursor) — on incremental syncs `updated:>{cursor}` already
-        // bounds the window.
-        let depth_fragment: Option<String> = if state.cursor.is_none() {
-            ctx.sync_depth_days.map(|days| {
-                let floor = chrono::Utc::now() - chrono::Duration::days(days as i64);
-                format!("updated:>{}", floor.format("%Y-%m-%dT%H:%M:%SZ"))
-            })
-        } else {
-            None
-        };
+        // Stable for the whole sync pass: GitHub's `page` is relative to the
+        // exact query, so the depth floor must not move while paginating.
+        let depth_fragment = self.depth_fragment();
         let query = build_search_query_with_depth(
             login,
             state.cursor.as_deref(),
@@ -168,6 +201,14 @@ impl IncrementalSource for GitHubSource {
             "per_page": page_size,
             "page": page_num,
         });
+
+        tracing::debug!(
+            connection_id = ?ctx.connection_id,
+            page_num,
+            page_size,
+            has_depth_fragment = depth_fragment.is_some(),
+            "[composio:github] fetch_page via {ACTION_SEARCH_ISSUES}"
+        );
 
         let resp = ctx
             .execute(ACTION_SEARCH_ISSUES, Some(args))
@@ -194,6 +235,14 @@ impl IncrementalSource for GitHubSource {
         } else {
             Some((page_num + 1).to_string())
         };
+
+        tracing::debug!(
+            connection_id = ?ctx.connection_id,
+            page_num,
+            fetched = issues.len(),
+            has_next = next.is_some(),
+            "[composio:github] fetch_page complete"
+        );
 
         Ok(PageFetch {
             items: issues,
@@ -267,7 +316,7 @@ mod tests {
     fn item_dedup_key_composes_id_and_updated() {
         let with_update = json!({ "id": 42, "number": 7, "updated_at": "2026-05-01T00:00:00Z" });
         // GitHub ids may be numeric; extract_issue_id renders them as strings.
-        let key = GitHubSource.item_dedup_key(&with_update);
+        let key = GitHubSource::default().item_dedup_key(&with_update);
         assert!(
             key.as_deref().map(|k| k.contains('@')).unwrap_or(false),
             "expected composite id@updated key, got {key:?}"
