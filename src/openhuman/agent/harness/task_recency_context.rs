@@ -33,7 +33,13 @@ tokio::task_local! {
 /// direct CLI/JSON-RPC tool dispatch, or unit tests calling a [`Tool`]
 /// directly. Callers treat `None` as "no recency restriction".
 pub fn current_task_recency_window() -> Option<Duration> {
-    TASK_RECENCY_WINDOW.try_with(|w| *w).ok()
+    let window = TASK_RECENCY_WINDOW.try_with(|w| *w).ok();
+    tracing::trace!(
+        has_window = window.is_some(),
+        window_secs = window.map(|w| w.as_secs()),
+        "[harness][task-window] read current window"
+    );
+    window
 }
 
 /// Run `future` with `window` installed as the current task-recency window.
@@ -46,7 +52,13 @@ pub async fn with_task_recency_window<F, R>(window: Duration, future: F) -> R
 where
     F: std::future::Future<Output = R>,
 {
-    TASK_RECENCY_WINDOW.scope(window, future).await
+    tracing::trace!(
+        window_secs = window.as_secs(),
+        "[harness][task-window] scope enter"
+    );
+    let out = TASK_RECENCY_WINDOW.scope(window, future).await;
+    tracing::trace!("[harness][task-window] scope exit");
+    out
 }
 
 #[cfg(test)]

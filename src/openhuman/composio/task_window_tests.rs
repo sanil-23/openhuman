@@ -61,6 +61,39 @@ fn linear_filters_iso_timestamps_under_nodes() {
     assert_eq!(nodes[0]["id"], "new");
 }
 
+#[test]
+fn linear_filters_graphql_connection_under_data_issues_nodes() {
+    // Real Linear/Composio shape: { data: { issues: { nodes: [...] } } }.
+    // Regression for the no-array pass-through that left the backlog unfiltered.
+    let resp = ok_resp(json!({
+        "data": { "issues": { "nodes": [
+            { "id": "old", "updatedAt": "2026-06-19T09:00:00.000Z" },
+            { "id": "new", "updatedAt": "2026-06-20T12:00:00.000Z" },
+        ]}}
+    }));
+    let out = filter_response("LINEAR_LIST_LINEAR_ISSUES", resp, floor());
+    let nodes = out.data["data"]["issues"]["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0]["id"], "new");
+}
+
+#[test]
+fn filters_data_wrapped_row_timestamps() {
+    // Composio sometimes wraps each row under `data` — the timestamp must
+    // still be read (else stale rows survive as "no timestamp → keep").
+    let resp = ok_resp(json!({
+        "tasks": [
+            { "data": { "id": "old", "date_updated": "0" } },
+            { "data": { "id": "new",
+                "date_updated": (floor().timestamp_millis()+1).to_string() } },
+        ]
+    }));
+    let out = filter_response("CLICKUP_GET_FILTERED_TEAM_TASKS", resp, floor());
+    let tasks = out.data["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0]["data"]["id"], "new");
+}
+
 // ── post-filter: Notion (keep if EITHER timestamp is fresh) ──────────
 
 #[test]

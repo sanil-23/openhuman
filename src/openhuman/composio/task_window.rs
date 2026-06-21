@@ -64,46 +64,81 @@ struct TaskWindowSpec {
 fn spec_for(slug: &str) -> Option<TaskWindowSpec> {
     match slug {
         // Linear — repo-proven request (`orderBy:"updatedAt"`) and response
-        // timestamp (`updatedAt`, ISO-8601) in
-        // memory_sync::composio::providers::linear. The exact items envelope
-        // is GraphQL-shaped; we try the common nestings.
+        // shape. Linear returns GraphQL connections (`{issues:{nodes:[...]}}`)
+        // that Composio may re-wrap under `data` / `data.data`; the items and
+        // timestamp paths mirror `providers::linear::sync::{extract_issues,
+        // extract_issue_updated}` so we catch every nesting (else we'd hit the
+        // no-array pass-through and leave the backlog unfiltered).
         "LINEAR_LIST_LINEAR_ISSUES" | "LINEAR_SEARCH_ISSUES" => Some(TaskWindowSpec {
             items_paths: &[
-                &["issues"],
-                &["nodes"],
-                &["data", "issues"],
+                &["data", "issues", "nodes"],
+                &["data", "data", "nodes"],
                 &["data", "nodes"],
+                &["nodes"],
+                &["issues", "nodes"],
+                &["data", "results"],
+                &["results"],
+                &["data", "issues"],
+                &["issues"],
             ],
-            ts_fields: &[("updatedAt", TsFormat::Iso8601)],
+            ts_fields: &[
+                ("updatedAt", TsFormat::Iso8601),
+                ("data.updatedAt", TsFormat::Iso8601),
+                ("updated_at", TsFormat::Iso8601),
+                ("data.updated_at", TsFormat::Iso8601),
+            ],
             order_arg: Some(("orderBy", "updatedAt")),
         }),
         // ClickUp — repo-proven request (`order_by:"updated"`) and response
-        // timestamp (`date_updated`, epoch-ms string) + envelope
-        // (`data.tasks` / `tasks`) in providers::clickup.
+        // shape, mirroring `providers::clickup::sync::{extract_tasks,
+        // extract_task_updated}` (envelope `data.tasks` / `tasks` /
+        // `data.data.tasks`; timestamp `date_updated` epoch-ms, possibly
+        // wrapped or camelCased by Composio).
         "CLICKUP_GET_FILTERED_TEAM_TASKS" | "CLICKUP_GET_TASKS" => Some(TaskWindowSpec {
-            items_paths: &[&["tasks"], &["data", "tasks"]],
-            ts_fields: &[("date_updated", TsFormat::EpochMillis)],
+            items_paths: &[
+                &["data", "tasks"],
+                &["tasks"],
+                &["data", "data", "tasks"],
+                &["data", "results"],
+                &["results"],
+            ],
+            ts_fields: &[
+                ("date_updated", TsFormat::EpochMillis),
+                ("data.date_updated", TsFormat::EpochMillis),
+                ("dateUpdated", TsFormat::EpochMillis),
+                ("data.dateUpdated", TsFormat::EpochMillis),
+            ],
             order_arg: Some(("order_by", "updated")),
         }),
         // Notion — docs-verified: every page carries `last_edited_time` and
-        // `created_time`; query results live under `results`.
+        // `created_time`; query results live under `results` (Composio may
+        // re-wrap under `data` / `data.data`).
         "NOTION_QUERY_DATABASE_WITH_FILTER" => Some(TaskWindowSpec {
-            items_paths: &[&["results"], &["data", "results"]],
+            items_paths: &[
+                &["results"],
+                &["data", "results"],
+                &["data", "data", "results"],
+            ],
             ts_fields: &[
                 ("last_edited_time", TsFormat::Iso8601),
                 ("created_time", TsFormat::Iso8601),
+                ("data.last_edited_time", TsFormat::Iso8601),
+                ("data.created_time", TsFormat::Iso8601),
             ],
             order_arg: None,
         }),
         // Asana — docs-verified server-side `modified_since` (injected in
-        // apply_window_args). Response item timestamps assumed `modified_at` /
-        // `created_at`; envelope `{ "data": [...] }`.
+        // apply_window_args). Items live under `data` (Composio may re-wrap as
+        // `data.data`); each row carries `modified_at` / `created_at`, possibly
+        // `data`-wrapped.
         // CONFIRM-AT-RUNTIME: item timestamp field names via composio_list_tools.
         "ASANA_GET_MULTIPLE_TASKS" => Some(TaskWindowSpec {
-            items_paths: &[&["data"], &["data", "data"]],
+            items_paths: &[&["data", "data"], &["data"]],
             ts_fields: &[
                 ("modified_at", TsFormat::Iso8601),
                 ("created_at", TsFormat::Iso8601),
+                ("data.modified_at", TsFormat::Iso8601),
+                ("data.created_at", TsFormat::Iso8601),
             ],
             order_arg: None,
         }),
@@ -215,10 +250,14 @@ pub(crate) fn filter_response(
 
 /// Keep a row if any of its timestamp fields parses to `>= floor`. A row with
 /// no parseable timestamp field is kept (never dropped on ambiguity).
+///
+/// Field names may be dotted (`data.updatedAt`) to reach Composio-wrapped rows
+/// — mirrors `providers::pick_str`, which the native sync extractors use for
+/// exactly these `data.`-nested envelopes.
 fn keep_item(item: &Value, ts_fields: &[(&str, TsFormat)], floor: DateTime<Utc>) -> bool {
     let mut saw_timestamp = false;
     for (field, fmt) in ts_fields {
-        if let Some(raw) = item.get(*field) {
+        if let Some(raw) = field_at(item, field) {
             if let Some(ts) = parse_ts(raw, *fmt) {
                 saw_timestamp = true;
                 if ts >= floor {
@@ -229,6 +268,16 @@ fn keep_item(item: &Value, ts_fields: &[(&str, TsFormat)], floor: DateTime<Utc>)
     }
     // No usable timestamp at all → conservatively keep.
     !saw_timestamp
+}
+
+/// Resolve a possibly-dotted field path (`updatedAt`, `data.updatedAt`) within
+/// a single item object. Each segment is an object key.
+fn field_at<'a>(item: &'a Value, dotted: &str) -> Option<&'a Value> {
+    let mut cur = item;
+    for seg in dotted.split('.') {
+        cur = cur.get(seg)?;
+    }
+    Some(cur)
 }
 
 /// Parse a JSON timestamp value in the given format. Returns `None` on any
