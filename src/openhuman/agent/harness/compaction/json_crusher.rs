@@ -106,8 +106,17 @@ pub fn compress(content: &str) -> Option<Compacted> {
 
     let out = out.trim_end().to_string();
     if out.len() >= content.len() {
-        None
-    } else if lossy {
+        return None;
+    }
+    log::debug!(
+        "[compaction][json] {} rows × {} cols, lossy={} ({} -> {} bytes)",
+        rows.len(),
+        columns.len(),
+        lossy,
+        content.len(),
+        out.len(),
+    );
+    if lossy {
         Some(Compacted::lossy(out))
     } else {
         // All values preserved, but the array→table reformat changes layout

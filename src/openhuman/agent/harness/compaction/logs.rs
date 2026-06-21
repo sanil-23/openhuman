@@ -143,12 +143,16 @@ pub fn compress(content: &str) -> Option<Compacted> {
         }
     }
 
-    let _ = total_dropped;
     if out.len() >= content.len() {
-        None
-    } else {
-        Some(Compacted::lossy(out.trim_end().to_string()))
+        return None;
     }
+    log::debug!(
+        "[compaction][logs] kept {} of {} line(s), dropped {}",
+        kept_set.len(),
+        lines.len(),
+        total_dropped,
+    );
+    Some(Compacted::lossy(out.trim_end().to_string()))
 }
 
 /// Choose at most `cap` indices, biased to the first and last by value.

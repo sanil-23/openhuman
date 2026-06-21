@@ -101,10 +101,15 @@ pub fn compress(content: &str) -> Option<Compacted> {
         return None;
     }
     if out.len() >= content.len() {
-        None
-    } else {
-        Some(Compacted::lossy(out.trim_end().to_string()))
+        return None;
     }
+    log::debug!(
+        "[compaction][diff] {} -> {} bytes ({} input lines)",
+        content.len(),
+        out.len(),
+        lines.len(),
+    );
+    Some(Compacted::lossy(out.trim_end().to_string()))
 }
 
 /// Structural diff lines that must always survive.
