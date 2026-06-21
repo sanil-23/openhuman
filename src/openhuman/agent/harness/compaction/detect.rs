@@ -37,9 +37,15 @@ pub enum ContentHint {
 pub fn hint_for_tool(tool_name: &str) -> ContentHint {
     match tool_name {
         "grep" | "glob_search" => ContentHint::Search,
-        "run_tests" | "run_linter" | "shell" | "npm_exec" | "node_exec" | "install_tool"
-        | "lsp" => ContentHint::Log,
+        // Tools whose output is *reliably* a build/test/lint log.
+        "run_tests" | "run_linter" | "npm_exec" | "node_exec" | "install_tool" | "lsp" => {
+            ContentHint::Log
+        }
         "read_diff" | "git_operations" => ContentHint::Diff,
+        // `shell` is generic — its output is often NOT a log (find, seq, cat,
+        // generated CSV, a script printing a list). Route it through detection
+        // so only output that actually looks like a log gets log-compressed;
+        // anything else passes through. See the log compressor's no-signal guard.
         _ => ContentHint::Auto,
     }
 }
@@ -231,6 +237,8 @@ mod tests {
         assert_eq!(hint_for_tool("run_tests"), ContentHint::Log);
         assert_eq!(hint_for_tool("read_diff"), ContentHint::Diff);
         assert_eq!(hint_for_tool("file_read"), ContentHint::Auto);
+        // `shell` is generic → Auto (detection decides), not forced to Log.
+        assert_eq!(hint_for_tool("shell"), ContentHint::Auto);
     }
 
     #[test]

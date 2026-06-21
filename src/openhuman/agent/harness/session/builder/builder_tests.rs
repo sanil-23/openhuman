@@ -1,7 +1,7 @@
 //! Tests for the builder module — dedup_visible_tool_specs and related logic.
 
 use super::{
-    dedup_visible_tool_specs, should_synthesize_delegation_tools, visible_tool_specs_for_policy,
+    dedup_visible_tool_specs, ensure_recovery_tool_visible, should_synthesize_delegation_tools,
 };
 use crate::openhuman::tools::ToolSpec;
 use serde_json::json;
@@ -14,64 +14,34 @@ fn spec(name: &str) -> ToolSpec {
     }
 }
 
-/// A permissive policy session that allows every name in `allowed`.
-fn policy_allowing(allowed: &[&str]) -> crate::openhuman::agent_tool_policy::ToolPolicySession {
-    use crate::openhuman::agent_tool_policy::{TaskProfile, TaskRiskLevel, ToolPolicySession};
-    use crate::openhuman::tools::traits::PermissionLevel;
-    ToolPolicySession {
-        profile: TaskProfile {
-            agent_id: "test".into(),
-            channel: "test".into(),
-            entrypoint: "test".into(),
-            risk_level: TaskRiskLevel::Low,
-            allowed_permission: PermissionLevel::Dangerous,
-        },
-        capabilities: Vec::new(),
-        allowed_tool_names: allowed.iter().map(|s| s.to_string()).collect(),
-        blocked_tool_names: Default::default(),
-        hidden_tool_names: Default::default(),
-        decisions: Default::default(),
-    }
-}
-
 #[test]
-fn recovery_tool_is_advertised_even_under_named_visibility() {
+fn recovery_tool_joins_a_named_allowlist() {
     use crate::openhuman::agent::harness::compaction::RECOVERY_TOOL_NAME;
     use std::collections::HashSet;
 
-    let specs = vec![spec("file_read"), spec(RECOVERY_TOOL_NAME), spec("grep")];
-    // A Named-scope agent that only allow-lists `file_read` — the recovery tool
-    // is NOT in its visibility set...
-    let visible: HashSet<String> = ["file_read".to_string()].into_iter().collect();
-    let policy = policy_allowing(&["file_read", RECOVERY_TOOL_NAME]);
-
-    let out = visible_tool_specs_for_policy(&specs, &visible, &policy);
-    let names: Vec<&str> = out.iter().map(|s| s.name.as_str()).collect();
-
-    // ...yet retrieve_tool_output is still advertised, so the agent can act on
-    // a compaction footer; `grep` (not allow-listed) stays hidden.
-    assert!(names.contains(&"file_read"));
+    // A curated Named-scope allowlist gains retrieve_tool_output as a *real*
+    // member, so the policy session, advertised specs, and the run-time
+    // visible-name gate (all driven by this set) make a compaction footer
+    // actionable.
+    let mut visible: HashSet<String> = ["file_read".to_string(), "grep".to_string()]
+        .into_iter()
+        .collect();
+    ensure_recovery_tool_visible(&mut visible);
     assert!(
-        names.contains(&RECOVERY_TOOL_NAME),
-        "recovery tool must be advertised: {names:?}"
+        visible.contains(RECOVERY_TOOL_NAME),
+        "recovery tool must join: {visible:?}"
     );
-    assert!(!names.contains(&"grep"));
+    assert!(visible.contains("file_read"));
 }
 
 #[test]
-fn recovery_tool_still_respects_explicit_policy_block() {
-    use crate::openhuman::agent::harness::compaction::RECOVERY_TOOL_NAME;
+fn empty_allowlist_stays_empty() {
     use std::collections::HashSet;
-    // If policy genuinely disallows it, the visibility bypass must NOT override
-    // policy (defense-in-depth).
-    let specs = vec![spec(RECOVERY_TOOL_NAME)];
-    let visible: HashSet<String> = HashSet::new();
-    let policy = policy_allowing(&["something_else"]); // recovery NOT allowed
-    let out = visible_tool_specs_for_policy(&specs, &visible, &policy);
-    assert!(
-        out.is_empty(),
-        "policy block must win over the visibility bypass"
-    );
+    // Empty == "no filter" (all tools visible) AND the deliberately tool-less
+    // Named([]) case — both must stay empty so the invariant holds.
+    let mut visible: HashSet<String> = HashSet::new();
+    ensure_recovery_tool_visible(&mut visible);
+    assert!(visible.is_empty(), "empty allowlist must not gain a tool");
 }
 
 #[test]

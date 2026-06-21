@@ -59,17 +59,24 @@ pub(super) fn visible_tool_specs_for_policy(
     tool_specs
         .iter()
         .filter(|spec| {
-            // The CCR recovery tool is always advertised (compaction applies to
-            // every agent, so the retrieve footer must be actionable), bypassing
-            // the visibility allowlist but still honoring tool policy.
-            let visible = spec.name
-                == crate::openhuman::agent::harness::compaction::RECOVERY_TOOL_NAME
-                || visible_names.is_empty()
-                || visible_names.contains(&spec.name);
-            visible && tool_policy.is_allowed(&spec.name)
+            (visible_names.is_empty() || visible_names.contains(&spec.name))
+                && tool_policy.is_allowed(&spec.name)
         })
         .cloned()
         .collect()
+}
+
+/// Ensure the CCR recovery tool (`retrieve_tool_output`) is a member of a
+/// non-empty visibility allowlist. Compaction runs on every agent's tool
+/// output, so any agent with a curated `ToolScope::Named` list must still be
+/// able to act on a `retrieve_tool_output("…")` footer. An empty set already
+/// means "no filter" (all tools visible), so it is left untouched — including
+/// the deliberately tool-less `Named([])` case, which must stay tool-less.
+pub(super) fn ensure_recovery_tool_visible(visible: &mut std::collections::HashSet<String>) {
+    if !visible.is_empty() {
+        visible
+            .insert(crate::openhuman::agent::harness::compaction::RECOVERY_TOOL_NAME.to_string());
+    }
 }
 
 pub(super) fn should_synthesize_delegation_tools(def: &AgentDefinition) -> bool {

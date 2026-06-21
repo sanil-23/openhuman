@@ -99,13 +99,12 @@ pub fn compress(content: &str) -> Option<Compacted> {
     }
 
     if keep.is_empty() {
-        // No signal at all — keep the head and tail so the model sees context.
-        for i in 0..lines.len().min(MAX_TOTAL_LINES / 2) {
-            keep.insert(i);
-        }
-        for i in lines.len().saturating_sub(MAX_TOTAL_LINES / 2)..lines.len() {
-            keep.insert(i);
-        }
+        // No errors, warnings, stack traces, or summary lines — this almost
+        // certainly isn't a log (e.g. generic `shell` output: a file listing,
+        // CSV, or a script printing data). Do NOT head/tail-truncate it, which
+        // would silently drop the middle of legitimate data. Pass it through to
+        // the byte budget instead.
+        return None;
     }
 
     // Enforce the global line cap, keeping the earliest + latest kept lines so
@@ -255,6 +254,17 @@ mod tests {
         let out = compress(&s).expect("compresses").text;
         let warns = out.matches("unused variable").count();
         assert!(warns <= MAX_WARNINGS, "kept {warns} warnings");
+    }
+
+    #[test]
+    fn non_log_data_passes_through_not_head_tail_truncated() {
+        // Generic shell-style output with no errors/warnings/summary: a long
+        // listing. Must pass through (None) rather than dropping the middle.
+        let mut s = String::new();
+        for i in 0..400 {
+            let _ = writeln!(s, "/var/data/file_{i:04}.bin\t{i}\trwxr-xr-x");
+        }
+        assert!(compress(&s).is_none(), "non-log data must not be truncated");
     }
 
     #[test]
