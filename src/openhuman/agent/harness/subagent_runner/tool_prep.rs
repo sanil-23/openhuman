@@ -143,12 +143,14 @@ pub(crate) fn filter_tool_indices(
             if disallowed_tool_matches(disallowed, name) {
                 return false;
             }
-            // The CCR recovery tool is always advertised — compaction applies to
-            // every subagent's tool output, so the retrieve footer must be
-            // actionable regardless of scope/skill filters (an explicit
-            // `disallow` above still wins).
+            // The CCR recovery tool is advertised to any agent that has a tool
+            // surface — compaction applies to its tool output, so the retrieve
+            // footer must be actionable regardless of scope/skill filters (an
+            // explicit `disallow` above still wins). A deliberately tool-less
+            // agent (`Named([])`, e.g. the payload summarizer) runs no tools,
+            // produces no compacted output, and so stays tool-less.
             if name == crate::openhuman::agent::harness::compaction::RECOVERY_TOOL_NAME {
-                return true;
+                return !matches!(scope, ToolScope::Named(allowed) if allowed.is_empty());
             }
             if let Some(prefix) = skill_prefix.as_deref() {
                 if !name.starts_with(prefix) {
@@ -220,6 +222,16 @@ mod recovery_visibility_tests {
             got.contains(&RECOVERY_TOOL_NAME.to_string()),
             "recovery tool must survive Named scope: {got:?}"
         );
+    }
+
+    #[test]
+    fn tool_less_agent_stays_tool_less() {
+        // A deliberately tool-less agent (e.g. the payload summarizer,
+        // ToolScope::Named([])) runs no tools and produces no compacted output,
+        // so it must NOT be handed the recovery tool — it stays empty.
+        let t = tools();
+        let idx = filter_tool_indices(&t, &ToolScope::Named(vec![]), &[], None);
+        assert!(idx.is_empty(), "empty scope must yield zero tools: {idx:?}");
     }
 
     #[test]
