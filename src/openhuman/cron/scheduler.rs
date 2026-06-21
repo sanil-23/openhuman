@@ -591,12 +591,21 @@ async fn run_agent_job(config: &Config, job: &CronJob) -> (bool, String, Option<
                     // surface only recently created/changed tasks. Other cron
                     // agents and all chat turns leave the window unset.
                     if is_morning_briefing_job(job) {
+                        tracing::debug!(
+                            job_id = %job.id,
+                            recency_window_secs = MORNING_BRIEFING_TASK_RECENCY_SECS,
+                            "[cron] applying morning-briefing task recency window"
+                        );
                         crate::openhuman::agent::harness::with_task_recency_window(
                             std::time::Duration::from_secs(MORNING_BRIEFING_TASK_RECENCY_SECS),
                             turn,
                         )
                         .await
                     } else {
+                        tracing::trace!(
+                            job_id = %job.id,
+                            "[cron] task recency window not applied for this job"
+                        );
                         turn.await
                     }
                 }
