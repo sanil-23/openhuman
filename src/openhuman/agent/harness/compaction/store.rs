@@ -28,34 +28,43 @@ const MAX_ENTRIES: usize = 256;
 /// across sessions. (Full per-session key namespacing is a tracked follow-up.)
 const HASH_BYTES: usize = 16;
 
+#[derive(Default)]
 struct Inner {
     map: HashMap<String, String>,
     order: VecDeque<String>,
 }
 
+impl Inner {
+    /// Insert `content` under `hash` (idempotent) and FIFO-evict down to
+    /// [`MAX_ENTRIES`]. Pulled out of [`offload`] so the eviction policy can be
+    /// unit-tested on a local instance without touching the process-global
+    /// store (which would otherwise race other tests sharing it).
+    fn insert(&mut self, hash: String, content: String) {
+        if self.map.contains_key(&hash) {
+            return;
+        }
+        self.map.insert(hash.clone(), content);
+        self.order.push_back(hash);
+        while self.order.len() > MAX_ENTRIES {
+            if let Some(evicted) = self.order.pop_front() {
+                self.map.remove(&evicted);
+            }
+        }
+    }
+}
+
 fn global() -> &'static Mutex<Inner> {
     static STORE: OnceLock<Mutex<Inner>> = OnceLock::new();
-    STORE.get_or_init(|| {
-        Mutex::new(Inner {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-        })
-    })
+    STORE.get_or_init(|| Mutex::new(Inner::default()))
 }
 
 /// Stash `content` and return its short hash. Idempotent for identical content.
 pub fn offload(content: &str) -> String {
     let hash = short_hash(content);
-    let mut inner = global().lock().unwrap_or_else(|p| p.into_inner());
-    if !inner.map.contains_key(&hash) {
-        inner.map.insert(hash.clone(), content.to_string());
-        inner.order.push_back(hash.clone());
-        while inner.order.len() > MAX_ENTRIES {
-            if let Some(evicted) = inner.order.pop_front() {
-                inner.map.remove(&evicted);
-            }
-        }
-    }
+    global()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(hash.clone(), content.to_string());
     hash
 }
 
@@ -81,9 +90,14 @@ pub fn short_hash(content: &str) -> String {
 mod tests {
     use super::*;
 
+    // Round-trip tests use globally-unique content and collectively stay well
+    // under MAX_ENTRIES, so they never evict each other even under parallel
+    // execution. The eviction policy is exercised on a *local* `Inner` below so
+    // it can't clobber the shared store other tests depend on.
+
     #[test]
     fn round_trips() {
-        let original = "the quick brown fox ".repeat(50);
+        let original = "ccr round-trip unique payload ".repeat(50);
         let hash = offload(&original);
         assert_eq!(hash.len(), HASH_BYTES * 2);
         assert_eq!(retrieve(&hash).as_deref(), Some(original.as_str()));
@@ -91,23 +105,31 @@ mod tests {
 
     #[test]
     fn idempotent_hash() {
-        let a = offload("identical payload content here");
-        let b = offload("identical payload content here");
+        let a = offload("ccr idempotent unique payload content here");
+        let b = offload("ccr idempotent unique payload content here");
         assert_eq!(a, b);
     }
 
     #[test]
     fn missing_hash_is_none() {
-        assert!(retrieve("ffffffffffff").is_none() || retrieve("000000000000").is_none());
+        // A 32-hex hash that no test content maps to.
+        assert!(retrieve("ffffffffffffffffffffffffffffffff").is_none());
     }
 
     #[test]
     fn eviction_bounds_size() {
-        // Offload more than capacity; the earliest must eventually evict.
-        let first = offload(&format!("entry-{}", 0));
-        for i in 1..(MAX_ENTRIES + 50) {
-            offload(&format!("entry-{i}"));
+        // Exercise the FIFO eviction on a local instance — no shared state.
+        let mut inner = Inner::default();
+        for i in 0..(MAX_ENTRIES + 50) {
+            inner.insert(format!("hash-{i}"), format!("content-{i}"));
         }
-        assert!(retrieve(&first).is_none(), "oldest entry should evict");
+        assert!(inner.map.len() <= MAX_ENTRIES, "size bounded");
+        assert!(!inner.map.contains_key("hash-0"), "oldest entry evicted");
+        assert!(
+            inner
+                .map
+                .contains_key(&format!("hash-{}", MAX_ENTRIES + 49)),
+            "newest entry retained"
+        );
     }
 }

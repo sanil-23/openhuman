@@ -124,21 +124,33 @@ fn is_hex_hash(tok: &str) -> bool {
     matches!(tok.len(), 32 | 40 | 64) && tok.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// ISO-8601-ish timestamp: starts `YYYY-MM-DD` with a `T` time separator.
+/// ISO-8601-ish timestamp: `YYYY-MM-DDThh:mm:ss` (or a space separator). Every
+/// numeric position is validated so junk like `2026-aa-bbTcc:dd:ee` is rejected.
 fn is_iso8601(tok: &str) -> bool {
     let b = tok.as_bytes();
     if tok.len() < 19 {
         return false;
     }
-    b[0].is_ascii_digit()
-        && b[1].is_ascii_digit()
-        && b[2].is_ascii_digit()
-        && b[3].is_ascii_digit()
+    let digit = |i: usize| b[i].is_ascii_digit();
+    digit(0)
+        && digit(1)
+        && digit(2)
+        && digit(3)
         && b[4] == b'-'
+        && digit(5)
+        && digit(6)
         && b[7] == b'-'
+        && digit(8)
+        && digit(9)
         && (b[10] == b'T' || b[10] == b' ')
+        && digit(11)
+        && digit(12)
         && b[13] == b':'
+        && digit(14)
+        && digit(15)
         && b[16] == b':'
+        && digit(17)
+        && digit(18)
 }
 
 #[cfg(test)]
@@ -159,6 +171,16 @@ mod tests {
         let f = detect_volatile(prompt);
         assert!(f.iter().any(|x| x.kind == "hex_hash"), "{f:?}");
         assert!(f.iter().any(|x| x.kind == "jwt"), "{f:?}");
+    }
+
+    #[test]
+    fn iso8601_rejects_non_numeric_lookalikes() {
+        // Shape matches but the fields aren't digits — must not be flagged.
+        let f = detect_volatile("ref 2026-aa-bbTcc:dd:ee here");
+        assert!(!f.iter().any(|x| x.kind == "iso8601"), "{f:?}");
+        // A real timestamp still flags.
+        let g = detect_volatile("at 2026-06-21T12:34:56 today");
+        assert!(g.iter().any(|x| x.kind == "iso8601"), "{g:?}");
     }
 
     #[test]
