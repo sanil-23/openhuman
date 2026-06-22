@@ -114,6 +114,35 @@ fn notion_keeps_page_when_either_timestamp_fresh() {
     assert_eq!(results[0]["id"], "edited");
 }
 
+// ── post-filter: Todoist (created-only) ─────────────────────────────
+
+#[test]
+fn todoist_drops_tasks_created_before_floor() {
+    let resp = ok_resp(json!({
+        "tasks": [
+            { "id": "old", "created_at": "2026-06-19T09:00:00.000Z" },
+            { "id": "new", "created_at": "2026-06-20T12:00:00.000Z" },
+        ]
+    }));
+    let out = filter_response("TODOIST_GET_ALL_TASKS", resp, floor());
+    let tasks = out.data["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0]["id"], "new");
+}
+
+#[test]
+fn todoist_handles_bare_array_and_data_wrapped_rows() {
+    // Composio may return a bare array and/or wrap each row under `data`.
+    let resp = ok_resp(json!([
+        { "data": { "id": "old", "created_at": "2026-01-01T00:00:00.000Z" } },
+        { "data": { "id": "new", "created_at": "2026-06-20T12:00:00.000Z" } },
+    ]));
+    let out = filter_response("TODOIST_GET_ALL_TASKS", resp, floor());
+    let tasks = out.data.as_array().unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0]["data"]["id"], "new");
+}
+
 // ── conservative behaviors ──────────────────────────────────────────
 
 #[test]
@@ -200,4 +229,17 @@ fn asana_gets_modified_since_injected() {
 fn apply_window_args_noop_for_unknown_slug() {
     let out = apply_window_args("GMAIL_FETCH_EMAILS", Some(json!({ "a": 1 })), floor());
     assert_eq!(out.unwrap(), json!({ "a": 1 }));
+}
+
+#[test]
+fn todoist_filter_injected_when_absent() {
+    let out = apply_window_args("TODOIST_GET_ALL_TASKS", None, floor()).unwrap();
+    assert_eq!(out["filter"], "created after: -1 day");
+}
+
+#[test]
+fn todoist_caller_supplied_filter_wins() {
+    let args = json!({ "filter": "today" });
+    let out = apply_window_args("TODOIST_GET_ALL_TASKS", Some(args), floor()).unwrap();
+    assert_eq!(out["filter"], "today");
 }

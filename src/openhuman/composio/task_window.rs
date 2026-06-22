@@ -142,6 +142,31 @@ fn spec_for(slug: &str) -> Option<TaskWindowSpec> {
             ],
             order_arg: None,
         }),
+        // Todoist — docs-verified `TODOIST_GET_ALL_TASKS` (returns incomplete
+        // tasks; the brief's catalog slug, fixed from the non-existent
+        // `TODOIST_GET_ACTIVE_TASKS`). Recency is **created-only**: Todoist has
+        // no modified filter, so server-side narrowing uses the `filter` query
+        // `"created after: -1 day"` (injected in apply_window_args) and the
+        // post-filter keys on `created_at` (RFC3339). A task modified-but-not-
+        // created in the window will not surface from Todoist — accepted.
+        // CONFIRM-AT-RUNTIME: response envelope + item field names via
+        // composio_list_tools (Todoist is not a native sync provider, so there
+        // is no repo extractor to mirror).
+        "TODOIST_GET_ALL_TASKS" => Some(TaskWindowSpec {
+            items_paths: &[
+                &["tasks"],
+                &["data", "tasks"],
+                &["results"],
+                &["data", "results"],
+                &["data"],
+                &[],
+            ],
+            ts_fields: &[
+                ("created_at", TsFormat::Iso8601),
+                ("data.created_at", TsFormat::Iso8601),
+            ],
+            order_arg: None,
+        }),
         _ => None,
     }
 }
@@ -173,6 +198,14 @@ pub(crate) fn apply_window_args(
     if slug == "ASANA_GET_MULTIPLE_TASKS" {
         map.entry("modified_since".to_string())
             .or_insert_with(|| Value::String(since.to_rfc3339()));
+    }
+
+    // Todoist narrows via its filter-query language (created-only). The
+    // post-filter on `created_at` enforces the precise window; this just
+    // shrinks the payload. Relative `-1 day` matches the 24h brief window.
+    if slug == "TODOIST_GET_ALL_TASKS" {
+        map.entry("filter".to_string())
+            .or_insert_with(|| Value::String("created after: -1 day".to_string()));
     }
 
     tracing::debug!(
