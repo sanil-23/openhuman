@@ -174,6 +174,13 @@ function isTableSegment(segment: string): boolean {
  * Recognize the heading shapes structured agent output uses to label a
  * section: Markdown ATX headings (`#`..`######`) and a single fully-bold line
  * (`**Calendar**`), optionally with a trailing colon.
+ *
+ * The bold form deliberately requires the WHOLE line to be bold — inline
+ * emphasis with trailing prose (`**Heads up:** the meeting moved`) is NOT a
+ * heading, so ordinary emphasized content is not misclassified. The residual
+ * heuristic risk is a standalone fully-bold sentence used as content; in that
+ * case it is simply merged with the following segment (kept together, never
+ * orphaned), which is harmless for the structured briefing shapes this serves.
  */
 function isHeadingLine(line: string): boolean {
   const trimmed = line.trim();

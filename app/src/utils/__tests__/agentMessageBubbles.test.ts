@@ -159,6 +159,16 @@ describe('splitAgentMessageIntoBubbles', () => {
       '## 📅 Calendar\n\n- 9:00 Standup\n\n## ✅ Tasks',
     ]);
   });
+
+  it('does not treat inline bold emphasis with trailing prose as a heading', () => {
+    // Only a fully-bold line is a heading; emphasis followed by prose stays a
+    // plain paragraph so ordinary content is not misclassified.
+    const content = '**Heads up:** the meeting moved\n\nSee you at 3pm';
+    expect(splitAgentMessageIntoBubbles(content)).toEqual([
+      '**Heads up:** the meeting moved',
+      'See you at 3pm',
+    ]);
+  });
 });
 
 describe('parseMarkdownTable', () => {
