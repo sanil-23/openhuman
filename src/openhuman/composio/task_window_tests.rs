@@ -234,7 +234,7 @@ fn apply_window_args_noop_for_unknown_slug() {
 #[test]
 fn todoist_filter_injected_when_absent() {
     let out = apply_window_args("TODOIST_GET_ALL_TASKS", None, floor()).unwrap();
-    assert_eq!(out["filter"], "created after: -1 day");
+    assert_eq!(out["filter"], "created after: -1 days");
 }
 
 #[test]

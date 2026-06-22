@@ -204,8 +204,10 @@ pub(crate) fn apply_window_args(
     // post-filter on `created_at` enforces the precise window; this just
     // shrinks the payload. Relative `-1 day` matches the 24h brief window.
     if slug == "TODOIST_GET_ALL_TASKS" {
+        // Todoist filter syntax requires the plural unit ("days"); the
+        // singular form is rejected and would fail the whole call.
         map.entry("filter".to_string())
-            .or_insert_with(|| Value::String("created after: -1 day".to_string()));
+            .or_insert_with(|| Value::String("created after: -1 days".to_string()));
     }
 
     tracing::debug!(
