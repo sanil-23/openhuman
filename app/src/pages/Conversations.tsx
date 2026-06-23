@@ -63,7 +63,7 @@ import {
   updateThreadTitle,
 } from '../store/threadSlice';
 import type { ConfirmationModal as ConfirmationModalType } from '../types/intelligence';
-import type { ThreadMessage } from '../types/thread';
+import type { Thread, ThreadMessage } from '../types/thread';
 import type { TaskBoardCard, TaskBoardCardStatus } from '../types/turnState';
 import { splitAgentMessageIntoBubbles } from '../utils/agentMessageBubbles';
 import { CHAT_ATTACHMENTS_ENABLED } from '../utils/config';
@@ -460,6 +460,16 @@ const Conversations = ({
   useEffect(() => {
     let cancelled = false;
 
+    // Pick the sidebar bucket that actually contains a thread so a non-General
+    // session (task / worker / subconscious / meeting) lands visible/selected
+    // in the list instead of hidden behind the default General tab.
+    const bucketForThread = (thread: Thread): string =>
+      isThreadVisibleInTab(thread, TASKS_TAB_VALUE)
+        ? TASKS_TAB_VALUE
+        : isThreadVisibleInTab(thread, SUBCONSCIOUS_TAB_VALUE)
+          ? SUBCONSCIOUS_TAB_VALUE
+          : GENERAL_TAB_VALUE;
+
     void dispatch(loadThreads())
       .unwrap()
       .then(data => {
@@ -478,30 +488,37 @@ const Conversations = ({
           // Switch the sidebar tab to the bucket that contains the opened
           // thread (e.g. Tasks for a task session) so it's visible/selected in
           // the list instead of hidden behind the default General tab.
-          setSelectedLabel(
-            isThreadVisibleInTab(openThread, TASKS_TAB_VALUE)
-              ? TASKS_TAB_VALUE
-              : isThreadVisibleInTab(openThread, SUBCONSCIOUS_TAB_VALUE)
-                ? SUBCONSCIOUS_TAB_VALUE
-                : GENERAL_TAB_VALUE
-          );
+          setSelectedLabel(bucketForThread(openThread));
           dispatch(setSelectedThread(openThread.id));
           void dispatch(loadThreadMessages(openThread.id));
           return;
         }
+        // Restore the thread the user last had open — persisted across reloads
+        // via redux-persist on the `thread` slice, and kept in-memory across
+        // in-app navigation — whenever it still exists server-side. This must
+        // run BEFORE the General-only default below: a non-General active
+        // session (task / worker / subconscious / meeting) is filtered out of
+        // `visibleThreads`, so without this branch, navigating away from the
+        // Chat tab and back would drop the active thread and either resume an
+        // unrelated General thread or spawn a fresh chat — losing the
+        // conversation the user was in (#chat-tab-active-thread). Mirror the
+        // openThread path and move the sidebar to the bucket that holds it.
+        const persistedId = threadStateForSelect.selectedThreadId;
+        const persistedThread = persistedId
+          ? data.threads.find(t => t.id === persistedId)
+          : undefined;
+        if (persistedThread) {
+          setSelectedLabel(bucketForThread(persistedThread));
+          dispatch(setSelectedThread(persistedThread.id));
+          void dispatch(loadThreadMessages(persistedThread.id));
+          return;
+        }
+        // No active thread to resume (fresh session, or the previously-open
+        // thread was deleted/purged server-side). Fall back to the most recent
+        // General thread, or open a new chat when there are none.
         if (visibleThreads.length > 0) {
-          // Prefer the thread the user was last viewing (persisted across
-          // reloads via redux-persist on the `thread` slice). Only fall
-          // through to "most recent" if that thread no longer exists
-          // server-side (deleted, purged, or different user) — or is now
-          // hidden because it's a worker thread.
-          const persistedId = threadStateForSelect.selectedThreadId;
-          const resumeId =
-            persistedId && visibleThreads.some(t => t.id === persistedId)
-              ? persistedId
-              : visibleThreads[0].id;
-          dispatch(setSelectedThread(resumeId));
-          void dispatch(loadThreadMessages(resumeId));
+          dispatch(setSelectedThread(visibleThreads[0].id));
+          void dispatch(loadThreadMessages(visibleThreads[0].id));
         } else {
           void handleCreateNewThread();
         }

@@ -11,11 +11,12 @@ import { combineReducers, configureStore } from '@reduxjs/toolkit';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { threadApi } from '../../services/api/threadApi';
 import { chatSend } from '../../services/chatService';
 import { CoreRpcError } from '../../services/coreRpcClient';
+import { store as appStore } from '../../store';
 import agentProfileReducer from '../../store/agentProfileSlice';
 import chatRuntimeReducer, {
   setInferenceStatusForThread,
@@ -25,7 +26,7 @@ import chatRuntimeReducer, {
 import layoutReducer from '../../store/layoutSlice';
 import socketReducer from '../../store/socketSlice';
 import themeReducer from '../../store/themeSlice';
-import threadReducer, { setSelectedThread } from '../../store/threadSlice';
+import threadReducer, { clearSelectedThread, setSelectedThread } from '../../store/threadSlice';
 import type { Thread, ThreadMessage } from '../../types/thread';
 
 // ── Hoisted mock state ─────────────────────────────────────────────────────
@@ -1448,9 +1449,8 @@ describe('Conversations — worker thread back-to-parent navigation (#1624)', ()
       });
     });
 
-    // The mount effect resumes onto the first visible General thread. Re-select
-    // the worker thread now that mount has settled to mimic opening it from the
-    // Tasks bucket or parent reference card.
+    // The mount effect now restores the persisted worker session directly;
+    // re-select it explicitly so the assertion is independent of mount timing.
     await act(async () => {
       store!.dispatch(setSelectedThread('t-child'));
     });
@@ -1905,5 +1905,114 @@ describe('Conversations — open-session resume (View work)', () => {
 
     // onViewSession navigates the chat view to the card's session thread.
     await waitFor(() => expect(store.getState().thread.selectedThreadId).toBe('sess-99'));
+  });
+});
+
+// Returning to the Chat tab must restore the thread the user last had open
+// (persisted on the `thread` slice, kept in-memory across in-app navigation),
+// even when it's hidden behind the default General tab — a task / worker /
+// subconscious / meeting session. The previous General-only resume default
+// dropped such a session and, when it was the only thread, spawned a fresh
+// chat — losing the active conversation.
+describe('Conversations — active-thread restore across in-app navigation', () => {
+  // The mount effect reads the last-open thread from the singleton app store
+  // (`store.getState()` in Conversations.tsx) — in production that IS the
+  // Provider store, but the test harness renders against a separate `buildStore`
+  // instance, so the persisted selection must be seeded on the singleton to
+  // reproduce "the user had this thread open". Reset it between tests so the
+  // fresh-session cases below see no active selection.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetThreadMessages.mockResolvedValue({ messages: [], count: 0 });
+    appStore.dispatch(clearSelectedThread());
+  });
+  afterEach(() => {
+    appStore.dispatch(clearSelectedThread());
+  });
+
+  it('restores a non-General active session on remount instead of spawning a new chat', async () => {
+    const taskThread = makeThread({
+      id: 'task-active-1',
+      title: 'Active task session',
+      labels: ['tasks'],
+    });
+    // Only the (hidden) task session exists — pre-fix this falls through to
+    // handleCreateNewThread and replaces the active session with a new chat.
+    mockGetThreads.mockResolvedValue({ threads: [taskThread], count: 1 });
+    appStore.dispatch(setSelectedThread('task-active-1'));
+
+    let store: ReturnType<typeof buildStore> | undefined;
+    await act(async () => {
+      store = await renderConversations({
+        thread: {
+          ...emptyThreadState,
+          threads: [taskThread],
+          selectedThreadId: 'task-active-1',
+          messagesByThreadId: { 'task-active-1': [] },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(store!.getState().thread.selectedThreadId).toBe('task-active-1');
+    });
+    expect(threadApi.createNewThread).not.toHaveBeenCalled();
+    expect(mockGetThreadMessages).toHaveBeenCalledWith('task-active-1');
+  });
+
+  it('moves the sidebar to the bucket that holds the restored session', async () => {
+    const taskThread = makeThread({
+      id: 'task-active-2',
+      title: 'Restored task',
+      labels: ['tasks'],
+    });
+    mockGetThreads.mockResolvedValue({ threads: [taskThread], count: 1 });
+    appStore.dispatch(setSelectedThread('task-active-2'));
+
+    await act(async () => {
+      await renderConversations({
+        thread: {
+          ...emptyThreadState,
+          threads: [taskThread],
+          selectedThreadId: 'task-active-2',
+          messagesByThreadId: { 'task-active-2': [] },
+        },
+      });
+    });
+
+    // Sidebar is hidden by default — open it to inspect the active tab.
+    await openSidebar();
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Tasks' })).toHaveAttribute('aria-selected', 'true');
+    });
+  });
+
+  it('resumes the most recent General thread when there is no active selection', async () => {
+    // Fresh session (no persisted selection) keeps today's behaviour: resume the
+    // most recent General thread rather than spawning a new chat.
+    const threads = [makeThread({ id: 'g-1', title: 'Recent general' })];
+    mockGetThreads.mockResolvedValue({ threads, count: 1 });
+
+    let store: ReturnType<typeof buildStore> | undefined;
+    await act(async () => {
+      store = await renderConversations({ thread: emptyThreadState });
+    });
+
+    await waitFor(() => {
+      expect(store!.getState().thread.selectedThreadId).toBe('g-1');
+    });
+    expect(threadApi.createNewThread).not.toHaveBeenCalled();
+  });
+
+  it('opens a new chat for a genuinely fresh session with no threads', async () => {
+    mockGetThreads.mockResolvedValue({ threads: [], count: 0 });
+
+    await act(async () => {
+      await renderConversations({ thread: emptyThreadState });
+    });
+
+    await waitFor(() => {
+      expect(threadApi.createNewThread).toHaveBeenCalled();
+    });
   });
 });
