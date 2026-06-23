@@ -31,6 +31,15 @@ interface CachedCatalog {
 let inflight: Promise<ComposioToolkitsResponse> | null = null;
 /** In-memory mirror so we avoid a JSON.parse on the hot path. */
 let memory: CachedCatalog | null = null;
+/**
+ * Bumped on every invalidation. A fetch captures the generation at start and
+ * refuses to write its result if the generation has since changed — so a
+ * response that was already in flight when the Composio client identity
+ * switched (mode toggle / BYO key → `composio:config-changed`) can't poison
+ * the cache with the *previous* tenant's catalog and have it served as fresh
+ * for 24h.
+ */
+let generation = 0;
 
 function readPersisted(): CachedCatalog | null {
   if (memory) return memory;
@@ -81,15 +90,27 @@ export async function getToolkitCatalog(): Promise<ComposioToolkitsResponse> {
   if (cached && isFresh(cached)) return cached.response;
 
   if (inflight) return inflight;
-  inflight = listToolkits()
+  // Snapshot the generation so a mid-flight invalidation makes this fetch's
+  // result non-authoritative (see `generation`).
+  const startGeneration = generation;
+  const fetchPromise = listToolkits()
     .then(response => {
-      writePersisted(response);
+      // Only cache the response if no invalidation happened while it was in
+      // flight; otherwise it belongs to a stale tenant. Still return it to
+      // this caller — just don't poison the shared cache for future reads.
+      if (generation === startGeneration) {
+        writePersisted(response);
+      } else {
+        console.debug('[composio-cache] discarding catalog response invalidated mid-flight');
+      }
       return response;
     })
     .catch(err => {
       // On failure, fall back to a stale cache if we have one rather than
       // forcing the UI into an error state for a list that rarely changes.
-      if (cached) {
+      // Skip the fallback if we were invalidated mid-flight — the cached
+      // value belongs to the previous tenant.
+      if (cached && generation === startGeneration) {
         console.warn(
           '[composio-cache] catalog fetch failed; serving stale cache:',
           err instanceof Error ? err.message : String(err)
@@ -99,13 +120,19 @@ export async function getToolkitCatalog(): Promise<ComposioToolkitsResponse> {
       throw err;
     })
     .finally(() => {
-      inflight = null;
+      // Only clear the slot if it's still ours — an invalidation may have
+      // reset `inflight` to null and a newer fetch taken its place.
+      if (inflight === fetchPromise) {
+        inflight = null;
+      }
     });
-  return inflight;
+  inflight = fetchPromise;
+  return fetchPromise;
 }
 
 /** Drop both cache tiers so the next read re-fetches. */
 export function invalidateToolkitCatalogCache(): void {
+  generation += 1;
   memory = null;
   inflight = null;
   try {

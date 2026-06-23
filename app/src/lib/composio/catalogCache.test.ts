@@ -73,4 +73,28 @@ describe('catalogCache', () => {
     mockListToolkits.mockRejectedValue(new Error('backend down'));
     await expect(getToolkitCatalog()).rejects.toThrow('backend down');
   });
+
+  it('does not cache a response whose fetch was invalidated mid-flight', async () => {
+    // First fetch is in flight when the Composio client identity switches
+    // (mode toggle / BYO key → composio:config-changed → invalidate).
+    let resolveFirst: (v: unknown) => void = () => {};
+    mockListToolkits.mockReturnValueOnce(
+      new Promise(r => {
+        resolveFirst = r;
+      })
+    );
+
+    const inflightCall = getToolkitCatalog();
+    invalidateToolkitCatalogCache(); // mid-flight: previous tenant's response is now stale
+    resolveFirst({ toolkits: ['old_tenant'], catalog: [] });
+    await inflightCall; // the original caller still receives its response
+
+    // The stale response must NOT have been written as a fresh 24h cache, so
+    // the next read issues a fresh RPC and serves the new tenant's catalog.
+    mockListToolkits.mockResolvedValueOnce({ toolkits: ['new_tenant'], catalog: [] });
+    const next = await getToolkitCatalog();
+
+    expect(next.toolkits).toEqual(['new_tenant']);
+    expect(mockListToolkits).toHaveBeenCalledTimes(2);
+  });
 });
