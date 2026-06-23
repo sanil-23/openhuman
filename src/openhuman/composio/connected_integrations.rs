@@ -415,11 +415,31 @@ pub async fn fetch_connected_integrations_status(
 ///
 /// Returns `None` when we couldn't even build a client (no auth),
 /// signalling the caller should NOT cache this result.
+/// Choose the one-line description rendered for a toolkit in the agent
+/// prompt's `## Connected Integrations` block.
+///
+/// Prefers the backend's **dynamic catalog** description (openhuman PR #3933
+/// / backend #1012 — `GET /agent-integrations/composio/toolkits` now returns
+/// a `catalog[]` with per-toolkit metadata) so the orchestrator advertises
+/// what Composio actually offers. Falls back to the hardcoded
+/// `toolkit_description` table when the catalog omits the toolkit or ships an
+/// empty description — i.e. older backends that predate the dynamic catalog,
+/// or project toolkits whose Composio metadata join produced no blurb. Keyed
+/// by lowercased slug to match the canonicalised allowlist.
+fn resolve_toolkit_description(
+    catalog_descriptions: &std::collections::HashMap<String, String>,
+    slug: &str,
+) -> String {
+    catalog_descriptions
+        .get(slug)
+        .cloned()
+        .unwrap_or_else(|| super::providers::toolkit_description(slug).to_string())
+}
+
 async fn fetch_connected_integrations_uncached(
     config: &Config,
 ) -> Option<Vec<ConnectedIntegration>> {
     use super::client::{create_composio_client, direct_list_connections, ComposioClientKind};
-    use super::providers::toolkit_description;
 
     // Route via the mode-aware factory so the chat-agent's
     // "connected_integrations" view reflects the live tenant — backend
@@ -456,19 +476,51 @@ async fn fetch_connected_integrations_uncached(
     // integration from the orchestrator until the process restarts or
     // the cache is explicitly invalidated — a single 5xx during
     // startup would silently break delegation for the whole session.
-    let (allowlisted_toolkits, connections, tools_by_toolkit): (
+    let (allowlisted_toolkits, connections, tools_by_toolkit, catalog_descriptions): (
         Vec<String>,
         Vec<super::types::ComposioConnection>,
         Vec<super::types::ComposioToolSchema>,
+        std::collections::HashMap<String, String>,
     ) = match &kind {
         ComposioClientKind::Backend(client) => {
-            let allowlist: Vec<String> = match client.list_toolkits().await {
-                Ok(resp) => resp
-                    .toolkits
-                    .into_iter()
-                    .map(|toolkit| toolkit.trim().to_ascii_lowercase())
-                    .filter(|toolkit| !toolkit.is_empty())
-                    .collect(),
+            let (allowlist, catalog_descriptions): (
+                Vec<String>,
+                std::collections::HashMap<String, String>,
+            ) = match client.list_toolkits().await {
+                Ok(resp) => {
+                    // Index the dynamic catalog's descriptions by lowercased
+                    // slug so the prompt builder can prefer them over the
+                    // hardcoded table (see `resolve_toolkit_description`).
+                    // Empty descriptions are skipped so the fallback applies.
+                    let catalog_descriptions: std::collections::HashMap<String, String> = resp
+                        .catalog
+                        .iter()
+                        .filter_map(|entry| {
+                            let slug = entry.slug.trim().to_ascii_lowercase();
+                            if slug.is_empty() {
+                                return None;
+                            }
+                            let desc = entry
+                                .description
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|d| !d.is_empty())?;
+                            Some((slug, desc.to_string()))
+                        })
+                        .collect();
+                    tracing::debug!(
+                        catalog_entries = resp.catalog.len(),
+                        catalog_descriptions = catalog_descriptions.len(),
+                        "[composio] fetch_connected_integrations: indexed dynamic-catalog descriptions"
+                    );
+                    let allowlist = resp
+                        .toolkits
+                        .into_iter()
+                        .map(|toolkit| toolkit.trim().to_ascii_lowercase())
+                        .filter(|toolkit| !toolkit.is_empty())
+                        .collect();
+                    (allowlist, catalog_descriptions)
+                }
                 Err(e) => {
                     tracing::warn!(
                         "[composio] fetch_connected_integrations: list_toolkits (backend) failed: {e}"
@@ -524,7 +576,7 @@ async fn fetch_connected_integrations_uncached(
                 }
             };
 
-            (allowlist, connections, tools)
+            (allowlist, connections, tools, catalog_descriptions)
         }
         ComposioClientKind::Direct(direct) => {
             // Direct mode: walk the user's personal Composio tenant
@@ -605,7 +657,14 @@ async fn fetch_connected_integrations_uncached(
                     Vec::new()
                 }
             };
-            (allowlist, connections, tools)
+            // Direct mode has no central catalog endpoint, so prompt
+            // descriptions come from the hardcoded fallback table.
+            (
+                allowlist,
+                connections,
+                tools,
+                std::collections::HashMap::new(),
+            )
         }
     };
 
@@ -821,7 +880,7 @@ async fn fetch_connected_integrations_uncached(
 
         integrations.push(ConnectedIntegration {
             toolkit: slug.clone(),
-            description: toolkit_description(slug).to_string(),
+            description: resolve_toolkit_description(&catalog_descriptions, slug),
             tools,
             gated_tools,
             connected,
@@ -917,4 +976,47 @@ pub async fn fetch_toolkit_actions(
         "[composio] fetch_toolkit_actions: done"
     );
     Ok(actions)
+}
+
+#[cfg(test)]
+mod catalog_description_tests {
+    use super::resolve_toolkit_description;
+    use std::collections::HashMap;
+
+    #[test]
+    fn prefers_dynamic_catalog_description_when_present() {
+        let mut catalog = HashMap::new();
+        catalog.insert(
+            "gmail".to_string(),
+            "Live Gmail blurb from the Composio catalog".to_string(),
+        );
+        assert_eq!(
+            resolve_toolkit_description(&catalog, "gmail"),
+            "Live Gmail blurb from the Composio catalog"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_hardcoded_table_when_catalog_omits_toolkit() {
+        // Empty catalog (older backend / no metadata) → hardcoded fallback.
+        let catalog = HashMap::new();
+        let got = resolve_toolkit_description(&catalog, "gmail");
+        assert_eq!(
+            got,
+            crate::openhuman::composio::providers::toolkit_description("gmail")
+        );
+        assert!(!got.is_empty());
+    }
+
+    #[test]
+    fn falls_back_when_a_different_toolkit_is_catalogued() {
+        // Catalog has an entry, but not for the slug we're rendering — the
+        // fallback must still apply per-slug, not globally.
+        let mut catalog = HashMap::new();
+        catalog.insert("notion".to_string(), "Notion from catalog".to_string());
+        assert_eq!(
+            resolve_toolkit_description(&catalog, "gmail"),
+            crate::openhuman::composio::providers::toolkit_description("gmail")
+        );
+    }
 }
