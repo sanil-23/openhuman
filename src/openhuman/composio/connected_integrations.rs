@@ -415,6 +415,45 @@ pub async fn fetch_connected_integrations_status(
 ///
 /// Returns `None` when we couldn't even build a client (no auth),
 /// signalling the caller should NOT cache this result.
+/// The connectable toolkit slugs to surface in the agent prompt, aligned
+/// with the backend's execution gate.
+///
+/// Prefers the dynamic catalog's **enabled** entries (openhuman PR #3933 /
+/// backend #1012). The backend gate (`isToolkitConnectable` →
+/// `getProjectList().filter(p => p.enabled)`) and `catalog[].enabled` are
+/// driven by the same project auth-config status, so sourcing membership from
+/// `catalog.filter(enabled)` pins the prompt's advertised set to exactly what
+/// connect/authorize/execute will actually allow — it can't drift even if the
+/// backend later changes how the flat `toolkits` array is projected.
+///
+/// Falls back to the back-compat `toolkits` array when the catalog is absent
+/// (backends predating the dynamic catalog send only `toolkits`); without the
+/// fallback, membership against an old core would collapse to empty and the
+/// agent would lose every integration. Disabled catalog entries are dropped
+/// because the gate would reject them — advertising them would only invite
+/// failed delegations. Slugs are trimmed + lowercased to match downstream
+/// canonicalisation.
+fn connectable_toolkit_slugs(
+    toolkits: &[String],
+    catalog: &[super::types::ComposioToolkitCatalogEntry],
+) -> Vec<String> {
+    let normalize = |s: &str| s.trim().to_ascii_lowercase();
+    if catalog.is_empty() {
+        toolkits
+            .iter()
+            .map(|t| normalize(t))
+            .filter(|t| !t.is_empty())
+            .collect()
+    } else {
+        catalog
+            .iter()
+            .filter(|entry| entry.enabled.unwrap_or(false))
+            .map(|entry| normalize(&entry.slug))
+            .filter(|slug| !slug.is_empty())
+            .collect()
+    }
+}
+
 /// Choose the one-line description rendered for a toolkit in the agent
 /// prompt's `## Connected Integrations` block.
 ///
@@ -508,17 +547,18 @@ async fn fetch_connected_integrations_uncached(
                             Some((slug, desc.to_string()))
                         })
                         .collect();
+                    // Source the connectable set from the catalog's enabled
+                    // entries (the gate's own predicate), falling back to the
+                    // flat `toolkits` array for pre-catalog backends. See
+                    // `connectable_toolkit_slugs`.
+                    let allowlist = connectable_toolkit_slugs(&resp.toolkits, &resp.catalog);
                     tracing::debug!(
                         catalog_entries = resp.catalog.len(),
                         catalog_descriptions = catalog_descriptions.len(),
-                        "[composio] fetch_connected_integrations: indexed dynamic-catalog descriptions"
+                        connectable = allowlist.len(),
+                        catalog_sourced = !resp.catalog.is_empty(),
+                        "[composio] fetch_connected_integrations: resolved connectable set from catalog"
                     );
-                    let allowlist = resp
-                        .toolkits
-                        .into_iter()
-                        .map(|toolkit| toolkit.trim().to_ascii_lowercase())
-                        .filter(|toolkit| !toolkit.is_empty())
-                        .collect();
                     (allowlist, catalog_descriptions)
                 }
                 Err(e) => {
@@ -976,6 +1016,58 @@ pub async fn fetch_toolkit_actions(
         "[composio] fetch_toolkit_actions: done"
     );
     Ok(actions)
+}
+
+#[cfg(test)]
+mod connectable_slug_tests {
+    use super::connectable_toolkit_slugs;
+    use crate::openhuman::composio::types::ComposioToolkitCatalogEntry;
+
+    fn entry(slug: &str, enabled: bool) -> ComposioToolkitCatalogEntry {
+        ComposioToolkitCatalogEntry {
+            slug: slug.to_string(),
+            enabled: Some(enabled),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn prefers_catalog_enabled_entries_and_drops_disabled() {
+        // Disabled entries are excluded (the gate would reject them); the
+        // flat `toolkits` array is ignored when a catalog is present.
+        let catalog = vec![
+            entry("gmail", true),
+            entry("notion", false),
+            entry("GitHub", true), // uppercase slug normalised
+        ];
+        let toolkits = vec!["ignored_when_catalog_present".to_string()];
+        assert_eq!(
+            connectable_toolkit_slugs(&toolkits, &catalog),
+            vec!["gmail".to_string(), "github".to_string()]
+        );
+    }
+
+    #[test]
+    fn falls_back_to_toolkits_when_catalog_empty() {
+        // Older backends send only `toolkits`; membership must still resolve.
+        let toolkits = vec!["Gmail".to_string(), "   ".to_string()];
+        assert_eq!(
+            connectable_toolkit_slugs(&toolkits, &[]),
+            vec!["gmail".to_string()]
+        );
+    }
+
+    #[test]
+    fn enabled_none_is_treated_as_not_connectable() {
+        // Defensive: an entry without an explicit `enabled` is excluded,
+        // matching the gate's strict `enabled === true` check.
+        let catalog = vec![ComposioToolkitCatalogEntry {
+            slug: "mystery".to_string(),
+            enabled: None,
+            ..Default::default()
+        }];
+        assert!(connectable_toolkit_slugs(&[], &catalog).is_empty());
+    }
 }
 
 #[cfg(test)]
