@@ -182,11 +182,10 @@ pub fn build_chat_runtime(config: &Config) -> Result<(Arc<dyn ChatProvider>, Str
         return Ok(runtime);
     }
 
-    // The managed summarization tier (`memory_tree.cloud_llm_model ??
-    // summarization-v1`) is resolved inside `make_openhuman_backend` for the
-    // `summarization` role, so no per-caller `default_model` pre-routing is
-    // needed here — BYOK/local routes carry their own model in the provider
-    // string.
+    // The managed summarization tier is fixed at `summarization-v1`, resolved
+    // inside `make_openhuman_backend` for the `summarization` role — so no
+    // per-caller `default_model` pre-routing is needed here. BYOK/local routes
+    // carry their own model in the provider string.
     let resolved_provider = provider_for_role("summarization", config);
     let (provider, model) = create_chat_provider("summarization", config)?;
 
@@ -272,10 +271,10 @@ mod tests {
     fn build_chat_runtime_defaults_to_openhuman_resolved_model() {
         let cfg = Config::default();
         let (_provider, model) = build_chat_runtime(&cfg).unwrap();
-        // The "summarization" role resolves its managed tier from
-        // `memory_tree.cloud_llm_model` (default DEFAULT_CLOUD_LLM_MODEL =
-        // `summarization-v1`) inside `make_openhuman_backend` — no per-caller
-        // `default_model` pre-routing needed.
+        // The managed "summarization" tier is fixed at `summarization-v1`
+        // inside `make_openhuman_backend`. DEFAULT_CLOUD_LLM_MODEL is that same
+        // constant — asserted here only as the expected value, not because
+        // `cloud_llm_model` is consumed (it isn't; see the test below).
         assert_eq!(model, DEFAULT_CLOUD_LLM_MODEL);
     }
 

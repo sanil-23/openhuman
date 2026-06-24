@@ -425,9 +425,9 @@ fn managed_backend_pins_specialised_role_to_tier() {
     }
 }
 
-// The managed `summarization`/`memory` role resolves its tier from
-// `memory_tree.cloud_llm_model` (via `summarization_tier_model`), NOT from
-// `config.default_model`. This is what makes EVERY managed summarization
+// The managed `summarization`/`memory` role is fixed at `summarization-v1` (via
+// `summarization_tier_model`), independent of both `config.default_model` and
+// `memory_tree.cloud_llm_model`. This is what makes EVERY managed summarization
 // caller — memory tree, chat-turn payload summarizer, meeting summaries, and
 // `hint = "summarization"` sub-agents — reach the dedicated `summarization-v1`
 // tier without each caller pre-routing `default_model`.
