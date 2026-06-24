@@ -42,16 +42,19 @@ use crate::openhuman::tools::{Tool, ToolCategory, ToolResult};
 /// answer, without straying into creative territory.
 const EXTRACT_TEMPERATURE: f64 = 0.2;
 
-/// Char budget per extraction call, derived from the extraction model's
-/// context window. A payload at or under this budget is extracted in a single
-/// shot over its **entire** content — higher quality than the chunk+concat
-/// fallback, which has no reduce stage and can miss facts that span a chunk
-/// boundary or need global context. `summarization-v1` resolves to a
-/// long-context flash model (~1M tokens), so this is large; only payloads that
-/// exceed it fall back to parallel chunked extraction. Headroom is reserved for
+/// Convert a context window (tokens) into the per-chunk char budget. A payload
+/// at or under this budget is extracted in a single shot over its **entire**
+/// content — higher quality than the chunk+concat fallback, which has no reduce
+/// stage and can miss facts that span a chunk boundary. Headroom is reserved for
 /// the extraction contract, the query, and the response.
-fn extract_chunk_char_budget(model: &str) -> usize {
-    /// Fallback window (tokens) when the model id is unknown to the registry.
+///
+/// `window_tokens = None` means neither the provider nor the static registry
+/// could size the model — only reached for **cloud** models the registry doesn't
+/// know (an unknown *local* model resolves to its small provider-profile window
+/// via [`ExtractFromResultTool::extract_chunk_char_budget`], not here), so a
+/// large window is a safe assumption.
+fn chunk_char_budget_for_window(window_tokens: Option<u64>) -> usize {
+    /// Last-resort window (tokens) when the model is unsizable — see above.
     const FALLBACK_WINDOW_TOKENS: u64 = 128_000;
     /// Approximate chars per token used for budgeting.
     const CHARS_PER_TOKEN: u64 = 4;
@@ -59,9 +62,8 @@ fn extract_chunk_char_budget(model: &str) -> usize {
     /// the prompt scaffolding, query, and model response.
     const USABLE_PCT: u64 = 70;
 
-    let window_tokens = crate::openhuman::inference::context_window_for_model(model)
-        .unwrap_or(FALLBACK_WINDOW_TOKENS);
-    (window_tokens * USABLE_PCT / 100 * CHARS_PER_TOKEN) as usize
+    let window = window_tokens.unwrap_or(FALLBACK_WINDOW_TOKENS);
+    (window * USABLE_PCT / 100 * CHARS_PER_TOKEN) as usize
 }
 
 /// System prompt fed to the provider on every `extract_from_result`
@@ -121,6 +123,25 @@ impl ExtractFromResultTool {
             owner_agent_id,
             call_seq: StdMutex::new(0),
         }
+    }
+
+    /// Resolve the per-chunk char budget for `self.model` against the chosen
+    /// provider's context window.
+    ///
+    /// Asks the **provider** first: a local runtime (Ollama / LM Studio) reports
+    /// its real loaded / profile window here (~8k tokens for Ollama), so an
+    /// unknown *local* model is budgeted against its actual small context and the
+    /// payload is chunked — instead of assuming a 128k window and sending an
+    /// oversized single-shot prompt that overflows the local context (Codex P2).
+    /// Falls back to the static registry, then the cloud-safe default in
+    /// [`chunk_char_budget_for_window`].
+    async fn extract_chunk_char_budget(&self) -> usize {
+        let window = self
+            .provider
+            .effective_context_window(&self.model)
+            .await
+            .or_else(|| crate::openhuman::inference::context_window_for_model(&self.model));
+        chunk_char_budget_for_window(window)
     }
 
     fn next_call_seq(&self) -> u64 {
@@ -192,10 +213,13 @@ impl Tool for ExtractFromResultTool {
         // Allow test harnesses to lower the chunk budget so multi-chunk
         // extraction can be exercised on compacted payloads. Never consulted
         // in production (env var absent).
-        let effective_chunk_budget = std::env::var("OPENHUMAN_TEST_EXTRACT_CHUNK_BUDGET")
+        let effective_chunk_budget = match std::env::var("OPENHUMAN_TEST_EXTRACT_CHUNK_BUDGET")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or_else(|| extract_chunk_char_budget(&self.model));
+        {
+            Some(budget) => budget,
+            None => self.extract_chunk_char_budget().await,
+        };
 
         // Fast path: payload fits in a single provider turn.
         if cached.content.len() <= effective_chunk_budget {
@@ -538,33 +562,41 @@ fn write_extract_transcript(
 mod tests {
     use super::*;
 
-    // The chunk budget is now derived from the *resolved* model id (handed in
-    // by the runner via the `summarization` role) rather than a hardcoded
-    // constant — so the budget must track the model. `summarization-v1` resolves
-    // to a long-context (~1M token) flash model, so its budget must be much
-    // larger than a model the registry doesn't know (which uses the fallback
-    // window). Proves the model id flows through end-to-end.
+    // The chunk budget tracks the resolved context window, so a small local
+    // window yields a much smaller budget than a long-context cloud tier — this
+    // is what forces chunking instead of an oversized single-shot prompt.
     #[test]
-    fn chunk_budget_tracks_resolved_model() {
-        let summarization_budget = extract_chunk_char_budget("summarization-v1");
-        let unknown_budget = extract_chunk_char_budget("some-byok-model-the-registry-doesnt-know");
+    fn chunk_budget_tracks_context_window() {
+        let summarization_window =
+            crate::openhuman::inference::context_window_for_model("summarization-v1");
+        let big = chunk_char_budget_for_window(summarization_window);
+        let small = chunk_char_budget_for_window(Some(8_192)); // Ollama local default
         assert!(
-            summarization_budget > unknown_budget,
-            "summarization-v1 (long context) budget {summarization_budget} must exceed the \
-             unknown-model fallback budget {unknown_budget}"
+            big > small,
+            "long-context tier budget {big} must exceed an 8k local window budget {small}"
         );
     }
 
-    // A model id the registry doesn't recognise flows through to the fallback
-    // window — the budget must NOT be pinned to the summarization-v1 window when
-    // a different model is routed (e.g. a BYOK model the registry can't size).
+    // Codex P2: an unknown LOCAL model resolves (via the provider) to its small
+    // ~8k profile window, NOT the 128k cloud fallback. The resulting budget must
+    // be well under a production handoff payload (~200k chars) so it chunks
+    // instead of single-shotting into a local context overflow.
     #[test]
-    fn chunk_budget_uses_fallback_for_unknown_model() {
-        // FALLBACK_WINDOW_TOKENS (128k) * 70% * 4 chars/token.
-        let expected = (128_000u64 * 70 / 100 * 4) as usize;
-        assert_eq!(
-            extract_chunk_char_budget("acme-byok-model-v0-unsized"),
-            expected
+    fn chunk_budget_for_small_local_window_forces_chunking() {
+        let budget = chunk_char_budget_for_window(Some(8_192));
+        // 8192 * 70% * 4 = 22_937 chars.
+        assert_eq!(budget, (8_192u64 * 70 / 100 * 4) as usize);
+        assert!(
+            budget < 200_000,
+            "an 8k local window must budget below a typical handoff payload so it chunks"
         );
+    }
+
+    // When neither provider nor registry can size the model (cloud-unknown), the
+    // cloud-safe 128k fallback applies.
+    #[test]
+    fn chunk_budget_uses_cloud_fallback_when_unsizable() {
+        let expected = (128_000u64 * 70 / 100 * 4) as usize;
+        assert_eq!(chunk_char_budget_for_window(None), expected);
     }
 }
