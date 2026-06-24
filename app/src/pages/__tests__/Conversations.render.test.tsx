@@ -11,13 +11,12 @@ import { combineReducers, configureStore } from '@reduxjs/toolkit';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SidebarSlotOutlet, SidebarSlotProvider } from '../../components/layout/shell/SidebarSlot';
 import { threadApi } from '../../services/api/threadApi';
 import { chatSend } from '../../services/chatService';
 import { CoreRpcError } from '../../services/coreRpcClient';
-import { store as appStore } from '../../store';
 import agentProfileReducer from '../../store/agentProfileSlice';
 import chatRuntimeReducer, {
   beginInferenceTurn,
@@ -28,7 +27,7 @@ import chatRuntimeReducer, {
 import layoutReducer from '../../store/layoutSlice';
 import socketReducer from '../../store/socketSlice';
 import themeReducer from '../../store/themeSlice';
-import threadReducer, { clearSelectedThread, setSelectedThread } from '../../store/threadSlice';
+import threadReducer, { setSelectedThread } from '../../store/threadSlice';
 import type { Thread, ThreadMessage } from '../../types/thread';
 
 // ── Hoisted mock state ─────────────────────────────────────────────────────
@@ -2032,19 +2031,9 @@ describe('Conversations — open-session resume (View work)', () => {
 // dropped such a session and, when it was the only thread, spawned a fresh
 // chat — losing the active conversation.
 describe('Conversations — active-thread restore across in-app navigation', () => {
-  // The mount effect reads the last-open thread from the singleton app store
-  // (`store.getState()` in Conversations.tsx) — in production that IS the
-  // Provider store, but the test harness renders against a separate `buildStore`
-  // instance, so the persisted selection must be seeded on the singleton to
-  // reproduce "the user had this thread open". Reset it between tests so the
-  // fresh-session cases below see no active selection.
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetThreadMessages.mockResolvedValue({ messages: [], count: 0 });
-    appStore.dispatch(clearSelectedThread());
-  });
-  afterEach(() => {
-    appStore.dispatch(clearSelectedThread());
   });
 
   it('restores a non-General active session on remount instead of spawning a new chat', async () => {
@@ -2056,7 +2045,6 @@ describe('Conversations — active-thread restore across in-app navigation', () 
     // Only the (hidden) task session exists — pre-fix this falls through to
     // handleCreateNewThread and replaces the active session with a new chat.
     mockGetThreads.mockResolvedValue({ threads: [taskThread], count: 1 });
-    appStore.dispatch(setSelectedThread('task-active-1'));
 
     let store: ReturnType<typeof buildStore> | undefined;
     await act(async () => {
@@ -2084,7 +2072,6 @@ describe('Conversations — active-thread restore across in-app navigation', () 
       labels: ['tasks'],
     });
     mockGetThreads.mockResolvedValue({ threads: [taskThread], count: 1 });
-    appStore.dispatch(setSelectedThread('task-active-2'));
 
     await act(async () => {
       await renderConversations({

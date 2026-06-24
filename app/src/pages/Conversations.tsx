@@ -49,7 +49,6 @@ import {
   setTaskBoardForThread,
   setToolTimelineForThread,
 } from '../store/chatRuntimeSlice';
-import { store } from '../store';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { selectSocketStatus } from '../store/socketSelectors';
 import {
@@ -510,7 +509,6 @@ const Conversations = ({
       .unwrap()
       .then(data => {
         if (cancelled) return;
-        const threadStateForSelect = store.getState().thread;
         // Match the sidebar's default General filter here so initial/resume
         // selection can't auto-pick a thread hidden by the selected tab.
         const visibleThreads = data.threads.filter(t => isThreadVisibleInTab(t, GENERAL_TAB_VALUE));
@@ -544,9 +542,8 @@ const Conversations = ({
         // Chat tab and back would drop the active thread and either resume an
         // unrelated General thread or spawn a fresh chat — losing the
         // conversation the user was in (#chat-tab-active-thread).
-        const persistedId = selectedThreadId ?? threadStateForSelect.selectedThreadId;
-        const persistedThread = persistedId
-          ? data.threads.find(t => t.id === persistedId)
+        const persistedThread = selectedThreadId
+          ? data.threads.find(t => t.id === selectedThreadId)
           : undefined;
         if (persistedThread) {
           dispatch(setSelectedThread(persistedThread.id));
