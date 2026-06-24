@@ -133,6 +133,22 @@ pub fn build_local_provider_with_config(config: &Config) -> Option<ResolvedProvi
     })
 }
 
+/// Whether a resolved provider string targets a local CLI delegate
+/// (`claude_agent_sdk` / `claude-code:<model>`). These carry their own auth and
+/// spawn a local process, so — like the local HTTP runtimes — they must never be
+/// the provider for a triage turn (#1257). Kept separate from
+/// `is_local_provider_string`, which only classifies the local HTTP runtimes.
+fn is_local_cli_route(provider_string: &str) -> bool {
+    use crate::openhuman::inference::provider::claude_code;
+    use crate::openhuman::inference::provider::factory::{
+        CLAUDE_AGENT_SDK_PREFIX, CLAUDE_AGENT_SDK_PROVIDER,
+    };
+    let s = provider_string.trim();
+    s == CLAUDE_AGENT_SDK_PROVIDER
+        || s.starts_with(CLAUDE_AGENT_SDK_PREFIX)
+        || s.starts_with(claude_code::PROVIDER_PREFIX)
+}
+
 // ── Provider builder ────────────────────────────────────────────────────
 
 /// Build the remote provider for a triage turn, routed through the
@@ -159,9 +175,16 @@ fn build_remote_provider(config: &Config) -> anyhow::Result<ResolvedProvider> {
     let resolved = provider::provider_for_role("subconscious", config);
     let r = resolved.trim();
 
-    // #1257: triage must never run on a local provider, and a half-configured
-    // BYOK route must not error a trigger — force the managed backend in both.
-    let force_managed = is_local_provider_string(r) || r == provider::BYOK_INCOMPLETE_SENTINEL;
+    // #1257: triage must never depend on a local model/CLI being up, and a
+    // half-configured BYOK route must not error a trigger — force the managed
+    // backend in all those cases. `is_local_provider_string` only covers the
+    // local HTTP runtimes (Ollama/LM Studio/MLX/local-openai), so the local CLI
+    // delegates (`claude_agent_sdk`, `claude-code:<model>`) are excluded
+    // explicitly here (Codex P2) — otherwise they'd be treated as BYOK cloud and
+    // triage could hang on an unauthenticated/missing CLI.
+    let force_managed = is_local_provider_string(r)
+        || is_local_cli_route(r)
+        || r == provider::BYOK_INCOMPLETE_SENTINEL;
     let effective = if force_managed { PROVIDER_OPENHUMAN } else { r };
     if force_managed {
         tracing::info!(

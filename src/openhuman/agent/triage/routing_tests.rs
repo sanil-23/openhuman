@@ -57,6 +57,39 @@ fn build_remote_provider_falls_back_to_managed_when_subconscious_local() {
 }
 
 #[test]
+fn build_remote_provider_forces_managed_for_local_cli_routes() {
+    // #1257 (Codex P2): local CLI delegates (claude_agent_sdk / claude-code:)
+    // are not caught by `is_local_provider_string`, but triage must not depend on
+    // a local CLI — force the managed backend (chat-v1) for them too.
+    for route in [
+        "claude_agent_sdk",
+        "claude_agent_sdk:sonnet",
+        "claude-code:opus",
+    ] {
+        let mut config = test_config();
+        config.subconscious_provider = Some(route.to_string());
+        let resolved = build_remote_provider(&config)
+            .unwrap_or_else(|e| panic!("route {route} should build, got {e}"));
+        assert_eq!(
+            resolved.provider_name, INFERENCE_BACKEND_ID,
+            "route {route} must force managed backend"
+        );
+        assert_eq!(resolved.model, "chat-v1", "route {route} must pin chat-v1");
+        assert!(!resolved.used_local);
+    }
+}
+
+#[test]
+fn is_local_cli_route_classifies_cli_delegates_only() {
+    assert!(is_local_cli_route("claude_agent_sdk"));
+    assert!(is_local_cli_route("claude_agent_sdk:sonnet"));
+    assert!(is_local_cli_route("claude-code:opus"));
+    assert!(!is_local_cli_route("openai:gpt-4o"));
+    assert!(!is_local_cli_route("openhuman"));
+    assert!(!is_local_cli_route("ollama:phi3"));
+}
+
+#[test]
 fn build_remote_provider_routes_through_byok_subconscious() {
     // A concrete BYOK cloud subconscious provider governs triage classification.
     let mut config = test_config();
