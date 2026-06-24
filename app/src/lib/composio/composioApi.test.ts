@@ -219,9 +219,7 @@ describe('Connections loading fetches (opt-in bounded timeout)', () => {
 
     const out = await listToolkits();
 
-    expect(mockCallCoreRpc).toHaveBeenCalledWith({
-      method: 'openhuman.composio_list_toolkits',
-    });
+    expect(mockCallCoreRpc).toHaveBeenCalledWith({ method: 'openhuman.composio_list_toolkits' });
     expect(mockCallCoreRpc.mock.calls[0][0]).not.toHaveProperty('timeoutMs');
     expect(out.toolkits).toEqual(['gmail', 'slack']);
   });
@@ -245,9 +243,7 @@ describe('Connections loading fetches (opt-in bounded timeout)', () => {
 
     const out = await listConnections();
 
-    expect(mockCallCoreRpc).toHaveBeenCalledWith({
-      method: 'openhuman.composio_list_connections',
-    });
+    expect(mockCallCoreRpc).toHaveBeenCalledWith({ method: 'openhuman.composio_list_connections' });
     expect(mockCallCoreRpc.mock.calls[0][0]).not.toHaveProperty('timeoutMs');
     expect(out.connections).toHaveLength(1);
   });
