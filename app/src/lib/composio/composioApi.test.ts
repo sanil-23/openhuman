@@ -194,19 +194,24 @@ describe('listAgentReadyToolkits', () => {
   });
 });
 
-describe('Connections loading fetches (bounded timeout)', () => {
+describe('Connections loading fetches (opt-in bounded timeout)', () => {
   // The Connections page clears its loading skeleton only after BOTH of
-  // these settle (Promise.allSettled in useComposioIntegrations), so both
-  // must opt into the shorter 8s budget to bound the skeleton window on a
-  // cold cache against a down backend (#3933). The catalog is safe to time
-  // out early — it has a 24h stale cache plus a hardcoded fallback.
+  // these settle (Promise.allSettled in useComposioIntegrations), so it opts
+  // both into the shorter 8s budget to bound the skeleton window on a cold
+  // cache against a down backend (#3933). The catalog is safe to time out
+  // early — it has a 24h stale cache plus a hardcoded fallback.
+  //
+  // The timeout is *opt-in*, not the wrapper default: `listConnections` is
+  // shared by the repo/issue pickers, add-memory-source dialog and connect
+  // modal poll, where a slow-but-successful 8–30s call must still complete
+  // (#4079 review). Default callers therefore pass no `timeoutMs`.
   const EXPECTED_FETCH_TIMEOUT_MS = 8_000;
 
   beforeEach(() => {
     mockCallCoreRpc.mockReset();
   });
 
-  it('listToolkits passes the shorter timeoutMs and unwraps the envelope', async () => {
+  it('listToolkits omits timeoutMs by default and unwraps the envelope', async () => {
     mockCallCoreRpc.mockResolvedValue({
       result: { toolkits: ['gmail', 'slack'] },
       logs: ['composio: 2 toolkit(s) listed'],
@@ -216,12 +221,23 @@ describe('Connections loading fetches (bounded timeout)', () => {
 
     expect(mockCallCoreRpc).toHaveBeenCalledWith({
       method: 'openhuman.composio_list_toolkits',
-      timeoutMs: EXPECTED_FETCH_TIMEOUT_MS,
     });
+    expect(mockCallCoreRpc.mock.calls[0][0]).not.toHaveProperty('timeoutMs');
     expect(out.toolkits).toEqual(['gmail', 'slack']);
   });
 
-  it('listConnections passes the shorter timeoutMs and unwraps the envelope', async () => {
+  it('listToolkits forwards an explicit timeoutMs option', async () => {
+    mockCallCoreRpc.mockResolvedValue({ result: { toolkits: [] }, logs: [] });
+
+    await listToolkits({ timeoutMs: EXPECTED_FETCH_TIMEOUT_MS });
+
+    expect(mockCallCoreRpc).toHaveBeenCalledWith({
+      method: 'openhuman.composio_list_toolkits',
+      timeoutMs: EXPECTED_FETCH_TIMEOUT_MS,
+    });
+  });
+
+  it('listConnections omits timeoutMs by default and unwraps the envelope', async () => {
     mockCallCoreRpc.mockResolvedValue({
       result: { connections: [{ toolkit: 'gmail', status: 'ACTIVE' }] },
       logs: [],
@@ -231,9 +247,20 @@ describe('Connections loading fetches (bounded timeout)', () => {
 
     expect(mockCallCoreRpc).toHaveBeenCalledWith({
       method: 'openhuman.composio_list_connections',
+    });
+    expect(mockCallCoreRpc.mock.calls[0][0]).not.toHaveProperty('timeoutMs');
+    expect(out.connections).toHaveLength(1);
+  });
+
+  it('listConnections forwards an explicit timeoutMs option', async () => {
+    mockCallCoreRpc.mockResolvedValue({ result: { connections: [] }, logs: [] });
+
+    await listConnections({ timeoutMs: EXPECTED_FETCH_TIMEOUT_MS });
+
+    expect(mockCallCoreRpc).toHaveBeenCalledWith({
+      method: 'openhuman.composio_list_connections',
       timeoutMs: EXPECTED_FETCH_TIMEOUT_MS,
     });
-    expect(out.connections).toHaveLength(1);
   });
 });
 
