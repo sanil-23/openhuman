@@ -8,6 +8,7 @@ import type {
   ToolTimelineEntryStatus,
 } from '../../../store/chatRuntimeSlice';
 import type { ThreadMessage } from '../../../types/thread';
+import { stripToolCallEnvelopes } from '../../../utils/toolTimelineFormatting';
 import { BubbleMarkdown } from './AgentMessageBubble';
 
 /**
@@ -50,7 +51,12 @@ function transcriptFromMessages(messages: ThreadMessage[]): {
 function statusTone(status: ToolTimelineEntryStatus | undefined): {
   dot: string;
   pill: string;
-  label: 'statusRunning' | 'statusCompleted' | 'statusFailed' | 'statusAwaitingUser';
+  label:
+    | 'statusRunning'
+    | 'statusCompleted'
+    | 'statusFailed'
+    | 'statusAwaitingUser'
+    | 'statusCancelled';
 } {
   if (status === 'success') {
     return {
@@ -64,6 +70,13 @@ function statusTone(status: ToolTimelineEntryStatus | undefined): {
       dot: 'bg-coral-500',
       pill: 'bg-coral-100 dark:bg-coral-500/20 text-coral-700 dark:text-coral-300',
       label: 'statusFailed',
+    };
+  }
+  if (status === 'cancelled') {
+    return {
+      dot: 'bg-stone-400 dark:bg-neutral-500',
+      pill: 'bg-stone-100 dark:bg-neutral-700/40 text-stone-600 dark:text-neutral-300',
+      label: 'statusCancelled',
     };
   }
   if (status === 'awaiting_user') {
@@ -101,14 +114,28 @@ function formatElapsed(ms: number): string {
 export function SubagentDrawer({
   subagent,
   status,
+  onCancel,
   onClose,
 }: {
   subagent: SubagentActivity | null;
   /** Lifecycle status of the owning timeline row (running/success/error). */
   status?: ToolTimelineEntryStatus;
+  /**
+   * Cancel this still-running detached sub-agent. When provided and the run is
+   * running, a "Cancel task" affordance is shown. The parent owns the actual
+   * abort + chat delivery (via `subagentApi.cancel`); the drawer only manages
+   * the in-flight / error UI and closes on success. Rejecting surfaces an error.
+   */
+  onCancel?: () => Promise<void>;
   onClose: () => void;
 }) {
   const { t } = useT();
+  // Cancel-in-flight + last-error state for the "Cancel task" affordance.
+  // The parent keys this drawer by task id, so a different sub-agent remounts
+  // with fresh state — no effect-driven reset needed (which would trip the
+  // repo's `react-hooks/set-state-in-effect` rule).
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState(false);
 
   // Close on Escape for keyboard parity with the backdrop click.
   useEffect(() => {
@@ -162,7 +189,25 @@ export function SubagentDrawer({
   if (!subagent) return null;
 
   const tone = statusTone(status);
-  const isRunning = status !== 'success' && status !== 'error';
+  const isRunning = status !== 'success' && status !== 'error' && status !== 'cancelled';
+  // The "Cancel task" CTA is only meaningful for a live, still-running run the
+  // parent gave us a cancel handler for.
+  const canCancel = status === 'running' && Boolean(onCancel);
+
+  const handleCancel = async () => {
+    if (!onCancel || cancelling) return;
+    setCancelling(true);
+    setCancelError(false);
+    try {
+      await onCancel();
+      // Success: the parent flips the row to cancelled and the notice rides the
+      // idle-delivery path into chat — close the drawer.
+      onClose();
+    } catch {
+      setCancelling(false);
+      setCancelError(true);
+    }
+  };
   // Only trust the fetched transcript when it belongs to the current worker.
   const fetchedForCurrent =
     fetched && workerThreadId && fetched.workerThreadId === workerThreadId ? fetched : null;
@@ -219,6 +264,18 @@ export function SubagentDrawer({
               {subagent.mode ? <span>{subagent.mode}</span> : null}
             </div>
           </div>
+          {canCancel ? (
+            <button
+              type="button"
+              onClick={handleCancel}
+              disabled={cancelling}
+              data-testid="subagent-cancel"
+              className="shrink-0 rounded-full border border-coral-200 px-2.5 py-1 text-xs font-medium text-coral-600 hover:bg-coral-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-coral-500/40 dark:text-coral-300 dark:hover:bg-coral-500/10">
+              {cancelling
+                ? t('conversations.subagent.cancelling')
+                : t('conversations.subagent.cancel')}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
@@ -227,6 +284,14 @@ export function SubagentDrawer({
             ✕
           </button>
         </header>
+        {cancelError ? (
+          <div
+            role="alert"
+            data-testid="subagent-cancel-error"
+            className="border-b border-coral-200 bg-coral-50 px-4 py-2 text-xs text-coral-700 dark:border-coral-500/30 dark:bg-coral-500/10 dark:text-coral-300">
+            {t('conversations.subagent.cancelFailed')}
+          </div>
+        ) : null}
 
         {/* Body — a parent↔subagent conversation: the parent's delegation
             prompt opens it, then the sub-agent replies as one chronological
@@ -285,7 +350,7 @@ export function SubagentDrawer({
                           {t('conversations.subagent.thinking')}
                         </div>
                         <pre className="whitespace-pre-wrap break-words font-sans text-[12px] leading-relaxed text-stone-600 dark:text-neutral-300">
-                          {item.text}
+                          {stripToolCallEnvelopes(item.text).trim()}
                         </pre>
                       </div>
                     </ItemWrapper>
@@ -296,7 +361,7 @@ export function SubagentDrawer({
                   return (
                     <ItemWrapper key={`tx-${idx}`} divider={turnDivider}>
                       <div data-testid="subagent-transcript-text">
-                        <BubbleMarkdown content={item.text} />
+                        <BubbleMarkdown content={stripToolCallEnvelopes(item.text)} />
                         {isRunning && idx === lastTextIdx ? (
                           <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-primary-400 align-middle" />
                         ) : null}
@@ -305,34 +370,9 @@ export function SubagentDrawer({
                   );
                 }
 
-                const callTone =
-                  item.status === 'running'
-                    ? 'text-amber-700 dark:text-amber-300'
-                    : item.status === 'success'
-                      ? 'text-sage-700 dark:text-sage-300'
-                      : 'text-coral-700 dark:text-coral-300';
-                const statusLabel =
-                  item.status === 'running'
-                    ? t('conversations.subagent.statusRunning')
-                    : item.status === 'success'
-                      ? t('conversations.subagent.statusCompleted')
-                      : t('conversations.subagent.statusFailed');
                 return (
                   <ItemWrapper key={`tl-${item.callId}`} divider={turnDivider}>
-                    <div
-                      className="flex items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-2.5 py-1.5 text-xs dark:border-neutral-800 dark:bg-neutral-800/60"
-                      data-testid="subagent-drawer-tool-call">
-                      <span className={callTone}>🔧</span>
-                      <span className="font-mono text-stone-700 dark:text-neutral-200">
-                        {item.toolName}
-                      </span>
-                      <span className={`ml-auto ${callTone}`}>{statusLabel}</span>
-                      {item.elapsedMs != null && item.status !== 'running' ? (
-                        <span className="text-[10px] text-stone-400 dark:text-neutral-500">
-                          {formatElapsed(item.elapsedMs)}
-                        </span>
-                      ) : null}
-                    </div>
+                    <ToolCallRow item={item} />
                   </ItemWrapper>
                 );
               })}
@@ -351,5 +391,117 @@ function ItemWrapper({ divider, children }: { divider: ReactNode; children: Reac
       {divider}
       <li>{children}</li>
     </>
+  );
+}
+
+type SubagentToolItem = Extract<SubagentTranscriptItem, { kind: 'tool' }>;
+
+/**
+ * Pretty-print a tool's input arguments for display. Objects/arrays are
+ * rendered as indented JSON; a string is shown verbatim. Returns `null` when
+ * there are no arguments to show (e.g. a tool called with no input, or a
+ * transcript reopened from memory where args weren't persisted).
+ */
+function formatArgs(args: unknown): string | null {
+  if (args == null) return null;
+  if (typeof args === 'string') return args.length > 0 ? args : null;
+  try {
+    return JSON.stringify(args, null, 2);
+  } catch {
+    return String(args);
+  }
+}
+
+/**
+ * One child tool call in the drawer transcript, expandable to reveal exactly
+ * *what happened*: the input arguments the sub-agent passed and the raw output
+ * the tool returned. Collapsed by default to keep the transcript scannable;
+ * the chevron only appears once there's detail to reveal (args present, or the
+ * call completed with a captured result). Reopened-from-memory transcripts
+ * carry no args/result, so those rows stay non-expandable.
+ */
+function ToolCallRow({ item }: { item: SubagentToolItem }) {
+  const { t } = useT();
+  const [expanded, setExpanded] = useState(false);
+
+  const callTone =
+    item.status === 'running'
+      ? 'text-amber-700 dark:text-amber-300'
+      : item.status === 'success'
+        ? 'text-sage-700 dark:text-sage-300'
+        : item.status === 'cancelled'
+          ? 'text-stone-600 dark:text-neutral-300'
+          : item.status === 'awaiting_user'
+            ? 'text-amber-700 dark:text-amber-300'
+            : 'text-coral-700 dark:text-coral-300';
+  const statusLabel =
+    item.status === 'running'
+      ? t('conversations.subagent.statusRunning')
+      : item.status === 'success'
+        ? t('conversations.subagent.statusCompleted')
+        : item.status === 'cancelled'
+          ? t('conversations.subagent.statusCancelled')
+          : item.status === 'awaiting_user'
+            ? t('conversations.subagent.statusAwaitingUser')
+            : t('conversations.subagent.statusFailed');
+
+  const argsText = formatArgs(item.args);
+  const hasOutput = item.result != null;
+  const expandable = argsText != null || hasOutput;
+
+  const detailPre =
+    'max-h-60 overflow-auto whitespace-pre-wrap break-words rounded bg-white px-2 py-1.5 ' +
+    'font-mono text-[11px] leading-relaxed text-stone-600 dark:bg-neutral-900 dark:text-neutral-300';
+  const detailLabel =
+    'mb-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400 dark:text-neutral-500';
+
+  return (
+    <div
+      className="rounded-md border border-stone-200 bg-stone-50 text-xs dark:border-neutral-800 dark:bg-neutral-800/60"
+      data-testid="subagent-drawer-tool-call">
+      <button
+        type="button"
+        disabled={!expandable}
+        onClick={() => setExpanded(v => !v)}
+        aria-expanded={expandable ? expanded : undefined}
+        data-testid="subagent-tool-call-toggle"
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left disabled:cursor-default">
+        {expandable ? (
+          <span className="shrink-0 text-[9px] text-stone-400 dark:text-neutral-500">
+            {expanded ? '▾' : '▸'}
+          </span>
+        ) : (
+          <span className="w-[9px] shrink-0" aria-hidden />
+        )}
+        <span className={callTone}>🔧</span>
+        <span className="font-mono text-stone-700 dark:text-neutral-200">{item.toolName}</span>
+        <span className={`ml-auto ${callTone}`}>{statusLabel}</span>
+        {item.elapsedMs != null && item.status !== 'running' ? (
+          <span className="text-[10px] text-stone-400 dark:text-neutral-500">
+            {formatElapsed(item.elapsedMs)}
+          </span>
+        ) : null}
+      </button>
+      {expandable && expanded ? (
+        <div className="space-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-neutral-800">
+          {argsText != null ? (
+            <div data-testid="subagent-tool-call-input">
+              <div className={detailLabel}>{t('conversations.subagent.input')}</div>
+              <pre className={detailPre}>{argsText}</pre>
+            </div>
+          ) : null}
+          {hasOutput ? (
+            <div data-testid="subagent-tool-call-output">
+              <div className={detailLabel}>{t('conversations.subagent.output')}</div>
+              <pre className={detailPre}>
+                {item.result && item.result.length > 0
+                  ? item.result
+                  : t('conversations.subagent.noOutput')}
+              </pre>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }

@@ -109,7 +109,14 @@ export type ProviderRef =
   | { kind: 'local'; model: string; temperature?: number | null }
   | { kind: 'claude-code'; model: string; temperature?: number | null };
 
-type Workload = { id: WorkloadId; group: WorkloadGroup; label: string; description: string };
+type Workload = {
+  id: WorkloadId;
+  group: WorkloadGroup;
+  // i18n keys (resolved with `t()` at render) rather than literal English, so the
+  // workload labels/descriptions translate like the rest of the panel.
+  labelKey: string;
+  descriptionKey: string;
+};
 
 export type RoutingMap = Record<WorkloadId, ProviderRef>;
 type RoutingMode = 'managed' | 'own' | 'custom';
@@ -131,6 +138,7 @@ const BUILTIN_RESERVED_SLUGS = [
   'custom',
   'ollama',
   'lmstudio',
+  'omlx',
   // Claude Code is a CLI-backed peer provider surfaced via a dedicated
   // connect button (not a chip), so reserve its slug so it never renders in
   // the generic custom-provider chip list.
@@ -161,78 +169,98 @@ const WORKLOADS: Workload[] = [
   {
     id: 'chat',
     group: 'chat',
-    label: 'Chat',
-    description: 'Direct conversational back-and-forth — “Quick” mode in Conversations',
+    labelKey: 'settings.ai.routing.workload.chat.label',
+    descriptionKey: 'settings.ai.routing.workload.chat.description',
   },
   {
     id: 'reasoning',
     group: 'chat',
-    label: 'Reasoning',
-    description: 'Main chat agent, meeting summarizer — “Reasoning” mode in Conversations',
+    labelKey: 'settings.ai.routing.workload.reasoning.label',
+    descriptionKey: 'settings.ai.routing.workload.reasoning.description',
   },
   {
     id: 'agentic',
     group: 'chat',
-    label: 'Agentic',
-    description: 'Sub-agent runners, tool loops, GIF decisions',
+    labelKey: 'settings.ai.routing.workload.agentic.label',
+    descriptionKey: 'settings.ai.routing.workload.agentic.description',
   },
   {
     id: 'coding',
     group: 'chat',
-    label: 'Coding',
-    description: 'Code generation and refactor passes',
+    labelKey: 'settings.ai.routing.workload.coding.label',
+    descriptionKey: 'settings.ai.routing.workload.coding.description',
   },
   {
     id: 'vision',
     group: 'chat',
-    label: 'Vision',
-    description: 'Image understanding for the vision sub-agent — always multimodal',
+    labelKey: 'settings.ai.routing.workload.vision.label',
+    descriptionKey: 'settings.ai.routing.workload.vision.description',
   },
   {
     id: 'memory',
     group: 'background',
-    label: 'Memory summarization',
-    description: 'Tree-extracts and consolidations',
+    labelKey: 'settings.ai.routing.workload.memory.label',
+    descriptionKey: 'settings.ai.routing.workload.memory.description',
   },
   {
     id: 'heartbeat',
     group: 'background',
-    label: 'Heartbeat',
-    description: 'Background reasoning between user turns',
+    labelKey: 'settings.ai.routing.workload.heartbeat.label',
+    descriptionKey: 'settings.ai.routing.workload.heartbeat.description',
   },
   {
     id: 'learning',
     group: 'background',
-    label: 'Learning · Reflections',
-    description: 'Periodic reflection over recent history',
+    labelKey: 'settings.ai.routing.workload.learning.label',
+    descriptionKey: 'settings.ai.routing.workload.learning.description',
   },
   {
     id: 'subconscious',
     group: 'background',
-    label: 'Subconscious',
-    description: 'Eventfulness scoring + drift checks',
+    labelKey: 'settings.ai.routing.workload.subconscious.label',
+    descriptionKey: 'settings.ai.routing.workload.subconscious.description',
   },
 ];
 
-const WORKLOAD_MODEL_HINTS: Record<WorkloadId, string> = {
-  chat: 'Recommended: a cheap or mid-cost fast chat model with high tokens/sec and low latency. Open-source local models can work well here if they feel responsive.',
-  reasoning:
-    'Recommended: a more expensive frontier or strong reasoning model for deep thinking. This is used for the main chat agent, meeting summaries, and heavier answer synthesis.',
-  agentic:
-    'Recommended: a reliable instruction-following model with strong tool use. Mid-cost frontier models are usually safest; capable open-source models can work if tool calling is stable.',
-  coding:
-    'Recommended: a coding-tuned model with strong instruction following, edit quality, and long-context performance. This is usually worth spending more on.',
-  vision:
-    'Recommended: a multimodal model that accepts image input. The managed default (vision-v1) is image-capable; any provider you route here is always treated as vision-enabled.',
-  memory:
-    'Recommended: a cheaper summarization model. It should be consistent and compact, but it does not need premium frontier-level reasoning.',
-  heartbeat:
-    'Recommended: a cheap, efficient background model. This runs often between turns, so low cost matters more than maximum intelligence.',
-  learning:
-    'Recommended: a stronger reflective model. This can be mid-cost or premium because it benefits from better synthesis over recent history.',
-  subconscious:
-    'Recommended: a very cheap monitoring model, ideally one that is lightweight and predictable. This is for eventfulness scoring, drift checks, and quiet background evaluation.',
+// i18n keys for the per-workload "Recommended: …" hints (resolved with `t()`).
+const WORKLOAD_MODEL_HINT_KEYS: Record<WorkloadId, string> = {
+  chat: 'settings.ai.routing.workload.chat.hint',
+  reasoning: 'settings.ai.routing.workload.reasoning.hint',
+  agentic: 'settings.ai.routing.workload.agentic.hint',
+  coding: 'settings.ai.routing.workload.coding.hint',
+  vision: 'settings.ai.routing.workload.vision.hint',
+  memory: 'settings.ai.routing.workload.memory.hint',
+  heartbeat: 'settings.ai.routing.workload.heartbeat.hint',
+  learning: 'settings.ai.routing.workload.learning.hint',
+  subconscious: 'settings.ai.routing.workload.subconscious.hint',
 };
+
+// Build the "pending routing changes" summary: one `"<label> → <target>"`
+// entry per workload whose draft route differs from the saved route. Extracted
+// as a pure, exported function so the (translated) formatting is unit-testable
+// without rendering the whole panel.
+export function buildRoutingDiffSummary(
+  saved: RoutingMap,
+  draft: RoutingMap,
+  t: (key: string) => string
+): string[] {
+  const describe = (r: ProviderRef): string => {
+    if (r.kind === 'openhuman') return 'openhuman';
+    if (r.kind === 'default') return 'cloud';
+    const tempSuffix = r.temperature != null ? `@${r.temperature.toFixed(2)}` : '';
+    if (r.kind === 'cloud') return `${r.providerSlug}:${r.model}${tempSuffix}`;
+    return `local:${r.model}${tempSuffix}`;
+  };
+  const out: string[] = [];
+  for (const w of WORKLOADS) {
+    const a = saved[w.id];
+    const b = draft[w.id];
+    if (JSON.stringify(a) !== JSON.stringify(b)) {
+      out.push(`${t(w.labelKey)} → ${describe(b)}`);
+    }
+  }
+  return out;
+}
 
 // TIER_PRESETS removed alongside the Local provider section.
 
@@ -288,6 +316,7 @@ function slugifyCustomProviderName(name: string): string {
 function authStyleForSlug(slug: string): AuthStyle {
   if (slug === 'openhuman') return 'openhuman_jwt';
   if (slug === 'lmstudio' || slug === 'ollama') return 'none';
+  if (slug === 'omlx') return 'bearer';
   // Claude Code authenticates via the local CLI, never an HTTP key.
   if (slug === 'claude-code') return 'none';
   return authStyleForBuiltinCloudProvider(slug) ?? 'bearer';
@@ -537,15 +566,20 @@ function useInstalledModels(snapshot: LocalProviderSnapshot | null): OllamaModel
 
 // Local-runtime chip slugs (Ollama / LM Studio) that aren't actual slugs in
 // the cloud_providers list but need the same chip affordance.
-type LocalChipSlug = 'lmstudio' | 'ollama';
+type LocalChipSlug = 'lmstudio' | 'ollama' | 'omlx';
 
 // Tints per local-runtime chip slug.
 const LOCAL_CHIP_TONE: Record<LocalChipSlug, string> = {
   lmstudio: 'bg-cyan-50 dark:bg-cyan-500/10 ring-cyan-200 text-cyan-900 dark:text-cyan-100',
   ollama: 'bg-violet-50 dark:bg-violet-500/10 ring-violet-200 text-violet-900 dark:text-violet-100',
+  omlx: 'bg-amber-50 dark:bg-amber-500/10 ring-amber-200 text-amber-900 dark:text-amber-100',
 };
 
-const LOCAL_CHIP_LABEL: Record<LocalChipSlug, string> = { lmstudio: 'LM Studio', ollama: 'Ollama' };
+const LOCAL_CHIP_LABEL: Record<LocalChipSlug, string> = {
+  lmstudio: 'LM Studio',
+  ollama: 'Ollama',
+  omlx: 'OMLX',
+};
 
 function providerToggleAriaLabel(
   t: (key: string, fallback?: string) => string,
@@ -578,6 +612,7 @@ const ProviderToggleChip = ({
   enabled,
   busy,
   locked = false,
+  alwaysOn = false,
   onToggle,
 }: {
   slug: string;
@@ -585,7 +620,11 @@ const ProviderToggleChip = ({
   enabled: boolean;
   busy?: boolean;
   locked?: boolean;
-  onToggle: () => void;
+  // When true the provider is permanently available (e.g. Managed) and renders
+  // a static "Always on" indicator instead of a toggle. A locked toggle reads
+  // as switchable-but-broken (#3760); a badge has no affordance to fight.
+  alwaysOn?: boolean;
+  onToggle?: () => void;
 }) => {
   const { t } = useT();
   const tone = slugTone(slug);
@@ -593,13 +632,20 @@ const ProviderToggleChip = ({
     <div
       className={`inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs font-medium ring-1 transition-colors dark:ring-neutral-700 ${tone}`}>
       <span>{label}</span>
-      <SettingsSwitch
-        id={`provider-toggle-${slug}`}
-        checked={enabled}
-        onCheckedChange={onToggle}
-        disabled={busy || locked}
-        aria-label={providerToggleAriaLabel(t, enabled, label)}
-      />
+      {alwaysOn ? (
+        <span className="inline-flex items-center gap-1 opacity-80">
+          <LuCheck className="h-3 w-3" />
+          {t('settings.ai.routing.managedAlwaysOn')}
+        </span>
+      ) : (
+        <SettingsSwitch
+          id={`provider-toggle-${slug}`}
+          checked={enabled}
+          onCheckedChange={() => onToggle?.()}
+          disabled={busy || locked}
+          aria-label={providerToggleAriaLabel(t, enabled, label)}
+        />
+      )}
     </div>
   );
 };
@@ -618,7 +664,9 @@ const ProviderKeyDialog = ({
   slug,
   label,
   isLocalRuntime,
+  endpointKeyMode = false,
   initialValue,
+  initialKeyValue,
   oauthAction,
   onCancel,
   onSubmit,
@@ -627,18 +675,30 @@ const ProviderKeyDialog = ({
   label: string;
   /** When true, render an "Endpoint URL" field instead of API key. */
   isLocalRuntime: boolean;
+  /**
+   * When true (OMLX), render BOTH an "Endpoint URL" field AND an "API key"
+   * field. `onSubmit` then receives the API key as `value` and the endpoint
+   * via the `endpoint` argument.
+   */
+  endpointKeyMode?: boolean;
   /** Pre-populate the field when editing an existing provider's endpoint. */
   initialValue?: string;
+  /** Pre-populate the API key field in `endpointKeyMode`. */
+  initialKeyValue?: string;
   oauthAction?: { label: string; description?: string; onClick: () => Promise<void> | void } | null;
   onCancel: () => void;
-  /** Returns the entered value. For local runtimes this is the endpoint URL;
-   *  for cloud providers it's the API key. */
-  onSubmit: (value: string) => Promise<void> | void;
+  /** Returns the entered value(s). For plain local runtimes this is the
+   *  endpoint URL; for cloud providers it's the API key. In `endpointKeyMode`
+   *  the API key is `value` and the endpoint URL is `endpoint`. */
+  onSubmit: (value: string, endpoint?: string) => Promise<void> | void;
 }) => {
   const { t } = useT();
+  // In `endpointKeyMode`, `value` holds the endpoint URL and `keyValue` holds
+  // the API key. Otherwise `value` is either the endpoint (local) or key (cloud).
   const [value, setValue] = useState<string>(
     initialValue ?? (isLocalRuntime ? defaultEndpointFor(slug) : '')
   );
+  const [keyValue, setKeyValue] = useState<string>(initialKeyValue ?? '');
   const [phase, setPhase] = useState<'idle' | 'saving' | 'oauth'>('idle');
   const [error, setError] = useState<string | null>(null);
   const busy = phase !== 'idle';
@@ -646,6 +706,7 @@ const ProviderKeyDialog = ({
   const placeholder = isLocalRuntime
     ? defaultEndpointFor(slug) || t('settings.ai.defaultLocalEndpoint')
     : (builtinCloudProvider(slug)?.keyPlaceholder ?? 'your-api-key');
+  const keyPlaceholder = builtinCloudProvider(slug)?.keyPlaceholder ?? 'your-api-key';
 
   const fieldLabel = isLocalRuntime
     ? t('settings.ai.endpointUrlLabel')
@@ -657,6 +718,7 @@ const ProviderKeyDialog = ({
 
   const handleSave = async () => {
     const trimmed = value.trim();
+    const trimmedKey = keyValue.trim();
     if (!trimmed) {
       setError(
         isLocalRuntime ? t('settings.ai.endpointUrlRequired') : t('settings.ai.apiKeyRequired')
@@ -667,6 +729,10 @@ const ProviderKeyDialog = ({
       setError(t('settings.ai.endpointProtocolRequired'));
       return;
     }
+    if (endpointKeyMode && !trimmedKey) {
+      setError(t('settings.ai.apiKeyRequired'));
+      return;
+    }
     setError(null);
 
     // A provider credential is being saved. This adds/updates a `cloudProviders`
@@ -675,12 +741,18 @@ const ProviderKeyDialog = ({
     console.debug('[ai-settings][routing] saving provider credential', {
       slug,
       local_runtime: isLocalRuntime,
-      kind: isLocalRuntime ? 'endpoint' : 'apiKey',
+      kind: endpointKeyMode ? 'endpointKey' : isLocalRuntime ? 'endpoint' : 'apiKey',
     });
 
     setPhase('saving');
     try {
-      await onSubmit(trimmed);
+      // In endpointKeyMode the API key is the primary value, endpoint is the
+      // second arg; otherwise the single field is the primary value.
+      if (endpointKeyMode) {
+        await onSubmit(trimmedKey, trimmed);
+      } else {
+        await onSubmit(trimmed);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn('[ai-settings] provider setup failed', {
@@ -766,6 +838,36 @@ const ProviderKeyDialog = ({
               setError(null);
             }}
           />
+          {/* OMLX (endpointKeyMode): render the API key field in addition to
+              the endpoint field above — the runtime is OpenAI-compatible but
+              gated behind a Bearer key. */}
+          {endpointKeyMode ? (
+            <>
+              <label
+                htmlFor="provider-key-input-key"
+                className="mt-3 text-xs font-medium text-neutral-700 dark:text-neutral-200">
+                {t('settings.ai.apiKeyFieldLabel')}
+              </label>
+              <SettingsTextField
+                id="provider-key-input-key"
+                type="text"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                data-form-type="other"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                value={keyValue}
+                placeholder={keyPlaceholder}
+                disabled={busy}
+                onChange={e => {
+                  setKeyValue(e.target.value);
+                  setError(null);
+                }}
+              />
+            </>
+          ) : null}
           {error ? <ProviderSetupErrorNotice error={error} /> : null}
         </div>
 
@@ -1734,13 +1836,13 @@ const WorkloadRow = ({
     <div className="flex items-center justify-between gap-3 py-3 transition-colors">
       <div className="min-w-0 flex-1 space-y-1">
         <div className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-          {workload.label}
+          {t(workload.labelKey)}
         </div>
         <div className="text-xs leading-5 text-neutral-500 dark:text-neutral-400">
-          {workload.description}
+          {t(workload.descriptionKey)}
         </div>
         <div className="text-[11px] leading-5 text-neutral-500 dark:text-neutral-400">
-          {WORKLOAD_MODEL_HINTS[workload.id]}
+          {t(WORKLOAD_MODEL_HINT_KEYS[workload.id])}
         </div>
         {resolved ? (
           <div
@@ -2089,7 +2191,9 @@ const CustomRoutingDialog = ({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={formatI18n(t('settings.ai.customRoutingForWorkload'), { label: workload.label })}
+      aria-label={formatI18n(t('settings.ai.customRoutingForWorkload'), {
+        label: t(workload.labelKey),
+      })}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
       <div className="w-full max-w-md rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-6 shadow-soft">
         <div className="flex items-start justify-between gap-3 mb-4">
@@ -2098,10 +2202,10 @@ const CustomRoutingDialog = ({
               {t('settings.ai.customRouting')}
             </h3>
             <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
-              {workload.label}
+              {t(workload.labelKey)}
             </p>
             <p className="mt-2 max-w-md text-xs leading-5 text-neutral-500 dark:text-neutral-400">
-              {WORKLOAD_MODEL_HINTS[workload.id]}
+              {t(WORKLOAD_MODEL_HINT_KEYS[workload.id])}
             </p>
           </div>
           <Button
@@ -2826,14 +2930,30 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
       slug,
       localLabel = null,
       value,
+      endpoint: endpointOverride,
       credentialMode,
     }: {
       slug: string;
       localLabel?: string | null;
       value: string;
-      credentialMode: 'api_key' | 'oauth' | 'codex_oauth' | 'endpoint' | 'cli_login';
+      /**
+       * For `endpoint_key` runtimes (OMLX): the endpoint URL. `value` carries
+       * the API key in that mode, so the endpoint comes in separately. Ignored
+       * for `endpoint` mode, where `value` IS the endpoint.
+       */
+      endpoint?: string | null;
+      credentialMode:
+        | 'api_key'
+        | 'oauth'
+        | 'codex_oauth'
+        | 'endpoint'
+        | 'endpoint_key'
+        | 'cli_login';
     }) => {
-      const isLocalRuntime = credentialMode === 'endpoint';
+      const isLocalRuntime = credentialMode === 'endpoint' || credentialMode === 'endpoint_key';
+      // `endpoint_key` (OMLX) carries the API key in `value` and the endpoint
+      // separately; `endpoint` mode carries the endpoint URL in `value`.
+      const isEndpointKey = credentialMode === 'endpoint_key';
       const isCodexOAuth = credentialMode === 'codex_oauth';
       // CLI-backed login (Claude Code): no API key is written and no HTTP
       // /models probe is made — auth + execution both go through the local
@@ -2843,9 +2963,13 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
 
       try {
         const trimmed = value.trim();
+        // For `endpoint_key` (OMLX), the endpoint URL arrives via `endpointOverride`
+        // (the dialog's endpoint field) and `trimmed` is the API key. For plain
+        // `endpoint` runtimes, `trimmed` itself is the endpoint URL.
+        const rawEndpoint = isEndpointKey ? (endpointOverride ?? '').trim() : trimmed;
         const endpoint = isLocalRuntime
           ? (() => {
-              const url = new URL(trimmed);
+              const url = new URL(rawEndpoint);
               if (!/^https?:$/.test(url.protocol)) {
                 throw new Error('Endpoint must start with http:// or https://');
               }
@@ -2889,6 +3013,17 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
           await openhumanUpdateLocalAiSettings({
             base_url: endpoint,
             provider: 'lm_studio',
+            runtime_enabled: true,
+            opt_in_confirmed: true,
+          });
+        } else if (isLocalRuntime && slug === 'omlx') {
+          // OMLX: OpenAI-compatible local runtime that also requires a Bearer
+          // key. Persist both the endpoint and the key into local_ai (the Rust
+          // factory's omlx branch reads `local_ai.api_key` as the Bearer token).
+          await openhumanUpdateLocalAiSettings({
+            base_url: endpoint,
+            api_key: trimmed,
+            provider: 'omlx',
             runtime_enabled: true,
             opt_in_confirmed: true,
           });
@@ -2966,24 +3101,10 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
   // applyPreset removed alongside the Cloud / Local / Mixed preset pills —
   // the new Default/Custom binary toggle handles routing per workload.
 
-  const diffSummary = useMemo(() => {
-    const out: string[] = [];
-    for (const w of WORKLOADS) {
-      const a = saved.routing[w.id];
-      const b = draft.routing[w.id];
-      if (JSON.stringify(a) !== JSON.stringify(b)) {
-        const describe = (r: ProviderRef) => {
-          if (r.kind === 'openhuman') return 'openhuman';
-          if (r.kind === 'default') return 'cloud';
-          const tempSuffix = r.temperature != null ? `@${r.temperature.toFixed(2)}` : '';
-          if (r.kind === 'cloud') return `${r.providerSlug}:${r.model}${tempSuffix}`;
-          return `local:${r.model}${tempSuffix}`;
-        };
-        out.push(`${w.label} → ${describe(b)}`);
-      }
-    }
-    return out;
-  }, [saved, draft]);
+  const diffSummary = useMemo(
+    () => buildRoutingDiffSummary(saved.routing, draft.routing, t),
+    [saved, draft, t]
+  );
 
   const chatRows = WORKLOADS.filter(w => w.group === 'chat');
   const bgRows = WORKLOADS.filter(w => w.group === 'background');
@@ -3053,8 +3174,7 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
                 slug="openhuman"
                 label={t('settings.ai.routing.managed')}
                 enabled
-                locked
-                onToggle={() => {}}
+                alwaysOn
               />
 
               {/* Built-in cloud providers */}
@@ -3118,7 +3238,7 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
 
               {/* LM Studio + Ollama — local runtimes stored with a slug of
                   "lmstudio" / "ollama" so they're distinct from generic custom. */}
-              {(['lmstudio', 'ollama'] as const).map(localKind => {
+              {(['lmstudio', 'ollama', 'omlx'] as const).map(localKind => {
                 const label = LOCAL_CHIP_LABEL[localKind];
                 const tone = LOCAL_CHIP_TONE[localKind];
                 const existing = draft.cloudProviders.find(cp => cp.slug === localKind);
@@ -3173,6 +3293,13 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
                 );
               })}
             </div>
+
+            {/* #3760: Managed is always-on and can't be turned off; point users
+                who want a local model at the Routing card below instead of
+                letting them fight the (now badge, formerly locked) Managed chip. */}
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              {t('settings.ai.routing.managedHint')}
+            </p>
 
             <div className="flex flex-col gap-2 pt-1">
               {/* Codex — imports the existing Codex CLI login as an OpenAI credential. */}
@@ -3552,9 +3679,13 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
           slug={keyDialogFor}
           label={pendingLocalLabel ?? BUILTIN_PROVIDER_META[keyDialogFor]?.label ?? keyDialogFor}
           isLocalRuntime={Boolean(pendingLocalLabel)}
+          // OMLX is the only endpoint+key local runtime: render both an endpoint
+          // field (prefilled with the localhost default) and an API key field.
+          endpointKeyMode={keyDialogFor === 'omlx'}
           initialValue={
             pendingLocalLabel
-              ? (draft.cloudProviders.find(cp => cp.slug === keyDialogFor)?.endpoint ?? undefined)
+              ? (draft.cloudProviders.find(cp => cp.slug === keyDialogFor)?.endpoint ??
+                (keyDialogFor === 'omlx' ? defaultEndpointFor('omlx') : undefined))
               : undefined
           }
           oauthAction={
@@ -3586,12 +3717,20 @@ const AIPanel = ({ embedded = false }: AIPanelProps = {}) => {
             setKeyDialogFor(null);
             setPendingLocalLabel(null);
           }}
-          onSubmit={async value =>
+          onSubmit={async (value, endpoint) =>
             await connectProvider({
               slug: keyDialogFor,
               localLabel: pendingLocalLabel,
+              // In endpoint_key (OMLX) mode the dialog hands back the API key as
+              // `value` and the endpoint URL as `endpoint`.
               value,
-              credentialMode: pendingLocalLabel ? 'endpoint' : 'api_key',
+              endpoint,
+              credentialMode:
+                keyDialogFor === 'omlx'
+                  ? 'endpoint_key'
+                  : pendingLocalLabel
+                    ? 'endpoint'
+                    : 'api_key',
             })
           }
         />
@@ -3786,6 +3925,8 @@ function defaultEndpointFor(slug: string): string {
       return 'http://localhost:11434/v1';
     case 'lmstudio':
       return 'http://localhost:1234/v1';
+    case 'omlx':
+      return 'http://localhost:8000/v1';
     default:
       return '';
   }

@@ -24,7 +24,7 @@ import {
   LuSparkles,
   LuX,
 } from 'react-icons/lu';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { useT } from '../../lib/i18n/I18nContext';
 import { TaskKanbanBoard } from '../../pages/conversations/components/TaskKanbanBoard';
@@ -47,6 +47,8 @@ import {
 } from '../../store/threadSlice';
 import type { ThreadMessage } from '../../types/thread';
 import type { TaskBoard, TaskBoardCard, TaskBoardCardStatus } from '../../types/turnState';
+import { chatThreadPath } from '../../utils/chatRoutes';
+import { settingsNavState } from '../settings/modal/settingsOverlay';
 import { UserTaskComposer } from './UserTaskComposer';
 
 const log = debug('intelligence:tasks');
@@ -391,7 +393,7 @@ export default function IntelligenceTasksTab() {
         dispatch(setActiveThread(thread.id));
         void dispatch(loadThreads());
         void dispatch(loadThreadMessages(thread.id));
-        navigate('/chat');
+        navigate(chatThreadPath(thread.id));
 
         await chatSend({
           threadId: thread.id,
@@ -527,7 +529,7 @@ export default function IntelligenceTasksTab() {
     const title =
       thread?.title && thread.title.trim().length > 0
         ? thread.title
-        : `${t('intelligence.tasks.threadPrefix')} ${shortId(threadId)}`;
+        : t('intelligence.tasks.threadPrefix').replace('{thread}', shortId(threadId));
 
     boardEntries.push({ threadId, title, board, live: Boolean(liveBoard) });
   }
@@ -588,10 +590,7 @@ export default function IntelligenceTasksTab() {
             dispatch(setSelectedThread(tid));
             void dispatch(loadThreads());
             void dispatch(loadThreadMessages(tid));
-            // Pass the thread as an explicit open-intent so Conversations'
-            // mount-resume honors it (its default resume only considers
-            // General-tab threads and would otherwise drop this task session).
-            navigate('/chat', { state: { openThreadId: tid } });
+            navigate(chatThreadPath(tid));
           }}
           workingCardId={workingCardId}
           mutatingCardId={mutatingCardId}
@@ -781,6 +780,7 @@ function TaskSourceTaskList({
 }) {
   const { t } = useT();
   const navigate = useNavigate();
+  const location = useLocation();
   const sortedCards = useMemo(
     () => [...board.cards].sort((a, b) => a.order - b.order),
     [board.cards]
@@ -799,7 +799,7 @@ function TaskSourceTaskList({
         </div>
         <button
           type="button"
-          onClick={() => navigate('/settings/integrations')}
+          onClick={() => navigate('/settings/integrations', settingsNavState(location))}
           className="text-xs font-medium text-ocean-600 hover:text-ocean-700 dark:text-ocean-300 dark:hover:text-ocean-200">
           {t('conversations.taskKanban.sources.manage')}
         </button>

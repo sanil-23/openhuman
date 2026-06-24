@@ -42,7 +42,13 @@ pub async fn load_config_with_timeout() -> Result<Config, String> {
             normalize_loaded_config(&mut config).await;
             Ok(config)
         }
-        Ok(Err(e)) => Err(e.to_string()),
+        // Surface the full anyhow chain (`{:#}`), not just the top `with_context`
+        // line, so the underlying io error kind (e.g. `(os error 5)` access-denied
+        // / `(os error 32)` sharing-lock) reaches Sentry. Without it the config
+        // classifier and triage only ever see "Failed to read config file: <path>"
+        // and cannot tell a user-environment denial from an app-side race
+        // (#3962 / TAURI-RUST-DME).
+        Ok(Err(e)) => Err(format!("{e:#}")),
         Err(_) => Err("Config loading timed out".to_string()),
     }
 }
@@ -64,7 +70,13 @@ pub async fn reload_config_snapshot_with_timeout(snapshot: &Config) -> Result<Co
             normalize_loaded_config(&mut config).await;
             Ok(config)
         }
-        Ok(Err(e)) => Err(e.to_string()),
+        // Surface the full anyhow chain (`{:#}`), not just the top `with_context`
+        // line, so the underlying io error kind (e.g. `(os error 5)` access-denied
+        // / `(os error 32)` sharing-lock) reaches Sentry. Without it the config
+        // classifier and triage only ever see "Failed to read config file: <path>"
+        // and cannot tell a user-environment denial from an app-side race
+        // (#3962 / TAURI-RUST-DME).
+        Ok(Err(e)) => Err(format!("{e:#}")),
         Err(_) => Err("Config loading timed out".to_string()),
     }
 }
@@ -135,67 +147,93 @@ pub(crate) fn reset_local_data_remove_error(path: &Path, error: &std::io::Error)
 }
 
 pub(crate) fn reset_local_data_marker_remove_error(path: &Path, error: &std::io::Error) -> String {
+    // This is called for every root-level marker (active_workspace.toml,
+    // active_user.toml, …), so the wording is derived from the actual file
+    // name rather than hardcoded to one marker.
+    let marker_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("marker");
+
     if is_windows_file_lock_error(error) {
         tracing::warn!(
             marker = %path.display(),
             error = %error,
-            "[config] reset_local_data: Windows file lock blocked active workspace marker deletion"
+            "[config] reset_local_data: Windows file lock blocked marker deletion"
         );
         return format!(
-            "Failed to remove active workspace marker {} because it is locked by another OpenHuman window or process. Close all OpenHuman windows and try again. ({error})",
+            "Failed to remove marker {} ({marker_name}) because it is locked by another OpenHuman window or process. Close all OpenHuman windows and try again. ({error})",
             path.display()
         );
     }
 
-    format!("Failed to remove active workspace marker: {error}")
+    format!(
+        "Failed to remove marker {} ({marker_name}): {error}",
+        path.display()
+    )
 }
 
-/// Internal helper to reset local data by removing specific directories and markers.
+/// Internal helper to reset local data for the **active user only**.
+///
+/// Removes the current user's data directory (`~/.openhuman/users/<id>`) plus
+/// the two shared marker files at the root — `active_workspace.toml` and
+/// `active_user.toml` — so the next launch boots signed-out into the
+/// pre-login (`users/local`) scope.
+///
+/// It deliberately does **not** delete the shared root `~/.openhuman`
+/// directory: that root holds every user's `users/<other>` subtree, and
+/// wiping it during a single user's "Clear App Data" destroyed sibling
+/// accounts' data (the scoping bug this replaces). The root is left in place;
+/// only the current user's slice and the active markers are removed.
 pub(crate) async fn reset_local_data_for_paths(
     current_openhuman_dir: &Path,
     default_openhuman_dir: &Path,
 ) -> Result<RpcOutcome<serde_json::Value>, String> {
     let active_workspace_marker = active_workspace_marker_path(default_openhuman_dir);
+    let active_user_marker =
+        crate::openhuman::config::active_user_marker_path(default_openhuman_dir);
     tracing::debug!(
         current_dir = %current_openhuman_dir.display(),
         default_dir = %default_openhuman_dir.display(),
-        marker = %active_workspace_marker.display(),
-        "[config] reset_local_data: starting"
+        workspace_marker = %active_workspace_marker.display(),
+        user_marker = %active_user_marker.display(),
+        "[config] reset_local_data: starting (user-scoped)"
     );
 
     let mut removed_paths = Vec::new();
 
-    if active_workspace_marker.exists() {
-        if let Err(error) = tokio::fs::remove_file(&active_workspace_marker).await {
-            return Err(reset_local_data_marker_remove_error(
-                &active_workspace_marker,
-                &error,
-            ));
+    // Remove the two shared root-level markers so the current user is signed
+    // out and any non-default workspace pointer is dropped. Each is a single
+    // file under the root; the root itself is preserved for sibling users.
+    for marker in [&active_workspace_marker, &active_user_marker] {
+        if marker.exists() {
+            if let Err(error) = tokio::fs::remove_file(marker).await {
+                return Err(reset_local_data_marker_remove_error(marker, &error));
+            }
+            tracing::debug!(
+                marker = %marker.display(),
+                "[config] reset_local_data: removed marker"
+            );
+            removed_paths.push(marker.display().to_string());
         }
-        tracing::debug!(
-            marker = %active_workspace_marker.display(),
-            "[config] reset_local_data: removed active workspace marker"
-        );
-        removed_paths.push(active_workspace_marker.display().to_string());
     }
 
-    for target_dir in [current_openhuman_dir, default_openhuman_dir] {
-        if !target_dir.exists() {
-            tracing::debug!(
-                dir = %target_dir.display(),
-                "[config] reset_local_data: directory already absent"
-            );
-            continue;
-        }
-
-        if let Err(error) = tokio::fs::remove_dir_all(target_dir).await {
-            return Err(reset_local_data_remove_error(target_dir, &error));
+    // Remove only the active user's directory — NOT the shared root, which
+    // contains other users' `users/<id>` subtrees.
+    if current_openhuman_dir.exists() {
+        if let Err(error) = tokio::fs::remove_dir_all(current_openhuman_dir).await {
+            return Err(reset_local_data_remove_error(current_openhuman_dir, &error));
         }
         tracing::debug!(
-            dir = %target_dir.display(),
-            "[config] reset_local_data: removed directory"
+            dir = %current_openhuman_dir.display(),
+            "[config] reset_local_data: removed current user directory"
         );
-        removed_paths.push(target_dir.display().to_string());
+        removed_paths.push(current_openhuman_dir.display().to_string());
+    } else {
+        tracing::debug!(
+            dir = %current_openhuman_dir.display(),
+            "[config] reset_local_data: current user directory already absent"
+        );
     }
 
     Ok(RpcOutcome::new(
@@ -204,16 +242,11 @@ pub(crate) async fn reset_local_data_for_paths(
             "current_openhuman_dir": current_openhuman_dir.display().to_string(),
             "default_openhuman_dir": default_openhuman_dir.display().to_string(),
         }),
-        vec![
-            format!(
-                "reset local data for active config dir {}",
-                current_openhuman_dir.display()
-            ),
-            format!(
-                "removed default data dir {} if present",
-                default_openhuman_dir.display()
-            ),
-        ],
+        vec![format!(
+            "reset local data for active user dir {} (shared root {} preserved)",
+            current_openhuman_dir.display(),
+            default_openhuman_dir.display()
+        )],
     ))
 }
 
@@ -277,6 +310,23 @@ pub fn client_config_json(config: &Config) -> serde_json::Value {
         "cloud_providers": cloud_providers,
         "model_registry": model_registry,
         "primary_cloud": config.primary_cloud,
+        // #3767: authoritative, core-side decision telling the UI whether the
+        // managed-credits gate should be bypassed, per chat-mode tier. The chat
+        // header's "Quick" mode runs on the `chat` tier and "Reasoning" mode on
+        // the `reasoning` tier, so each is reported separately and the UI checks
+        // the tier the user actually selected. True for a tier when it runs on a
+        // non-managed provider the user funds themselves (BYO key / local /
+        // claude-code) with usable creds. Managed tiers that run anyway surface
+        // credit errors per-call.
+        "credits_bypass": {
+            "chat": crate::openhuman::inference::provider::factory::role_bypasses_managed_credits(
+                "chat", config,
+            ),
+            "reasoning":
+                crate::openhuman::inference::provider::factory::role_bypasses_managed_credits(
+                    "reasoning", config,
+                ),
+        },
         "chat_provider": config.chat_provider,
         "reasoning_provider": config.reasoning_provider,
         "agentic_provider": config.agentic_provider,
@@ -520,11 +570,18 @@ pub async fn get_data_paths() -> Result<RpcOutcome<serde_json::Value>, String> {
     let current_openhuman_dir = config_openhuman_dir(&config);
     let default_openhuman_dir = default_openhuman_dir();
     let active_workspace_marker = active_workspace_marker_path(&default_openhuman_dir);
+    // The active-user marker lives at the *shared* root `~/.openhuman`, not
+    // inside the per-user dir. A clear removes it (to sign the current user
+    // out) but must leave the sibling `users/<other>` dirs and the root
+    // itself intact — see `reset_local_data_for_paths`.
+    let active_user_marker =
+        crate::openhuman::config::active_user_marker_path(&default_openhuman_dir);
     Ok(RpcOutcome::new(
         json!({
             "current_openhuman_dir": current_openhuman_dir.display().to_string(),
             "default_openhuman_dir": default_openhuman_dir.display().to_string(),
             "active_workspace_marker_path": active_workspace_marker.display().to_string(),
+            "active_user_marker_path": active_user_marker.display().to_string(),
         }),
         vec![format!(
             "data paths resolved (current={}, default={})",
@@ -532,4 +589,111 @@ pub async fn get_data_paths() -> Result<RpcOutcome<serde_json::Value>, String> {
             default_openhuman_dir.display()
         )],
     ))
+}
+
+#[cfg(test)]
+mod loader_io_chain_tests {
+    use super::*;
+
+    // A directory at the config path is corruption, not a transient/denied read:
+    // the read site fails it fast with distinct wording, and the observability
+    // classifier MUST keep paging it (never demote to ConfigReadIoFailure). This
+    // guards the Codex P2 hole where a Windows directory-at-config surfaces the
+    // same `os error 5` shape as a real ACL denial (#3962).
+    #[tokio::test]
+    async fn config_directory_pages_and_is_not_demoted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        std::fs::create_dir(&config_path).unwrap();
+
+        let snapshot = Config {
+            config_path: config_path.clone(),
+            workspace_dir: tmp.path().join("workspace"),
+            ..Default::default()
+        };
+
+        let err = reload_config_snapshot_with_timeout(&snapshot)
+            .await
+            .expect_err("a directory at the config path must fail");
+
+        assert!(
+            err.contains("is a directory") || err.contains("not a file"),
+            "directory-at-config must report a distinct, non-read error: {err}"
+        );
+        assert_ne!(
+            crate::core::observability::expected_error_kind(&err),
+            Some(crate::core::observability::ExpectedErrorKind::ConfigReadIoFailure),
+            "a directory at the config path is corruption — it must keep paging, not demote: {err}"
+        );
+    }
+
+    // load_config_with_timeout resolves the process-global OPENHUMAN_WORKSPACE,
+    // so serialize against the other env-mutating config tests. Exercises the
+    // load_or_init directory guard + the `Ok(Err) => format!("{e:#}")` arm.
+    #[tokio::test]
+    async fn load_config_with_timeout_rejects_directory_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        std::fs::create_dir(&config_path).unwrap();
+
+        let _g = crate::openhuman::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var("OPENHUMAN_WORKSPACE").ok();
+        std::env::set_var("OPENHUMAN_WORKSPACE", tmp.path().to_str().unwrap());
+
+        let result = load_config_with_timeout().await;
+
+        match prev {
+            Some(v) => std::env::set_var("OPENHUMAN_WORKSPACE", v),
+            None => std::env::remove_var("OPENHUMAN_WORKSPACE"),
+        }
+
+        let err = result.expect_err("a directory at the config path must fail");
+        assert!(
+            err.contains("is a directory") || err.contains("not a file"),
+            "directory-at-config must report a distinct, non-read error: {err}"
+        );
+    }
+
+    // The #3962 keystone: a genuine read failure on a regular file must surface
+    // the full anyhow chain (`{:#}`) — the read context PLUS the underlying io
+    // cause (`os error N`) — through the RPC String boundary, not just the top
+    // `with_context` line. Triggered portably with a 0o000 (unreadable) file;
+    // skipped under root, which ignores file permissions.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn load_surfaces_full_io_chain_on_unreadable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(&config_path, "default_temperature = 0.5\n").unwrap();
+        std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Root bypasses file-permission checks — the read would succeed and the
+        // assertion would be meaningless, so skip in that environment.
+        if std::fs::read_to_string(&config_path).is_ok() {
+            return;
+        }
+
+        let snapshot = Config {
+            config_path: config_path.clone(),
+            workspace_dir: tmp.path().join("workspace"),
+            ..Default::default()
+        };
+
+        let err = reload_config_snapshot_with_timeout(&snapshot)
+            .await
+            .expect_err("an unreadable config file must fail");
+
+        assert!(
+            err.contains("reading config.toml from"),
+            "error must carry the read context: {err}"
+        );
+        assert!(
+            err.contains("os error"),
+            "error must carry the underlying io cause via {{:#}} (#3962): {err}"
+        );
+    }
 }

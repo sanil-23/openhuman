@@ -86,6 +86,12 @@ const RESOURCE_CATALOG: &[PromptResource] = &[
         content: include_str!("../agent_registry/agents/markets_agent/prompt.md"),
     },
     PromptResource {
+        uri: "openhuman://prompts/agents/tinyplace_agent",
+        name: "tinyplace_agent",
+        description: "Specialist worker for tiny.place identity, marketplace, messaging, and jobs.",
+        content: include_str!("../tinyplace/agent/prompt.md"),
+    },
+    PromptResource {
         uri: "openhuman://prompts/agents/tools_agent",
         name: "tools_agent",
         description: "Generalist worker with access to the full tool surface.",
@@ -110,6 +116,12 @@ const RESOURCE_CATALOG: &[PromptResource] = &[
         content: include_str!("../agent_registry/agents/researcher/prompt.md"),
     },
     PromptResource {
+        uri: "openhuman://prompts/agents/context_scout",
+        name: "context_scout",
+        description: "Read-only pre-flight worker that gathers context (memory, goals, integrations, web) and returns a bounded context bundle.",
+        content: include_str!("../agent_registry/agents/context_scout/prompt.md"),
+    },
+    PromptResource {
         uri: "openhuman://prompts/agents/critic",
         name: "critic",
         description: "Read-only worker that critiques plans and outputs.",
@@ -126,6 +138,12 @@ const RESOURCE_CATALOG: &[PromptResource] = &[
         name: "archivist",
         description: "Background worker that distils conversations into persistent memory.",
         content: include_str!("../agent_registry/agents/archivist/prompt.md"),
+    },
+    PromptResource {
+        uri: "openhuman://prompts/agents/goals_agent",
+        name: "goals_agent",
+        description: "Background curator that keeps the user's long-term goals list fresh.",
+        content: include_str!("../agent_registry/agents/goals_agent/prompt.md"),
     },
     PromptResource {
         uri: "openhuman://prompts/agents/trigger_triage",

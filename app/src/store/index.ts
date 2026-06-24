@@ -36,6 +36,7 @@ import { pttReducer } from './pttSlice';
 import socketReducer from './socketSlice';
 import themeReducer from './themeSlice';
 import threadReducer from './threadSlice';
+import userErrorsReducer from './userErrorsSlice';
 import { userScopedStorage } from './userScopedStorage';
 
 // Persisted slices write through `userScopedStorage` so each user's blob
@@ -96,7 +97,14 @@ const persistedLocaleReducer = persistReducer(localePersistConfig, localeReducer
 const themePersistConfig = {
   key: 'theme',
   storage: localStorageAdapter,
-  whitelist: ['mode', 'tabBarLabels', 'fontSize', 'agentMessageViewMode', 'developerMode'],
+  whitelist: [
+    'mode',
+    'tabBarLabels',
+    'fontSize',
+    'agentMessageViewMode',
+    'developerMode',
+    'hideAgentInsights',
+  ],
 };
 const persistedThemeReducer = persistReducer(themePersistConfig, themeReducer);
 
@@ -116,7 +124,7 @@ const persistedChannelConnectionsReducer = persistReducer(
 // Issue #2044 — `activeAccountId` is deliberately NOT persisted. It is a
 // per-session UX selection: persisting it caused provider webviews to
 // auto-surface on dev hot reload / app restart without an explicit user
-// click, because `Accounts.tsx` immediately mounts `WebviewHost` for the
+// click, because the desktop shell immediately mounts `WebviewHost` for the
 // active account and `WebviewHost` calls `openWebviewAccount` on mount.
 // `lastActiveAccountId` is still persisted so the off-screen MRU prewarm
 // can warm the same account in the background — that webview stays
@@ -220,6 +228,10 @@ export const store = configureStore({
     persona: persistedPersonaReducer,
     theme: persistedThemeReducer,
     ptt: persistedPttReducer,
+    // In-memory only (not persisted): survives route changes / background-job
+    // completion, resets on restart + user switch. Durable storage is a #3931
+    // follow-up.
+    userErrors: userErrorsReducer,
   },
   middleware: getDefaultMiddleware => {
     const middleware = getDefaultMiddleware({

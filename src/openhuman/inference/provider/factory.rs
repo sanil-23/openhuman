@@ -24,7 +24,9 @@
 //!
 //! Unknown slugs and missing-creds configurations produce actionable errors.
 
-use crate::openhuman::config::schema::cloud_providers::AuthStyle;
+use crate::openhuman::config::schema::cloud_providers::{
+    builtin_cloud_supports_responses_api, is_builtin_cloud_slug, AuthStyle,
+};
 use crate::openhuman::config::Config;
 use crate::openhuman::credentials::AuthService;
 use crate::openhuman::inference::provider::claude_agent_sdk::subprocess::ClaudeAgentSdkProvider;
@@ -47,6 +49,8 @@ pub const OLLAMA_PROVIDER_PREFIX: &str = "ollama:";
 pub const LM_STUDIO_PROVIDER_PREFIX: &str = "lmstudio:";
 /// Prefix for MLX-compatible local providers: `"mlx:<model>"`.
 pub const MLX_PROVIDER_PREFIX: &str = "mlx:";
+/// Prefix for OMLX local providers: `"omlx:<model>"`.
+pub const OMLX_PROVIDER_PREFIX: &str = "omlx:";
 /// Prefix for generic local OpenAI-compatible providers: `"local-openai:<model>"`.
 pub const LOCAL_OPENAI_PROVIDER_PREFIX: &str = "local-openai:";
 /// Prefix for the Claude Agent SDK subprocess provider: `"claude_agent_sdk:<model>"`.
@@ -59,6 +63,16 @@ pub const CLAUDE_AGENT_SDK_PROVIDER: &str = "claude_agent_sdk";
 /// `create_chat_provider_from_string` to produce a clear configuration error
 /// instead of silently routing through the managed OpenHuman backend.
 pub const BYOK_INCOMPLETE_SENTINEL: &str = "__byok_incomplete__";
+
+/// Interpolation-free substring of the empty-model bail emitted by
+/// [`make_cloud_provider_by_slug`] when a `<slug>` provider string carries
+/// no model and the `cloud_providers` entry has no `default_model` (the
+/// #2784 guard). The Sentry-demotion + user-copy classifier
+/// [`super::is_provider_config_rejection_message`] keys on this exact literal,
+/// and a round-trip test in `factory_tests.rs` asserts the bail body still
+/// contains it — so a wording drift fails CI instead of silently re-flooding
+/// Sentry (TAURI-RUST-GKV).
+pub(crate) const NO_MODEL_CONFIGURED_ANCHOR: &str = "resolved to an empty model id";
 
 fn is_abstract_tier_model(model: &str) -> bool {
     use crate::openhuman::config::{
@@ -289,9 +303,80 @@ pub fn provider_for_role(role: &str, config: &Config) -> String {
     }
 }
 
+/// #3767: Whether the OpenHuman managed-credits gate should be bypassed for a
+/// single workload role.
+///
+/// Returns true when `role` resolves (via [`provider_for_role`]) to a non-managed
+/// provider the user funds themselves — a BYO cloud key (incl. OpenAI OAuth), a
+/// local runtime, or claude-code — with usable credentials. When the role is on
+/// the OpenHuman managed backend, or a BYO route has no usable key, it returns
+/// false (the gate stays on; #3767: "BYO key present but invalid/unverified →
+/// still gated").
+///
+/// The gate is evaluated per-tier so the UI can check the tier the user actually
+/// selected: the chat header's "Quick" mode runs on the `chat` tier and
+/// "Reasoning" mode on the `reasoning` tier, so each is checked respectively.
+/// These per-role results are surfaced under `credits_bypass` in the
+/// client-config snapshot. Tiers that stay managed and run anyway surface the
+/// per-call `USER_INSUFFICIENT_CREDITS` (402) error reactively.
+pub fn role_bypasses_managed_credits(role: &str, config: &Config) -> bool {
+    let resolved = provider_for_role(role, config);
+    let r = resolved.trim();
+    let is_managed =
+        r.is_empty() || r == "cloud" || r == PROVIDER_OPENHUMAN || r == BYOK_INCOMPLETE_SENTINEL;
+    let usable_byo = !is_managed && route_has_usable_credentials(r, config);
+    log::debug!(
+        "[billing] role_bypasses_managed_credits role={role} resolved={resolved} \
+         is_managed={is_managed} usable_byo={usable_byo}"
+    );
+    usable_byo
+}
+
+/// True when a resolved chat-tier provider string can actually run on the
+/// user's own funding: local runtimes / claude-code carry their own creds; a
+/// concrete cloud slug requires a non-empty stored key. Managed/sentinel
+/// strings are filtered by the caller and never reach here as "usable".
+fn route_has_usable_credentials(resolved: &str, config: &Config) -> bool {
+    let r = resolved.trim();
+    // Local runtimes (ollama/lmstudio/mlx/local-openai) and the local CLI
+    // delegates carry their own credentials / run on-device.
+    if crate::openhuman::inference::local::profile::is_local_provider_string(r)
+        || r.starts_with(crate::openhuman::inference::provider::claude_code::PROVIDER_PREFIX)
+        || r == CLAUDE_AGENT_SDK_PROVIDER
+        || r.starts_with(CLAUDE_AGENT_SDK_PREFIX)
+    {
+        return true;
+    }
+    // Concrete cloud slug "<slug>:<model>" — require a usable stored key.
+    if let Some((slug, _)) = r.split_once(':') {
+        let slug = slug.trim();
+        if !slug.is_empty() {
+            // Don't silently swallow auth-store / OAuth lookup failures — a
+            // transient Err would otherwise keep the credits gate on for a
+            // valid BYO setup with no diagnostics. Log and treat as not-usable.
+            match lookup_key_for_slug(slug, config) {
+                Ok(key) => {
+                    let usable = !key.trim().is_empty();
+                    log::debug!(
+                        "[billing] route_has_usable_credentials slug={slug} usable={usable}"
+                    );
+                    return usable;
+                }
+                Err(e) => {
+                    log::debug!(
+                        "[billing] route_has_usable_credentials slug={slug} lookup_error={e}"
+                    );
+                    return false;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Find the first BYOK cloud provider string configured across all workload
-/// routes, skipping local providers (ollama, lmstudio) and managed-backend
-/// sentinels ("openhuman", "cloud", empty).
+/// routes, skipping local providers and managed-backend sentinels
+/// ("openhuman", "cloud", empty).
 ///
 /// Returns `None` when no BYOK cloud provider is configured, in which case
 /// the caller should fall through to `resolve_primary_cloud_provider_string`.
@@ -315,6 +400,7 @@ pub(crate) fn resolve_byok_fallback_provider_string(config: &Config) -> Option<S
         if s.starts_with(OLLAMA_PROVIDER_PREFIX)
             || s.starts_with(LM_STUDIO_PROVIDER_PREFIX)
             || s.starts_with(MLX_PROVIDER_PREFIX)
+            || s.starts_with(OMLX_PROVIDER_PREFIX)
             || s.starts_with(LOCAL_OPENAI_PROVIDER_PREFIX)
         {
             continue;
@@ -337,14 +423,14 @@ pub(crate) fn resolve_byok_fallback_provider_string(config: &Config) -> Option<S
 /// detached `tokio::spawn`s — a thread/task-local would not reach them.
 ///
 /// Because it is global, tests that install an override MUST run serially
-/// (hold the shared lock in [`crate::openhuman::workflows::e2e_run_tests`])
 /// and clear it via the returned guard. Inert in production: the check below
-/// is `#[cfg(test)]`, so the override is never consulted in release builds.
-#[cfg(test)]
-pub(crate) mod test_provider_override {
+/// is gated on `cfg(test)` or the off-by-default `e2e-test-support` feature,
+/// so the override is never consulted in shipped builds.
+#[cfg(any(test, feature = "e2e-test-support"))]
+pub mod test_provider_override {
     use super::Provider;
     use crate::openhuman::inference::provider::traits::{
-        ChatRequest, ChatResponse, ProviderCapabilities,
+        ChatRequest, ChatResponse, PromptCacheCapabilities, ProviderCapabilities,
     };
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex, OnceLock};
@@ -360,11 +446,11 @@ pub(crate) mod test_provider_override {
 
     /// Install a mock provider; the returned guard clears it on drop.
     #[must_use]
-    pub(crate) fn install(provider: Arc<dyn Provider>) -> InstallGuard {
+    pub fn install(provider: Arc<dyn Provider>) -> InstallGuard {
         *cell().lock().unwrap() = Some(provider);
         InstallGuard
     }
-    pub(crate) struct InstallGuard;
+    pub struct InstallGuard;
     impl Drop for InstallGuard {
         fn drop(&mut self) {
             *cell().lock().unwrap() = None;
@@ -382,6 +468,9 @@ pub(crate) mod test_provider_override {
     impl Provider for ProviderHandle {
         fn capabilities(&self) -> ProviderCapabilities {
             self.0.capabilities()
+        }
+        fn prompt_cache_capabilities(&self) -> PromptCacheCapabilities {
+            self.0.prompt_cache_capabilities()
         }
         async fn chat_with_system(
             &self,
@@ -411,8 +500,9 @@ pub fn create_chat_provider(
     config: &Config,
 ) -> anyhow::Result<(Box<dyn Provider>, String)> {
     // Test-only: a scripted mock provider injected by an e2e test wins over
-    // anything config-derived. Never compiled into release builds.
-    #[cfg(test)]
+    // anything config-derived. Gated on cfg(test) / the off-by-default
+    // `e2e-test-support` feature; never consulted in shipped builds.
+    #[cfg(any(test, feature = "e2e-test-support"))]
     if let Some(p) = test_provider_override::current() {
         return Ok((
             Box::new(test_provider_override::ProviderHandle(p)),
@@ -561,6 +651,19 @@ pub fn create_chat_provider_from_string(
         return make_mlx_provider(&model, temperature_override, config);
     }
 
+    if let Some(model_with_temp) = p.strip_prefix(OMLX_PROVIDER_PREFIX) {
+        let (model, temperature_override) = split_model_and_temperature(model_with_temp);
+        if model.is_empty() {
+            anyhow::bail!(
+                "[chat-factory] provider string '{}' for role '{}' has an empty model — \
+                 use 'omlx:<model-id>'",
+                p,
+                role
+            );
+        }
+        return make_omlx_provider(&model, temperature_override, config);
+    }
+
     if let Some(model_with_temp) = p.strip_prefix(LOCAL_OPENAI_PROVIDER_PREFIX) {
         let (model, temperature_override) = split_model_and_temperature(model_with_temp);
         if model.is_empty() {
@@ -609,7 +712,7 @@ pub fn create_chat_provider_from_string(
     // than an opaque parse failure.
     anyhow::bail!(
         "[chat-factory] unrecognised provider string '{}' for role '{}'. \
-         Valid forms: openhuman, ollama:<model>, lmstudio:<model>, mlx:<model>, \
+         Valid forms: openhuman, ollama:<model>, lmstudio:<model>, mlx:<model>, omlx:<model>, \
          local-openai:<model>, claude_agent_sdk, claude_agent_sdk:<model>, <slug>:<model>. \
          Configured slugs: [{}]",
         p,
@@ -681,6 +784,17 @@ pub(crate) fn create_local_chat_provider_from_string(
         return make_mlx_provider(&model, temperature_override, config);
     }
 
+    if let Some(model_with_temp) = p.strip_prefix(OMLX_PROVIDER_PREFIX) {
+        let (model, temperature_override) = split_model_and_temperature(model_with_temp);
+        if model.is_empty() {
+            anyhow::bail!(
+                "[chat-factory] provider string '{}' has an empty model — use 'omlx:<model-id>'",
+                p
+            );
+        }
+        return make_omlx_provider(&model, temperature_override, config);
+    }
+
     if let Some(model_with_temp) = p.strip_prefix(LOCAL_OPENAI_PROVIDER_PREFIX) {
         let (model, temperature_override) = split_model_and_temperature(model_with_temp);
         if model.is_empty() {
@@ -694,7 +808,7 @@ pub(crate) fn create_local_chat_provider_from_string(
 
     anyhow::bail!(
         "[chat-factory] '{}' is not a supported local provider string. Valid local forms: \
-         ollama:<model>, lmstudio:<model>, mlx:<model>, local-openai:<model>",
+         ollama:<model>, lmstudio:<model>, mlx:<model>, omlx:<model>, local-openai:<model>",
         p
     );
 }
@@ -1164,6 +1278,59 @@ fn make_mlx_provider(
     Ok((Box::new(provider), model.to_string()))
 }
 
+/// Build an OMLX local provider.
+///
+/// OMLX servers expose an OpenAI v1-compatible endpoint and require a Bearer API key.
+/// Default URL: `http://127.0.0.1:8000/v1` (override via `OMLX_SERVER_URL` env
+/// or `local_ai.base_url` when provider is set to "omlx").
+fn make_omlx_provider(
+    model: &str,
+    temperature_override: Option<f64>,
+    config: &Config,
+) -> anyhow::Result<(Box<dyn Provider>, String)> {
+    use crate::openhuman::inference::local::profile::{LocalProviderKind, OMLX_PROFILE};
+
+    let endpoint = std::env::var("OMLX_SERVER_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| config.local_ai.base_url.clone())
+        .unwrap_or_else(|| OMLX_PROFILE.default_base_url.to_string());
+    let api_key = config.local_ai.api_key.as_deref().unwrap_or("");
+    if api_key.trim().is_empty() {
+        log::warn!(
+            "[providers][chat-factory] omlx: no api_key configured — OMLX requires a Bearer key; \
+             requests will likely 401"
+        );
+    }
+    log::info!(
+        "[providers][chat-factory] building omlx provider model={} endpoint_host={} temp_override={:?}",
+        model,
+        redact_endpoint(&endpoint),
+        temperature_override
+    );
+    let auth = if api_key.trim().is_empty() {
+        CompatAuthStyle::None
+    } else {
+        CompatAuthStyle::Bearer
+    };
+    let provider = OpenAiCompatibleProvider::new_no_responses_fallback(
+        "omlx",
+        &endpoint,
+        if api_key.trim().is_empty() {
+            None
+        } else {
+            Some(api_key)
+        },
+        auth,
+    )
+    .with_temperature_unsupported_models(config.temperature_unsupported_models.clone())
+    .with_temperature_override(temperature_override)
+    .with_native_tool_calling(false)
+    .with_vision(false)
+    .with_local_provider_kind(LocalProviderKind::Omlx);
+    Ok((Box::new(provider), model.to_string()))
+}
+
 /// Build a generic local OpenAI-compatible provider.
 ///
 /// Points at any local server that speaks the OpenAI chat-completions API
@@ -1357,14 +1524,36 @@ fn make_cloud_provider_by_slug(
                 redact_endpoint(&openai_codex_routing.endpoint),
                 openai_codex_routing.account_id.is_some()
             );
-            let mut provider = OpenAiCompatibleProvider::new(
-                slug,
-                &openai_codex_routing.endpoint,
-                (!key.trim().is_empty()).then_some(key.as_str()),
-                CompatAuthStyle::Bearer,
-            )
-            .with_temperature_unsupported_models(unsupported.to_vec())
-            .with_temperature_override(temperature_override);
+            // Enable the chat-completions-404 → `/v1/responses` fallback only
+            // for providers that actually expose the Responses API. Built-in
+            // chat-completions-only providers (DeepSeek, Groq, Mistral, …) do
+            // not — hitting their non-existent `/responses` guarantees a second
+            // 404 and floods Sentry with an empty-body "<provider> Responses
+            // API error:" event (TAURI-RUST-5EN, same class as the
+            // local-provider TAURI-RUST-59Y fix). OpenAI keeps the fallback
+            // (genuine `/responses`), and so do custom / unknown slugs, whose
+            // endpoint may be a real OpenAI proxy.
+            let responses_fallback =
+                !is_builtin_cloud_slug(slug) || builtin_cloud_supports_responses_api(slug);
+            let credential = (!key.trim().is_empty()).then_some(key.as_str());
+            let base_provider = if responses_fallback {
+                OpenAiCompatibleProvider::new(
+                    slug,
+                    &openai_codex_routing.endpoint,
+                    credential,
+                    CompatAuthStyle::Bearer,
+                )
+            } else {
+                OpenAiCompatibleProvider::new_no_responses_fallback(
+                    slug,
+                    &openai_codex_routing.endpoint,
+                    credential,
+                    CompatAuthStyle::Bearer,
+                )
+            };
+            let mut provider = base_provider
+                .with_temperature_unsupported_models(unsupported.to_vec())
+                .with_temperature_override(temperature_override);
             if let Some(account_id) = openai_codex_routing.account_id.as_deref() {
                 provider = provider.with_extra_header(OPENAI_CODEX_ACCOUNT_HEADER, account_id);
             }

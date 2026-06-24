@@ -118,6 +118,12 @@ pub(super) struct AnalyticsSettingsUpdate {
 #[derive(Debug, Deserialize)]
 pub(super) struct MeetSettingsUpdate {
     pub(super) auto_orchestrator_handoff: Option<bool>,
+    /// Calendar auto-join policy as a string: `ask_each_time` | `always` | `never`.
+    pub(super) auto_join_policy: Option<String>,
+    /// Post-call summary policy as a string: `ask` | `always` | `never`.
+    pub(super) auto_summarize_policy: Option<String>,
+    pub(super) listen_only_default: Option<bool>,
+    pub(super) ingest_backend_transcripts: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,6 +155,7 @@ pub(super) struct LocalAiSettingsUpdate {
     pub(super) usage_heartbeat: Option<bool>,
     pub(super) usage_learning_reflection: Option<bool>,
     pub(super) usage_subconscious: Option<bool>,
+    pub(super) api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

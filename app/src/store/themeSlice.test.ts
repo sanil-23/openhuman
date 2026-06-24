@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import themeReducer, {
   FONT_SIZE_PX,
   type FontSize,
+  selectHideAgentInsights,
   setAgentMessageViewMode,
   setFontSize,
+  setHideAgentInsights,
   setTabBarLabels,
   setThemeMode,
 } from './themeSlice';
@@ -15,9 +17,9 @@ describe('themeSlice', () => {
     expect(state.fontSize).toBe('medium');
   });
 
-  it('defaults assistant message rendering to bubbles', () => {
+  it('defaults assistant message rendering to plain text', () => {
     const state = themeReducer(undefined, { type: '@@INIT' });
-    expect(state.agentMessageViewMode).toBe('bubbles');
+    expect(state.agentMessageViewMode).toBe('text');
   });
 
   it('updates fontSize via setFontSize', () => {
@@ -37,8 +39,9 @@ describe('themeSlice', () => {
       mode: 'dark',
       tabBarLabels: 'always',
       fontSize: 'xlarge',
-      agentMessageViewMode: 'bubbles',
+      agentMessageViewMode: 'text',
       developerMode: false,
+      hideAgentInsights: false,
     });
   });
 
@@ -46,6 +49,20 @@ describe('themeSlice', () => {
     let state = themeReducer(undefined, { type: '@@INIT' });
     state = themeReducer(state, setAgentMessageViewMode('text'));
     expect(state.agentMessageViewMode).toBe('text');
+  });
+
+  it('defaults hideAgentInsights to false and toggles it', () => {
+    let state = themeReducer(undefined, { type: '@@INIT' });
+    expect(state.hideAgentInsights).toBe(false);
+    expect(selectHideAgentInsights({ theme: state })).toBe(false);
+
+    state = themeReducer(state, setHideAgentInsights(true));
+    expect(state.hideAgentInsights).toBe(true);
+    expect(selectHideAgentInsights({ theme: state })).toBe(true);
+  });
+
+  it('falls back to false when hideAgentInsights is absent from persisted state', () => {
+    expect(selectHideAgentInsights({ theme: {} as never })).toBe(false);
   });
 
   it('maps every font size to a concrete px value', () => {

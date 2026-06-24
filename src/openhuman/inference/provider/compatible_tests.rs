@@ -1544,6 +1544,50 @@ fn convert_messages_for_native_tool_call_without_extra_content_stays_none() {
         .is_none());
 }
 
+/// INVARIANT (TAURI-RUST-4PK / 4PJ): a PARALLEL multi-`functionCall` assistant
+/// turn reloaded from history must echo a non-empty `thought_signature` on
+/// EVERY part of the rebuilt outbound payload — not just the first. The stored
+/// JSON here is the exact shape `build_native_assistant_history` now emits (per
+/// the writer-side test in `agent::harness::parse_tests`). Before the fix the
+/// writer dropped `extra_content`, so a reloaded multi-call turn went out with
+/// missing signatures and Gemini 400'd ("Function call is missing a
+/// thought_signature in functionCall parts"). Covers both the non-stream and
+/// streaming paths since both persist through the single native history writer.
+#[test]
+fn convert_messages_for_native_echoes_signature_on_every_parallel_call() {
+    let stored = r#"{"content":"on it","tool_calls":[
+        {"id":"call_a","name":"shell","arguments":"{}","extra_content":{"google":{"thought_signature":"SIG_A"}}},
+        {"id":"call_b","name":"read","arguments":"{}","extra_content":{"google":{"thought_signature":"SIG_B"}}}
+    ]}"#;
+    let input = vec![
+        ChatMessage::assistant(stored),
+        ChatMessage::tool(r#"{"tool_call_id":"call_a","content":"done"}"#),
+        ChatMessage::tool(r#"{"tool_call_id":"call_b","content":"done"}"#),
+    ];
+    let converted = OpenAiCompatibleProvider::convert_messages_for_native(&input);
+    let tool_calls = converted[0]
+        .tool_calls
+        .as_ref()
+        .expect("assistant tool_calls survive the reload");
+    assert_eq!(tool_calls.len(), 2, "both parallel calls survive");
+
+    let wire = serde_json::to_value(tool_calls).unwrap();
+    for (idx, expected) in ["SIG_A", "SIG_B"].iter().enumerate() {
+        let sig = wire
+            .pointer(&format!("/{idx}/extra_content/google/thought_signature"))
+            .and_then(|v| v.as_str());
+        assert_eq!(
+            sig,
+            Some(*expected),
+            "functionCall part {idx} must echo its own thought_signature on the wire"
+        );
+        assert!(
+            sig.is_some_and(|s| !s.is_empty()),
+            "functionCall part {idx} thought_signature must be non-empty"
+        );
+    }
+}
+
 /// Streaming: Gemini sends the thought_signature in the tool-call delta's
 /// `extra_content` on the first chunk. The accumulator must preserve it onto the
 /// aggregated tool call so it reaches history (TAURI-RUST-4PK).
@@ -3630,4 +3674,113 @@ async fn effective_context_window_lmstudio_falls_back_when_native_unavailable() 
         p.effective_context_window("unknown-local-model").await,
         Some(8_192)
     );
+}
+
+// ----------------------------------------------------------
+// Prompt-cache capability model (#3939)
+// ----------------------------------------------------------
+
+#[test]
+fn prompt_cache_caps_openai_style_for_known_slugs() {
+    for slug in ["openai", "openrouter", "gmi"] {
+        let caps = super::prompt_cache_for_compatible_slug(slug);
+        assert!(
+            caps.automatic_prefix_cache,
+            "{slug} should advertise automatic prefix cache"
+        );
+        assert!(
+            caps.usage_reports_cached_input,
+            "{slug} should report cached input tokens"
+        );
+        assert!(
+            !caps.explicit_cache_control,
+            "OpenAI-compatible chat API has no cache-control field"
+        );
+        assert!(
+            !caps.cache_key_grouping,
+            "thread/session grouping is OpenHuman-backend-only"
+        );
+    }
+}
+
+#[test]
+fn prompt_cache_caps_match_slug_family_variants() {
+    // Case-insensitive, leading-segment family match so renamed/suffixed slugs
+    // still resolve to the verified family.
+    for slug in ["OpenAI", "openai:gpt-5.1", "openai/responses", "openai-eu"] {
+        let caps = super::prompt_cache_for_compatible_slug(slug);
+        assert!(
+            caps.automatic_prefix_cache && caps.usage_reports_cached_input,
+            "{slug} should resolve to the openai family"
+        );
+    }
+}
+
+#[test]
+fn prompt_cache_caps_conservative_for_unknown_or_custom_slugs() {
+    // Custom / local / unverified providers must not advertise caching — they
+    // get the all-false default so we never send or assume unsupported behaviour.
+    let conservative =
+        crate::openhuman::inference::provider::traits::PromptCacheCapabilities::default();
+    for slug in ["custom_openai", "lmstudio", "deepseek", "mystery-proxy", ""] {
+        assert_eq!(
+            super::prompt_cache_for_compatible_slug(slug),
+            conservative,
+            "{slug} must stay conservative"
+        );
+    }
+}
+
+#[test]
+fn compatible_provider_declares_prompt_cache_from_its_slug() {
+    let conservative =
+        crate::openhuman::inference::provider::traits::PromptCacheCapabilities::default();
+
+    let openai = make_provider("openai", "https://api.openai.com", Some("k"));
+    let caps = openai.prompt_cache_capabilities();
+    assert!(
+        caps.automatic_prefix_cache && caps.usage_reports_cached_input,
+        "openai provider must advertise OpenAI-style caching"
+    );
+
+    let custom = make_provider("custom_openai", "https://proxy.example", Some("k"));
+    assert_eq!(
+        custom.prompt_cache_capabilities(),
+        conservative,
+        "unknown custom provider must stay conservative"
+    );
+}
+
+#[test]
+fn extract_usage_normalizes_openai_cached_prompt_tokens() {
+    // Regression: an OpenAI-compatible usage block carrying cached prefix tokens
+    // (`prompt_tokens_details.cached_tokens`) must normalize into
+    // `UsageInfo.cached_input_tokens` so cached-prefix cost accounting is exact.
+    let json = r#"{
+        "choices":[{"message":{"role":"assistant","content":"hi"}}],
+        "usage":{"prompt_tokens":1000,"completion_tokens":20,"total_tokens":1020,
+                 "prompt_tokens_details":{"cached_tokens":768}}
+    }"#;
+    let resp: ApiChatResponse = serde_json::from_str(json).expect("parse api response");
+    let usage = OpenAiCompatibleProvider::extract_usage(&resp).expect("usage present");
+    assert_eq!(usage.input_tokens, 1000);
+    assert_eq!(usage.output_tokens, 20);
+    assert_eq!(
+        usage.cached_input_tokens, 768,
+        "cached prefix tokens must be normalized into cached_input_tokens"
+    );
+}
+
+#[test]
+fn extract_usage_defaults_cached_tokens_to_zero_when_absent() {
+    // A provider that omits cache details must yield cached_input_tokens = 0,
+    // keeping cost accounting coherent (full prompt charged at the input rate).
+    let json = r#"{
+        "choices":[{"message":{"role":"assistant","content":"hi"}}],
+        "usage":{"prompt_tokens":500,"completion_tokens":10,"total_tokens":510}
+    }"#;
+    let resp: ApiChatResponse = serde_json::from_str(json).expect("parse api response");
+    let usage = OpenAiCompatibleProvider::extract_usage(&resp).expect("usage present");
+    assert_eq!(usage.cached_input_tokens, 0);
+    assert_eq!(usage.input_tokens, 500);
 }

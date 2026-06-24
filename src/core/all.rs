@@ -136,6 +136,8 @@ fn build_registered_controllers() -> Vec<RegisteredController> {
         .extend(crate::openhuman::agent_experience::all_agent_experience_registered_controllers());
     // System and process health monitoring
     controllers.extend(crate::openhuman::health::all_health_registered_controllers());
+    // One-time first-run initialization (Python/spaCy/Node provisioning)
+    controllers.extend(crate::openhuman::harness_init::all_harness_init_registered_controllers());
     // Diagnostic tools
     controllers.extend(crate::openhuman::doctor::all_doctor_registered_controllers());
     // Secret storage and encryption
@@ -215,6 +217,8 @@ fn build_registered_controllers() -> Vec<RegisteredController> {
     controllers.extend(crate::openhuman::tool_registry::all_tool_registry_registered_controllers());
     // Document and knowledge graph storage
     controllers.extend(crate::openhuman::memory::all_memory_registered_controllers());
+    // Long-term goals list (editable list + turn-based enrichment agent)
+    controllers.extend(crate::openhuman::memory_goals::all_memory_goals_registered_controllers());
     // Memory tree ingestion layer (#707 — canonicalised chunks with provenance)
     controllers.extend(crate::openhuman::memory_tree::all_memory_tree_registered_controllers());
     // Memory tree retrieval layer (#710 — LLM-callable read tools over the tree)
@@ -261,6 +265,9 @@ fn build_registered_controllers() -> Vec<RegisteredController> {
     controllers.extend(crate::openhuman::voice::all_voice_registered_controllers());
     // Background awareness and autonomous tasks
     controllers.extend(crate::openhuman::subconscious::all_subconscious_registered_controllers());
+    controllers.extend(
+        crate::openhuman::subconscious_triggers::all_subconscious_triggers_registered_controllers(),
+    );
     // Webhook tunnel management
     controllers.extend(crate::openhuman::webhooks::all_webhooks_registered_controllers());
     // Core binary update management
@@ -309,6 +316,10 @@ fn build_registered_controllers() -> Vec<RegisteredController> {
     // Git-worktree isolation manager — list / status / diff / remove worker worktrees (#3376)
     controllers
         .extend(crate::openhuman::agent_orchestration::all_worktree_registered_controllers());
+    // User-driven cancel of detached background sub-agents (#3711)
+    controllers.extend(
+        crate::openhuman::agent_orchestration::all_subagent_control_registered_controllers(),
+    );
     controllers
 }
 
@@ -324,6 +335,9 @@ fn build_internal_only_controllers() -> Vec<RegisteredController> {
     // MCP write audit list: internal-only so the desktop UI/CLI can inspect
     // local write history without exposing cross-client history as an MCP tool.
     controllers.extend(crate::openhuman::mcp_audit::all_mcp_audit_internal_controllers());
+    // tiny.place A2A social-network integration: renderer-callable via core_rpc_relay
+    // but NOT advertised to agents in tool listings or schema discovery.
+    controllers.extend(crate::openhuman::tinyplace::all_tinyplace_registered_controllers());
     controllers
 }
 
@@ -348,6 +362,7 @@ fn build_declared_controller_schemas() -> Vec<ControllerSchema> {
     schemas.extend(crate::openhuman::agent_registry::all_agent_registry_controller_schemas());
     schemas.extend(crate::openhuman::agent_experience::all_agent_experience_controller_schemas());
     schemas.extend(crate::openhuman::health::all_health_controller_schemas());
+    schemas.extend(crate::openhuman::harness_init::all_harness_init_controller_schemas());
     schemas.extend(crate::openhuman::doctor::all_doctor_controller_schemas());
     schemas.extend(crate::openhuman::encryption::all_encryption_controller_schemas());
     schemas.extend(crate::openhuman::keyring_consent::all_keyring_consent_controller_schemas());
@@ -387,6 +402,7 @@ fn build_declared_controller_schemas() -> Vec<ControllerSchema> {
     schemas.extend(crate::openhuman::tools::all_tools_controller_schemas());
     schemas.extend(crate::openhuman::tool_registry::all_tool_registry_controller_schemas());
     schemas.extend(crate::openhuman::memory::all_memory_controller_schemas());
+    schemas.extend(crate::openhuman::memory_goals::all_memory_goals_controller_schemas());
     schemas.extend(crate::openhuman::memory_tree::all_memory_tree_controller_schemas());
     schemas.extend(crate::openhuman::memory_tree::all_retrieval_controller_schemas());
     schemas.extend(
@@ -409,6 +425,9 @@ fn build_declared_controller_schemas() -> Vec<ControllerSchema> {
     schemas.extend(crate::openhuman::text_input::all_text_input_controller_schemas());
     schemas.extend(crate::openhuman::voice::all_voice_controller_schemas());
     schemas.extend(crate::openhuman::subconscious::all_subconscious_controller_schemas());
+    schemas.extend(
+        crate::openhuman::subconscious_triggers::all_subconscious_triggers_controller_schemas(),
+    );
     schemas.extend(crate::openhuman::webhooks::all_webhooks_controller_schemas());
     schemas.extend(crate::openhuman::update::all_update_controller_schemas());
     schemas.extend(crate::openhuman::memory_tree::all_tree_summarizer_controller_schemas());
@@ -445,6 +464,9 @@ fn build_declared_controller_schemas() -> Vec<ControllerSchema> {
     schemas.extend(crate::openhuman::agent_orchestration::all_agent_team_controller_schemas());
     // Git-worktree isolation manager (#3376)
     schemas.extend(crate::openhuman::agent_orchestration::all_worktree_controller_schemas());
+    // User-driven cancel of detached background sub-agents (#3711)
+    schemas
+        .extend(crate::openhuman::agent_orchestration::all_subagent_control_controller_schemas());
     schemas
 }
 
@@ -510,6 +532,9 @@ pub fn namespace_description(namespace: &str) -> Option<&'static str> {
         "workflows" => Some("Discovered workflows (WORKFLOW.md/SKILL.md bundles) and their resources."),
         "socket" => Some("Backend Socket.IO bridge controls."),
         "memory" => Some("Document storage, vector search, key-value store, and knowledge graph."),
+        "memory_goals" => Some(
+            "The agent's long-term goals list for working with the user — editable items plus turn-based enrichment.",
+        ),
         "memory_tree" => Some(
             "Canonical chunk ingestion, provenance capture, and chunk retrieval for source-grounded memory.",
         ),
@@ -555,6 +580,9 @@ pub fn namespace_description(namespace: &str) -> Option<&'static str> {
         ),
         "voice" => Some("Speech-to-text and text-to-speech using local models."),
         "subconscious" => Some("Periodic local-model background awareness loop."),
+        "subconscious_triggers" => {
+            Some("Event-driven trigger pipeline feeding the background orchestrator.")
+        }
         "text_input" => Some("Read, insert, and preview text in the OS-focused input field."),
         "webhooks" => {
             Some("Webhook tunnel registrations and captured request/response debug logs.")
@@ -597,6 +625,9 @@ pub fn namespace_description(namespace: &str) -> Option<&'static str> {
         ),
         "companion" => Some(
             "Desktop companion — Clicky-style hotkey-driven interaction loop with STT, LLM, TTS, and visual pointing.",
+        ),
+        "tinyplace" => Some(
+            "tiny.place A2A social-network integration: directory, explorer, and search over the agent network.",
         ),
         _ => None,
     }

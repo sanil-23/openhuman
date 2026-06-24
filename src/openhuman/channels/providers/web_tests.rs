@@ -304,6 +304,41 @@ fn classify_inference_error_surfaces_provider_config_rejection_actionably() {
     }
 }
 
+#[test]
+fn classify_inference_error_chat_factory_empty_model_is_actionable_config() {
+    // TAURI-RUST-GKV — the factory's #2784 empty-model bail is a LOCAL
+    // string (no provider JSON body). Before the shared classifier learned
+    // its anchor it fell through to the generic `inference` catch-all:
+    // vague "something went wrong" copy AND retryable=true (a useless Retry
+    // button that re-fires the per-message Sentry flood). It must now route
+    // through the config-rejection arm to the actionable Settings → LLM
+    // copy, classified non-retryable so the FE hides Retry.
+    let raw = "[chat-factory] no model configured: role 'chat' resolved to an empty model id \
+               for slug 'nvidia'. Include a model in the provider string (e.g. \
+               'nvidia:<model-id>') or set default_model on the cloud_providers entry for \
+               slug 'nvidia'.";
+    let ClassifiedError {
+        error_type: category,
+        message,
+        source,
+        retryable,
+        ..
+    } = classify_inference_error(raw);
+    assert_eq!(
+        category, "model_unavailable",
+        "empty-model config rejection must classify as model_unavailable, not generic: {category}"
+    );
+    assert_eq!(source, "config", "must be sourced as user config: {source}");
+    assert!(
+        !retryable,
+        "empty-model config rejection must be non-retryable (hide Retry)"
+    );
+    assert!(
+        message.contains("Settings → LLM"),
+        "must give the actionable remediation copy: {message}"
+    );
+}
+
 // ── #2364: rate-limit classification + retry-after surfacing ────
 
 #[test]
@@ -968,6 +1003,60 @@ fn classify_inference_error_empty_response_is_actionable_and_retryable() {
         !classified.message.contains("Something went wrong"),
         "must not be the generic apology: {}",
         classified.message
+    );
+}
+
+#[test]
+fn classify_inference_error_empty_response_copy_names_billing_remedy_and_drops_local_provider_misdirect(
+) {
+    // Issue #3335: the prior copy ("Try a different model or check your
+    // local provider in Settings → AI → LLM") sent Managed-route users
+    // toward a remedy that does not exist for them. The common underlying
+    // cause is credit exhaustion (issue #3386), so the revised copy must
+    // name the credits / billing path explicitly, must NOT claim a "local
+    // provider" exists, and must still offer the model-switch path for
+    // users on self-hosted providers.
+    let raw = "run_chat_task failed client_id=abc thread_id=t-1 request_id=r-1 \
+               error=The model returned an empty response. Please try again.";
+    let classified = classify_inference_error(raw);
+    assert_eq!(classified.error_type, "empty_response");
+    // New: names the credits / billing remedy (was absent in the old copy,
+    // so Managed users had no way to self-diagnose credit exhaustion).
+    assert!(
+        classified.message.contains("Settings → Billing"),
+        "must point at the billing surface for credit exhaustion: {}",
+        classified.message
+    );
+    // New: drops the misleading "local provider" framing — the previous
+    // copy made a false claim for Managed users where no local provider
+    // exists.
+    assert!(
+        !classified.message.contains("local provider"),
+        "must not claim a local provider exists: {}",
+        classified.message
+    );
+    // Preserved: the model-switch remedy and the provider-config
+    // settings deep link both still apply (some users hit empty response
+    // because their custom OpenAI-compatible endpoint or local model is
+    // misconfigured / unhealthy).
+    assert!(
+        classified.message.contains("different model"),
+        "must keep the model-switch remedy: {}",
+        classified.message
+    );
+    assert!(
+        classified.message.contains("Settings → AI → LLM"),
+        "must keep the provider-config deep link: {}",
+        classified.message
+    );
+    // Preserved: provider is intentionally None until the typed
+    // `AgentError::EmptyProviderResponse` plumbs through a provider
+    // identifier (see comment in `web_errors.rs::classify_inference_error`
+    // empty_response arm).
+    assert!(
+        classified.provider.is_none(),
+        "provider stays None until plumbed through the typed error: {:?}",
+        classified.provider
     );
 }
 

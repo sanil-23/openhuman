@@ -317,6 +317,40 @@ pub struct ProviderCapabilities {
     pub vision: bool,
 }
 
+/// Prompt / KV-cache behaviour a provider supports.
+///
+/// Sibling to [`ProviderCapabilities`], surfaced via
+/// [`Provider::prompt_cache_capabilities`] so the agent and cost layers can
+/// pick a stable cache-key strategy and calibrate cached-token telemetry per
+/// provider. Every field defaults to `false` (conservative): an unknown or
+/// custom OpenAI-compatible provider is assumed to support no caching, so we
+/// never infer cache behaviour — or send cache-only request fields — that the
+/// upstream may not honour (#3939).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PromptCacheCapabilities {
+    /// Provider transparently caches identical request prefixes server-side
+    /// with no client action — e.g. OpenAI / DeepSeek / Anthropic implicit
+    /// caching. A byte-stable prompt prefix then earns cache hits for free, so
+    /// preserving the prefix is worthwhile for this provider.
+    pub automatic_prefix_cache: bool,
+    /// Provider accepts explicit cache-control / cache-boundary markers in the
+    /// request body (e.g. Anthropic `cache_control`). OpenAI-compatible chat
+    /// APIs do not, so this stays `false` for them — we must not send such
+    /// fields to a provider that would reject or ignore them.
+    pub explicit_cache_control: bool,
+    /// Provider returns cached-input-token counts in its usage block
+    /// (`prompt_tokens_details.cached_tokens` or
+    /// `openhuman.usage.cached_input_tokens`), so [`UsageInfo::cached_input_tokens`]
+    /// is populated and cached-prefix cost accounting is exact rather than
+    /// estimated.
+    pub usage_reports_cached_input: bool,
+    /// Provider supports grouping calls by a stable logical key (thread /
+    /// session) for cache locality — today only the OpenHuman backend, via its
+    /// `thread_id` extension. Third-party providers rely on prefix identity
+    /// instead and must not receive OpenHuman-only grouping fields.
+    pub cache_key_grouping: bool,
+}
+
 /// Provider-specific tool payload formats.
 ///
 /// Different LLM providers require different formats for tool definitions.
@@ -364,6 +398,19 @@ pub trait Provider: Send + Sync {
     /// Providers should override this to declare their actual capabilities.
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    /// Declare the provider's prompt / KV-cache behaviour.
+    ///
+    /// Default is the conservative all-`false` [`PromptCacheCapabilities`]:
+    /// callers must not assume any caching for a provider that hasn't opted in.
+    /// Providers that cache prefixes server-side, report cached input tokens,
+    /// or support thread/session grouping override this to advertise it so the
+    /// agent + cost layers get accurate cache telemetry and a stable cache-key
+    /// strategy without leaking OpenHuman internals to providers that don't
+    /// need them (#3939).
+    fn prompt_cache_capabilities(&self) -> PromptCacheCapabilities {
+        PromptCacheCapabilities::default()
     }
 
     /// Convert tool specifications to provider-native format.
@@ -536,6 +583,53 @@ pub trait Provider: Send + Sync {
     /// TAURI-RUST-6V0). `None` means "unknown — skip pre-dispatch trimming".
     async fn effective_context_window(&self, model: &str) -> Option<u64> {
         crate::openhuman::inference::context_window_for_model(model)
+    }
+
+    /// Whether this provider talks to a **local** runtime (LM Studio, Ollama,
+    /// llama.cpp, vLLM, …) rather than a cloud API. Local runtimes enforce the
+    /// model's *runtime-loaded* `n_ctx` and can be loaded with a window smaller
+    /// than the assistant's un-evictable system prefix — the
+    /// `n_keep >= n_ctx` overflow (#3550 / TAURI-RUST-6V0). The agent engine
+    /// uses this to gate its pre-dispatch un-evictable-prefix guard, which
+    /// surfaces an actionable "reload with a larger context length" error only
+    /// for local providers (cloud windows are large enough that the guard would
+    /// only ever fire on a genuine overflow the user can't remedy by reloading).
+    /// Defaults to `false`.
+    fn is_local_provider(&self) -> bool {
+        false
+    }
+
+    /// Like [`Provider::is_local_provider`] but resolved for the specific
+    /// `model` about to be dispatched. A router whose *default* provider is
+    /// cloud may still route a given model to a local provider; the engine's
+    /// pre-dispatch un-evictable-prefix guard keys off this so the actionable
+    /// "reload with a larger context length" error fires for that routed local
+    /// model instead of letting the opaque local `400 (n_keep >= n_ctx)` reach
+    /// the user (#3550 / TAURI-RUST-6V0; Codex/CodeRabbit review on PR #3771).
+    ///
+    /// Defaults to the model-blind [`Provider::is_local_provider`]; only a
+    /// routing wrapper needs to override it.
+    fn is_local_provider_for_model(&self, _model: &str) -> bool {
+        self.is_local_provider()
+    }
+
+    /// The model's **authoritative runtime-loaded** context window, when the
+    /// local runtime actually reports it (e.g. LM Studio's native
+    /// `/api/v0/models` `loaded_context_length`). Returns `None` whenever the
+    /// window is unknown or merely *guessed* — a cloud provider, a local
+    /// runtime that exposes no loaded window (llama.cpp / vLLM), or a
+    /// profile-default / conservative-floor fallback.
+    ///
+    /// Distinct from [`Provider::effective_context_window`], which always
+    /// yields a value for local providers (falling back to a guess) so
+    /// pre-dispatch *trimming* still engages. Trimming may safely run against a
+    /// guess (over-trim is harmless), but the hard pre-dispatch abort must only
+    /// fire on an authoritative window — aborting with "reload with a larger
+    /// context length" against a guessed 4096 floor would wrongly reject a
+    /// request that the real (e.g. 32k) loaded window would have accepted
+    /// (Codex P1 review on PR #3771). Defaults to `None`.
+    async fn loaded_context_window(&self, _model: &str) -> Option<u64> {
+        None
     }
 
     /// Warm up the HTTP connection pool (TLS handshake, DNS, HTTP/2 setup).
