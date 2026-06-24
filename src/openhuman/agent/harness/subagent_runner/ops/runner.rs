@@ -473,9 +473,52 @@ async fn run_typed_mode(
             Some(prefix) => format!("{}__{}", prefix, parent.session_key),
             None => parent.session_key.clone(),
         };
+        // Resolve the extraction provider + model through the `summarization`
+        // role — the SAME resolver every other summarization path uses — so
+        // extraction follows the user's `memory_provider` routing (managed /
+        // BYOK / local), instead of borrowing the parent agent's (agentic)
+        // provider with a hardcoded tier string that 400s on BYOK/local
+        // providers. Falls back to the parent provider + the fixed summarization
+        // tier id on any config/factory glitch so extraction degrades rather than
+        // dead-ends.
+        let (extract_provider, extract_model): (
+            Arc<dyn crate::openhuman::inference::provider::Provider>,
+            String,
+        ) = match crate::openhuman::config::Config::load_or_init().await {
+            Ok(cfg) => match crate::openhuman::inference::provider::create_chat_provider(
+                "summarization",
+                &cfg,
+            ) {
+                Ok((p, m)) => (Arc::from(p), m),
+                Err(e) => {
+                    tracing::warn!(
+                        agent_id = %definition.id,
+                        error = %e,
+                        "[subagent_runner:typed] extract summarization provider build failed; falling back to parent provider"
+                    );
+                    (
+                        parent.provider.clone(),
+                        crate::openhuman::inference::provider::factory::summarization_tier_model()
+                            .to_string(),
+                    )
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    agent_id = %definition.id,
+                    error = %e,
+                    "[subagent_runner:typed] config load failed for extract provider; falling back to parent provider + summarization-v1"
+                );
+                (
+                    parent.provider.clone(),
+                    crate::openhuman::config::MODEL_SUMMARIZATION_V1.to_string(),
+                )
+            }
+        };
         dynamic_tools.push(Box::new(ExtractFromResultTool::new(
             cache.clone(),
-            parent.provider.clone(),
+            extract_provider,
+            extract_model,
             parent.workspace_dir.clone(),
             parent_chain,
             definition.id.clone(),

@@ -6,9 +6,13 @@
 //! That dragged along system-prompt scaffolding, a tool-loop, and an
 //! extra inference round for a workload that really only needs one
 //! completion call. So the tool now drives `provider.chat_with_system`
-//! directly against the extraction model (`"summarization-v1"` — same
-//! string [`super::definition::ModelSpec::Hint("summarization").resolve`]
-//! would have produced, so router entries keyed on it still apply).
+//! directly. Both the provider AND the model id are resolved by the runner
+//! through the `summarization` role (`create_chat_provider("summarization")`)
+//! and handed in, so this extraction follows the user's `memory_provider`
+//! routing — managed (`summarization-v1`), BYOK, or local — exactly like every
+//! other summarization path, instead of borrowing the parent agent's provider
+//! with a hardcoded tier string (which 400'd on BYOK/local providers that don't
+//! know the literal `summarization-v1`).
 //!
 //! Transcript discipline: the LLM call still costs tokens, so every
 //! extraction round-trip is persisted as its own `session_raw/` JSONL (+
@@ -33,12 +37,6 @@ use crate::openhuman::tools::{Tool, ToolCategory, ToolResult};
 
 // ── Tunables ──────────────────────────────────────────────────────────
 
-/// Model id used for `extract_from_result` LLM calls. Mirrors the
-/// resolution `ModelSpec::Hint("summarization").resolve(...)` would have
-/// produced for the retired summarizer sub-agent so routing table
-/// entries that targeted the summarizer continue to apply.
-const EXTRACT_MODEL_ID: &str = "summarization-v1";
-
 /// Temperature for extraction calls. Low but non-zero so the model can
 /// pick reasonable phrasings when rewriting identifiers into a compact
 /// answer, without straying into creative territory.
@@ -52,7 +50,7 @@ const EXTRACT_TEMPERATURE: f64 = 0.2;
 /// long-context flash model (~1M tokens), so this is large; only payloads that
 /// exceed it fall back to parallel chunked extraction. Headroom is reserved for
 /// the extraction contract, the query, and the response.
-fn extract_chunk_char_budget() -> usize {
+fn extract_chunk_char_budget(model: &str) -> usize {
     /// Fallback window (tokens) when the model id is unknown to the registry.
     const FALLBACK_WINDOW_TOKENS: u64 = 128_000;
     /// Approximate chars per token used for budgeting.
@@ -61,7 +59,7 @@ fn extract_chunk_char_budget() -> usize {
     /// the prompt scaffolding, query, and model response.
     const USABLE_PCT: u64 = 70;
 
-    let window_tokens = crate::openhuman::inference::context_window_for_model(EXTRACT_MODEL_ID)
+    let window_tokens = crate::openhuman::inference::context_window_for_model(model)
         .unwrap_or(FALLBACK_WINDOW_TOKENS);
     (window_tokens * USABLE_PCT / 100 * CHARS_PER_TOKEN) as usize
 }
@@ -86,6 +84,11 @@ empty string — do not invent information.";
 pub(super) struct ExtractFromResultTool {
     cache: Arc<ResultHandoffCache>,
     provider: Arc<dyn Provider>,
+    /// Model id for the extraction `chat_with_system` calls. Resolved by the
+    /// runner through the `summarization` role (alongside `provider`), so it
+    /// tracks the user's `memory_provider` routing + `cloud_llm_model` override
+    /// instead of a hardcoded tier string.
+    model: String,
     /// Workspace root for transcript writes.
     workspace_dir: PathBuf,
     /// Parent session chain joined with `__`, e.g.
@@ -104,6 +107,7 @@ impl ExtractFromResultTool {
     pub(super) fn new(
         cache: Arc<ResultHandoffCache>,
         provider: Arc<dyn Provider>,
+        model: String,
         workspace_dir: PathBuf,
         parent_chain: String,
         owner_agent_id: String,
@@ -111,6 +115,7 @@ impl ExtractFromResultTool {
         Self {
             cache,
             provider,
+            model,
             workspace_dir,
             parent_chain,
             owner_agent_id,
@@ -190,7 +195,7 @@ impl Tool for ExtractFromResultTool {
         let effective_chunk_budget = std::env::var("OPENHUMAN_TEST_EXTRACT_CHUNK_BUDGET")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or_else(extract_chunk_char_budget);
+            .unwrap_or_else(|| extract_chunk_char_budget(&self.model));
 
         // Fast path: payload fits in a single provider turn.
         if cached.content.len() <= effective_chunk_budget {
@@ -244,6 +249,7 @@ impl Tool for ExtractFromResultTool {
         let workspace_dir = self.workspace_dir.clone();
         let parent_chain = self.parent_chain.clone();
         let owner_agent_id = self.owner_agent_id.clone();
+        let model = self.model.clone();
 
         // Consume `chunks` with `into_iter` so each async block owns
         // its `String` — `buffer_unordered` polls the stream lazily
@@ -255,6 +261,7 @@ impl Tool for ExtractFromResultTool {
             let workspace_dir = workspace_dir.clone();
             let parent_chain = parent_chain.clone();
             let owner_agent_id = owner_agent_id.clone();
+            let model = model.clone();
             async move {
                 let user_prompt = format!(
                     "Tool name: {tool_name}\nChunk {idx} of {total}\n\n\
@@ -271,7 +278,7 @@ impl Tool for ExtractFromResultTool {
                     .chat_with_system(
                         Some(EXTRACT_SYSTEM_PROMPT),
                         &user_prompt,
-                        EXTRACT_MODEL_ID,
+                        &model,
                         EXTRACT_TEMPERATURE,
                     )
                     .await;
@@ -296,7 +303,7 @@ impl Tool for ExtractFromResultTool {
                         Ok(s) => Ok(*s),
                         Err(s) => Err(s.as_str()),
                     },
-                    EXTRACT_MODEL_ID,
+                    &model,
                 );
 
                 (i, result)
@@ -369,7 +376,7 @@ impl ExtractFromResultTool {
             .chat_with_system(
                 Some(EXTRACT_SYSTEM_PROMPT),
                 &user_prompt,
-                EXTRACT_MODEL_ID,
+                &self.model,
                 EXTRACT_TEMPERATURE,
             )
             .await;
@@ -392,7 +399,7 @@ impl ExtractFromResultTool {
                 Ok(s) => Ok(*s),
                 Err(s) => Err(s.as_str()),
             },
-            EXTRACT_MODEL_ID,
+            &self.model,
         );
 
         match provider_result {
@@ -523,6 +530,41 @@ fn write_extract_transcript(
             path = %path.display(),
             is_error,
             "[extract_from_result] transcript written"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The chunk budget is now derived from the *resolved* model id (handed in
+    // by the runner via the `summarization` role) rather than a hardcoded
+    // constant — so the budget must track the model. `summarization-v1` resolves
+    // to a long-context (~1M token) flash model, so its budget must be much
+    // larger than a model the registry doesn't know (which uses the fallback
+    // window). Proves the model id flows through end-to-end.
+    #[test]
+    fn chunk_budget_tracks_resolved_model() {
+        let summarization_budget = extract_chunk_char_budget("summarization-v1");
+        let unknown_budget = extract_chunk_char_budget("some-byok-model-the-registry-doesnt-know");
+        assert!(
+            summarization_budget > unknown_budget,
+            "summarization-v1 (long context) budget {summarization_budget} must exceed the \
+             unknown-model fallback budget {unknown_budget}"
+        );
+    }
+
+    // A model id the registry doesn't recognise flows through to the fallback
+    // window — the budget must NOT be pinned to the summarization-v1 window when
+    // a different model is routed (e.g. a BYOK model the registry can't size).
+    #[test]
+    fn chunk_budget_uses_fallback_for_unknown_model() {
+        // FALLBACK_WINDOW_TOKENS (128k) * 70% * 4 chars/token.
+        let expected = (128_000u64 * 70 / 100 * 4) as usize;
+        assert_eq!(
+            extract_chunk_char_budget("acme-byok-model-v0-unsized"),
+            expected
         );
     }
 }
