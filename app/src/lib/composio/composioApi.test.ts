@@ -6,6 +6,8 @@ import {
   enableTrigger,
   listAgentReadyToolkits,
   listAvailableTriggers,
+  listConnections,
+  listToolkits,
   listTriggers,
   syncConnection,
 } from './composioApi';
@@ -189,6 +191,49 @@ describe('listAgentReadyToolkits', () => {
     mockCallCoreRpc.mockResolvedValue({ toolkits: ['gmail'] });
     const out = await listAgentReadyToolkits();
     expect(out.toolkits).toEqual(['gmail']);
+  });
+});
+
+describe('Connections loading fetches (bounded timeout)', () => {
+  // The Connections page clears its loading skeleton only after BOTH of
+  // these settle (Promise.allSettled in useComposioIntegrations), so both
+  // must opt into the shorter 8s budget to bound the skeleton window on a
+  // cold cache against a down backend (#3933). The catalog is safe to time
+  // out early — it has a 24h stale cache plus a hardcoded fallback.
+  const EXPECTED_FETCH_TIMEOUT_MS = 8_000;
+
+  beforeEach(() => {
+    mockCallCoreRpc.mockReset();
+  });
+
+  it('listToolkits passes the shorter timeoutMs and unwraps the envelope', async () => {
+    mockCallCoreRpc.mockResolvedValue({
+      result: { toolkits: ['gmail', 'slack'] },
+      logs: ['composio: 2 toolkit(s) listed'],
+    });
+
+    const out = await listToolkits();
+
+    expect(mockCallCoreRpc).toHaveBeenCalledWith({
+      method: 'openhuman.composio_list_toolkits',
+      timeoutMs: EXPECTED_FETCH_TIMEOUT_MS,
+    });
+    expect(out.toolkits).toEqual(['gmail', 'slack']);
+  });
+
+  it('listConnections passes the shorter timeoutMs and unwraps the envelope', async () => {
+    mockCallCoreRpc.mockResolvedValue({
+      result: { connections: [{ toolkit: 'gmail', status: 'ACTIVE' }] },
+      logs: [],
+    });
+
+    const out = await listConnections();
+
+    expect(mockCallCoreRpc).toHaveBeenCalledWith({
+      method: 'openhuman.composio_list_connections',
+      timeoutMs: EXPECTED_FETCH_TIMEOUT_MS,
+    });
+    expect(out.connections).toHaveLength(1);
   });
 });
 

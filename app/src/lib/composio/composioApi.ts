@@ -49,10 +49,31 @@ function unwrapCliEnvelope<T>(value: unknown): T {
   return value as T;
 }
 
+/**
+ * Shorter-than-default per-call timeout for the two RPCs the Connections
+ * page's loading state waits on (`listToolkits` + `listConnections`).
+ *
+ * Both fetches are *non-critical*: the toolkit catalog has a 24h stale
+ * cache AND a hardcoded `KNOWN_COMPOSIO_TOOLKITS` fallback, so a slow or
+ * dead backend should degrade to the fallback fast rather than pinning the
+ * Connections grid on a loading skeleton. The skeleton window is bounded
+ * by the *slower* of these two calls (the hook clears `loading` only after
+ * `Promise.allSettled([listToolkits(), listConnections()])` settles — see
+ * `useComposioIntegrations` in ./hooks.ts), so BOTH must opt into the
+ * shorter budget. Without this the window stretches to the global
+ * `CORE_RPC_TIMEOUT_MS` (30s) on a cold cache against a down backend.
+ */
+const COMPOSIO_FETCH_TIMEOUT_MS = 8_000;
+
 // ── Read operations ───────────────────────────────────────────────
 
 export async function listToolkits(): Promise<ComposioToolkitsResponse> {
-  const raw = await callCoreRpc<unknown>({ method: 'openhuman.composio_list_toolkits' });
+  const raw = await callCoreRpc<unknown>({
+    method: 'openhuman.composio_list_toolkits',
+    // Non-critical fetch (stale cache + hardcoded fallback) — bound the
+    // Connections loading skeleton so the fallback surfaces fast (#3933).
+    timeoutMs: COMPOSIO_FETCH_TIMEOUT_MS,
+  });
   return unwrapCliEnvelope<ComposioToolkitsResponse>(raw);
 }
 
@@ -75,7 +96,13 @@ export async function listAgentReadyToolkits(): Promise<ComposioAgentReadyToolki
 }
 
 export async function listConnections(): Promise<ComposioConnectionsResponse> {
-  const raw = await callCoreRpc<unknown>({ method: 'openhuman.composio_list_connections' });
+  const raw = await callCoreRpc<unknown>({
+    method: 'openhuman.composio_list_connections',
+    // Paired with `listToolkits` above: the Connections loading skeleton is
+    // gated on whichever of these two settles last, so this call must share
+    // the shorter budget to actually bound the window (#3933).
+    timeoutMs: COMPOSIO_FETCH_TIMEOUT_MS,
+  });
   return unwrapCliEnvelope<ComposioConnectionsResponse>(raw);
 }
 
