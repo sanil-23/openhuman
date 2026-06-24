@@ -474,6 +474,12 @@ impl Agent {
             Some("hint:coding") => "coding",
             Some("hint:summarization") => "summarization",
             Some("hint:reasoning") => "reasoning",
+            // Background subconscious workload (the cloud subconscious tick sets
+            // `default_model = "hint:subconscious"` before building) — route to
+            // the `subconscious` workload so Settings → AI "Subconscious" governs
+            // the provider. On the managed backend the model still resolves to
+            // `chat-v1` (see `make_openhuman_backend`).
+            Some("hint:subconscious") => "subconscious",
             _ => "chat",
         };
         let (provider, mut model_name): (Box<dyn Provider>, String) =
