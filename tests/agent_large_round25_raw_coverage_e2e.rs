@@ -318,7 +318,11 @@ fn parent(workspace_dir: PathBuf, provider: Arc<ScriptedProvider>) -> ParentExec
         all_tools: Arc::new(tools),
         all_tool_specs: Arc::new(specs),
         visible_tool_names: std::collections::HashSet::new(),
-        model_name: "round25-parent-model".to_string(),
+        // A canonical managed tier: the extract tool reuses the parent provider
+        // for managed summarization only when the parent itself resolves managed
+        // (its model_name is a known OpenHuman tier). A BYOK/local parent would
+        // carry its own model id and route to a freshly-built provider instead.
+        model_name: "chat-v1".to_string(),
         temperature: 0.0,
         workspace_dir,
         memory: Arc::new(StubMemory),

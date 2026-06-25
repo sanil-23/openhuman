@@ -445,6 +445,23 @@ fn managed_backend_summarization_role_resolves_summarization_tier() {
     assert_eq!(model, "summarization-v1");
 }
 
+// The managed-string predicate treats empty / "cloud" / "openhuman" / the
+// BYOK-incomplete sentinel as managed (it still dispatches through the managed
+// path), and any concrete BYOK slug or local prefix as non-managed.
+#[test]
+fn is_managed_provider_string_matches_managed_and_sentinel() {
+    use super::{is_managed_provider_string, BYOK_INCOMPLETE_SENTINEL, PROVIDER_OPENHUMAN};
+    assert!(is_managed_provider_string(""));
+    assert!(is_managed_provider_string("  "));
+    assert!(is_managed_provider_string("cloud"));
+    assert!(is_managed_provider_string(PROVIDER_OPENHUMAN));
+    assert!(is_managed_provider_string(BYOK_INCOMPLETE_SENTINEL));
+
+    assert!(!is_managed_provider_string("openai:gpt-4o-mini"));
+    assert!(!is_managed_provider_string("ollama:llama3"));
+    assert!(!is_managed_provider_string("anthropic:claude-3-5-sonnet"));
+}
+
 // `default_model` does NOT drive the summarization tier any more — only
 // `memory_tree.cloud_llm_model` does. A stray `default_model` must not leak in.
 #[test]

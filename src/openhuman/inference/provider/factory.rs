@@ -181,6 +181,19 @@ pub fn resolve_model_for_hint(hint_or_tier: &str, config: &Config) -> String {
 /// unrecognized `hint:*` value is intentionally rejected so the factory falls
 /// back to the platform default instead of forwarding an untranslated string
 /// to the backend.
+/// Whether a resolved provider string routes to the **managed** OpenHuman
+/// backend rather than a user-funded BYOK/local route.
+///
+/// Managed strings are: empty, `"cloud"`, [`PROVIDER_OPENHUMAN`], and the
+/// fail-closed [`BYOK_INCOMPLETE_SENTINEL`] (which still dispatches through the
+/// managed path). Single predicate so the managed check can't drift across call
+/// sites — mirrors the inline checks in [`resolve_model_for_hint`] and
+/// [`role_bypasses_managed_credits`].
+pub(crate) fn is_managed_provider_string(provider: &str) -> bool {
+    let r = provider.trim();
+    r.is_empty() || r == "cloud" || r == PROVIDER_OPENHUMAN || r == BYOK_INCOMPLETE_SENTINEL
+}
+
 pub(crate) fn is_known_openhuman_tier(model: &str) -> bool {
     use crate::openhuman::config::{
         MODEL_AGENTIC_V1, MODEL_CHAT_V1, MODEL_CODING_V1, MODEL_REASONING_QUICK_V1,

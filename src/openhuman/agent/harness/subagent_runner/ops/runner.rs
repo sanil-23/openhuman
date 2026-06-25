@@ -37,6 +37,27 @@ use super::provider::{
     resolve_subagent_provider, user_is_signed_in_to_composio, LazyToolkitResolver,
 };
 
+/// Whether `extract_from_result` should **reuse the parent provider** (with the
+/// fixed managed `summarization-v1` tier) instead of building a dedicated
+/// summarization provider.
+///
+/// Reuse is safe only when BOTH:
+/// - the resolved `summarization` route is managed (so `summarization-v1` is the
+///   correct model), and
+/// - the parent itself is on the managed backend — detected via its resolved
+///   `model_name` being a canonical OpenHuman tier, since the managed backend is
+///   the only thing that serves tier names. A BYOK cloud key or a local runtime
+///   carries its own model id (which `is_local_provider` can't tell apart from
+///   managed), and handing such a provider the literal `summarization-v1` is the
+///   exact 400/404 this PR removes (maintainer review on PR #4083:
+///   BYOK-agentic + managed-memory).
+fn should_reuse_parent_for_extraction(summarization_route: &str, parent_model_name: &str) -> bool {
+    use crate::openhuman::inference::provider::factory::{
+        is_known_openhuman_tier, is_managed_provider_string,
+    };
+    is_managed_provider_string(summarization_route) && is_known_openhuman_tier(parent_model_name)
+}
+
 /// Run a sub-agent based on its definition and a task prompt.
 ///
 /// This is the primary entry point for agent delegation. It performs the following:
@@ -476,19 +497,20 @@ async fn run_typed_mode(
         // Resolve the extraction provider + model through the `summarization`
         // role so extraction follows the user's `memory_provider` routing.
         //
-        // When summarization routes to the **managed** backend, the parent
-        // provider already speaks the managed tier names, so we reuse it with the
-        // fixed `summarization-v1` model — no redundant provider build, and (with
-        // no live backend) no network dependency. Only when summarization routes
-        // to a **concrete BYOK/local** provider — exactly where passing the
-        // parent agent's (agentic) provider the literal `summarization-v1` would
-        // 400/404 — do we build the dedicated summarization provider so the call
-        // lands on the right endpoint + model.
+        // Reuse the parent provider with the fixed `summarization-v1` model ONLY
+        // when BOTH the summarization route AND the parent itself resolve to the
+        // managed backend — the managed backend is the only thing that serves the
+        // canonical tier name, so the parent's resolved `model_name` is a known
+        // OpenHuman tier iff it's managed. A non-managed parent (BYOK cloud key or
+        // a local runtime) carries its own model id, which `is_local_provider`
+        // cannot tell apart from managed: passing such a provider the literal
+        // `summarization-v1` is exactly the 400/404 this PR removes (maintainer
+        // review, PR #4083 — BYOK-agentic + managed-memory).
         //
-        // A local parent never reuses (its runtime would 404 on the managed tier
-        // string): it falls through to building the managed summarization
-        // provider. Any config/factory glitch degrades to parent + the fixed tier
-        // id rather than dead-ending extraction.
+        // In every other case build the dedicated summarization provider so the
+        // call lands on the right endpoint + model. Any config/factory glitch
+        // degrades to parent + the fixed tier id rather than dead-ending
+        // extraction.
         let summarization_tier =
             crate::openhuman::inference::provider::factory::summarization_tier_model().to_string();
         let (extract_provider, extract_model): (
@@ -498,9 +520,7 @@ async fn run_typed_mode(
             Ok(cfg) => {
                 let route =
                     crate::openhuman::inference::provider::provider_for_role("summarization", &cfg);
-                let r = route.trim();
-                let route_is_managed = r.is_empty() || r == "cloud" || r == "openhuman";
-                if route_is_managed && !parent.provider.is_local_provider() {
+                if should_reuse_parent_for_extraction(&route, &parent.model_name) {
                     (parent.provider.clone(), summarization_tier.clone())
                 } else {
                     match crate::openhuman::inference::provider::create_chat_provider(
@@ -830,4 +850,39 @@ async fn run_typed_mode(
         status,
         final_history: history,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_reuse_parent_for_extraction;
+
+    // Reuse the parent provider for extraction ONLY when both the summarization
+    // route and the parent resolve to the managed backend. The critical case is
+    // the third one: a managed summarization route with a BYOK/local parent must
+    // NOT reuse (that was the 400/404 the maintainer flagged).
+    #[test]
+    fn reuses_only_when_both_route_and_parent_are_managed() {
+        // managed route ("openhuman"/"cloud"/"") + managed parent (tier name) → reuse.
+        assert!(should_reuse_parent_for_extraction("openhuman", "chat-v1"));
+        assert!(should_reuse_parent_for_extraction("cloud", "agentic-v1"));
+        assert!(should_reuse_parent_for_extraction("", "summarization-v1"));
+
+        // managed route + BYOK/local parent (own model id) → build, don't reuse.
+        assert!(!should_reuse_parent_for_extraction("openhuman", "gpt-4o"));
+        assert!(!should_reuse_parent_for_extraction(
+            "openhuman",
+            "claude-3-5-sonnet"
+        ));
+        assert!(!should_reuse_parent_for_extraction("cloud", "llama3.1:8b"));
+
+        // BYOK/local summarization route → build regardless of parent.
+        assert!(!should_reuse_parent_for_extraction(
+            "openai:gpt-4o-mini",
+            "chat-v1"
+        ));
+        assert!(!should_reuse_parent_for_extraction(
+            "ollama:llama3",
+            "chat-v1"
+        ));
+    }
 }
