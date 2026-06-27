@@ -176,6 +176,8 @@ pub fn all_tools_with_runtime(
         // durable `subagent_session_id` (preferred) or transient `task_id`.
         Box::new(ListSubagentsTool::new()),
         Box::new(SteerSubagentTool::new()),
+        Box::new(WaitTool::new()),
+        Box::new(WaitLoopTool::new()),
         Box::new(WaitSubagentTool::new()),
         Box::new(CloseSubagentTool::new()),
         Box::new(ContinueSubagentTool::new()),
@@ -187,6 +189,9 @@ pub fn all_tools_with_runtime(
         // build-mode pass. The plan→build mode switch itself is a
         // follow-up; the tool emits a stable marker today.
         Box::new(TodoTool::new()),
+        // Interactive plan-review gate: parks the live turn on a thread-scoped
+        // plan the user must approve before execution (Codex/Claude plan mode).
+        Box::new(crate::openhuman::plan_review::RequestPlanReviewTool::new()),
         // Move/update a specific task card by id on a target board (defaults to
         // the proactive `task-sources` board) — lets the agent advance the task
         // it's working (in_progress / done+evidence / blocked+reason) from any
@@ -206,6 +211,10 @@ pub fn all_tools_with_runtime(
         // large result is compacted with a `retrieve_tool_output("<hash>")`
         // marker, this hands the original back from the CCR store on demand.
         Box::new(RetrieveToolOutputTool::new()),
+        // TokenJuice 2.0 content-router retrieval: fetches the original (full or
+        // by byte/line range) for a `⟦tj:<hash>⟧` marker from the CCR cache.
+        // Supersedes `retrieve_tool_output`; both are kept live during migration.
+        Box::new(crate::openhuman::tokenjuice::TokenjuiceRetrieveTool::new()),
         // Deterministic time-expression → timestamp resolver. `current_time`
         // only returns *now*, leaving the model to do epoch arithmetic by hand
         // (a real incident had an agent compute "24h ago" ~10 months off, then
@@ -531,8 +540,10 @@ pub fn all_tools_with_runtime(
          memory_hybrid_search, memory_store_raw_search, memory_store_raw_chunks, memory_store_kinds"
     );
 
-    // Subconscious scratchpad tools — persistent working memory across ticks.
-    tools.extend(crate::openhuman::subconscious::scratchpad::tools::all_scratchpad_tools());
+    // Memory diff — structured "what changed in the agent's world since a
+    // checkpoint/last sync". Drives the subconscious tick's first stage and is
+    // available to any agent that lists it. Unit struct, no runtime deps.
+    tools.push(Box::new(crate::openhuman::memory_diff::MemoryDiffTool));
 
     // Subconscious user-facing handoff — notify_user proactive delivery.
     tools.extend(crate::openhuman::subconscious::user_thread::all_user_thread_tools());

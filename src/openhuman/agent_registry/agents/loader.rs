@@ -35,7 +35,8 @@
 //! collision.
 
 use crate::openhuman::agent::harness::definition::{
-    AgentDefinition, AgentTier, DefinitionSource, PromptBuilder, PromptSource, SubagentEntry,
+    validate_tier_transition, AgentDefinition, AgentTier, DefinitionSource, PromptBuilder,
+    PromptSource, SubagentEntry,
 };
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -305,22 +306,18 @@ pub fn validate_tier_hierarchy(defs: &[AgentDefinition]) -> Result<()> {
             // Same-tier delegation is forbidden for chat and reasoning.
             // (Chat→Chat would defeat the whole point of the fast tier;
             // Reasoning→Reasoning produces a depth-blowing recursion of
-            // slow models.)
-            match (def.agent_tier, child_tier) {
-                (AgentTier::Chat, AgentTier::Chat) => anyhow::bail!(
-                    "agent `{parent}` (chat) lists `{child}` (chat) in subagents — the chat tier \
-                     is a leaf in its own dimension. Hand off to a `reasoning` or `worker` agent \
-                     instead.",
+            // slow models.) The pair-rule lives in `validate_tier_transition`
+            // (the single source of truth shared with the runtime spawn gate
+            // in `run_subagent`); here we wrap its reason with the offending
+            // agent ids + tiers for a boot-time-friendly diagnostic.
+            if let Err(reason) = validate_tier_transition(def.agent_tier, child_tier) {
+                anyhow::bail!(
+                    "agent `{parent}` ({ptier}) lists `{child}` ({ctier}) in subagents — {reason}",
                     parent = def.id,
+                    ptier = def.agent_tier.as_str(),
                     child = child_id,
-                ),
-                (AgentTier::Reasoning, AgentTier::Reasoning) => anyhow::bail!(
-                    "agent `{parent}` (reasoning) lists `{child}` (reasoning) in subagents — \
-                     reasoning agents compose downward into workers, not into each other.",
-                    parent = def.id,
-                    child = child_id,
-                ),
-                _ => {}
+                    ctier = child_tier.as_str(),
+                );
             }
         }
     }
@@ -359,6 +356,7 @@ mod tests {
     use crate::openhuman::agent::harness::definition::{
         ModelSpec, SandboxMode, SubagentEntry, ToolScope, TriggerMemoryAgent,
     };
+    use crate::openhuman::tokenjuice::AgentTokenjuiceCompression;
 
     #[test]
     fn all_builtins_parse() {
@@ -577,6 +575,14 @@ mod tests {
                     "orchestrator must have spawn_async_subagent for sparse background work"
                 );
                 assert!(
+                    tools.iter().any(|t| t == "wait"),
+                    "orchestrator must have wait for delayed callback ticks"
+                );
+                assert!(
+                    tools.iter().any(|t| t == "wait_loop"),
+                    "orchestrator must have wait_loop for deliberate polling loops"
+                );
+                assert!(
                     !tools.iter().any(|t| t == "spawn_subagent"),
                     "spawn_subagent must not appear — removed in #1141"
                 );
@@ -638,6 +644,10 @@ mod tests {
         assert_eq!(def.sandbox_mode, SandboxMode::Sandboxed);
         assert!(!def.omit_safety_preamble);
         assert_eq!(def.max_iterations, 10);
+        assert_eq!(
+            def.effective_tokenjuice_compression(),
+            AgentTokenjuiceCompression::Light
+        );
     }
 
     #[test]
@@ -646,6 +656,10 @@ mod tests {
         assert_eq!(def.sandbox_mode, SandboxMode::Sandboxed);
         assert_eq!(def.max_iterations, 2);
         assert!(!def.omit_safety_preamble);
+        assert_eq!(
+            def.effective_tokenjuice_compression(),
+            AgentTokenjuiceCompression::Light
+        );
     }
 
     #[test]
@@ -654,6 +668,10 @@ mod tests {
         assert_eq!(def.sandbox_mode, SandboxMode::Sandboxed);
         assert_eq!(def.max_iterations, 10);
         assert!(!def.omit_safety_preamble);
+        assert_eq!(
+            def.effective_tokenjuice_compression(),
+            AgentTokenjuiceCompression::Light
+        );
         match &def.tools {
             ToolScope::Named(names) => {
                 for required in ["node_exec", "npm_exec", "apply_patch", "update_memory_md"] {
@@ -927,15 +945,16 @@ mod tests {
     }
 
     #[test]
-    fn orchestrator_exposes_agent_prepare_context_planner_does_not() {
-        // The orchestrator owns the first-message context-scout pass.
+    fn orchestrator_and_nested_agents_do_not_expose_agent_prepare_context() {
+        // First-turn context preparation is owned by the harness. Keeping the
+        // direct tool out of the orchestrator scope prevents a duplicate scout
+        // pass after the harness has already prepared context.
         let orch = find("orchestrator");
-        match &orch.tools {
-            ToolScope::Named(tools) => assert!(
-                tools.iter().any(|t| t == "agent_prepare_context"),
-                "orchestrator must allowlist `agent_prepare_context`"
-            ),
-            ToolScope::Wildcard => {}
+        if let ToolScope::Named(tools) = &orch.tools {
+            assert!(
+                !tools.iter().any(|t| t == "agent_prepare_context"),
+                "orchestrator must NOT allowlist `agent_prepare_context`"
+            );
         }
         // The planner must NOT: when invoked via delegate_plan it runs under
         // the orchestrator's PARENT_CONTEXT, so a nested scout would render the
@@ -1017,6 +1036,25 @@ mod tests {
         assert!(
             def.subagents.is_empty(),
             "context_scout is a leaf and must not list subagents"
+        );
+    }
+
+    #[test]
+    fn chatty_sub_agents_have_bounded_output() {
+        // critic + archivist results flow up to the orchestrator verbatim
+        // (delegate_critic / delegate_archivist). Without a cap their output
+        // is unbounded and bloats the orchestrator's context (#4099). Both
+        // must carry the normal sub-agent cap so a long diff review or a
+        // verbose memory-write confirmation can't leak unbounded text.
+        assert_eq!(
+            find("critic").max_result_chars,
+            Some(8000),
+            "critic output must be bounded so reviews don't leak unbounded text up"
+        );
+        assert_eq!(
+            find("archivist").max_result_chars,
+            Some(8000),
+            "archivist output must be bounded so memory summaries stay concise"
         );
     }
 

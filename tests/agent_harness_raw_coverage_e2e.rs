@@ -15,6 +15,7 @@ use openhuman_core::openhuman::inference::provider::{
     ChatMessage, ChatRequest, ChatResponse, Provider, ToolCall, UsageInfo,
 };
 use openhuman_core::openhuman::memory::{Memory, MemoryCategory, MemoryEntry, NamespaceSummary};
+use openhuman_core::openhuman::tokenjuice::AgentTokenjuiceCompression;
 use openhuman_core::openhuman::tools::SpawnSubagentTool;
 use openhuman_core::openhuman::tools::{Tool, ToolResult};
 use parking_lot::Mutex;
@@ -321,6 +322,7 @@ fn coverage_definition() -> AgentDefinition {
         sandbox_mode: SandboxMode::ReadOnly,
         background: false,
         trigger_memory_agent: Default::default(),
+        tokenjuice_compression: AgentTokenjuiceCompression::Auto,
         subagents: Vec::new(),
         delegate_name: None,
         agent_tier: Default::default(),
@@ -363,6 +365,10 @@ async fn agent_turn_executes_tools_persists_and_resumes_raw_transcript() -> Resu
     assert_eq!(files.len(), 1, "expected one root transcript: {files:?}");
     let transcript = std::fs::read_to_string(&files[0])?;
     assert!(transcript.contains("\"agent\":\"coverage_main\""));
+    assert!(transcript.contains("\"agent_id\":\"coverage_main\""));
+    assert!(transcript.contains("\"agent_type\":\"root\""));
+    assert!(transcript.contains("\"provider\":\"coverage-channel\""));
+    assert!(transcript.contains("\"model\":\"coverage-model\""));
     assert!(transcript.contains("final after echo"));
     assert!(transcript.contains("\"input_tokens\":252"));
     assert!(workspace.path().join("sessions").exists());
@@ -523,6 +529,12 @@ async fn repeated_subagent_spawns_keep_cacheable_prefix_and_record_provider_cach
         "provider-reported cached input tokens from the second child run should be preserved \
          in subagent transcript accounting:\n{joined}"
     );
+    assert!(
+        joined.contains("\"agent_type\":\"subagent\"")
+            && joined.contains("\"provider\":\"subagent\"")
+            && joined.contains("\"model\":\"coverage-model\""),
+        "subagent transcript metadata should retain agent type, provider, and model:\n{joined}"
+    );
 
     Ok(())
 }
@@ -674,6 +686,9 @@ inline = "Answer the delegated cache probe directly."
         .join("\n");
     assert!(
         joined.contains("\"agent\":\"cache_probe_child\"")
+            && joined.contains("\"agent_id\":\"cache_probe_child\"")
+            && joined.contains("\"agent_type\":\"subagent\"")
+            && joined.contains("\"task_id\":\"sub-")
             && joined.contains(child_answer)
             && joined.contains("\"cached_input_tokens\":64"),
         "child transcript should be persisted alongside the parent turn:\n{joined}"

@@ -25,6 +25,8 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::PathBuf;
 
+use crate::openhuman::tokenjuice::AgentTokenjuiceCompression;
+
 /// Iteration-cap policy for a sub-agent.
 ///
 /// Controls how the harness enforces [`AgentDefinition::max_iterations`]:
@@ -194,6 +196,14 @@ pub struct AgentDefinition {
     #[serde(default)]
     pub trigger_memory_agent: TriggerMemoryAgent,
 
+    /// Per-agent TokenJuice tool-result compression profile.
+    ///
+    /// `auto` keeps compression on for normal agents, but resolves coding-model
+    /// agents to `light` so CCR-backed lossy compression does not replace raw
+    /// build/test/diff/search text that coding agents often need exactly.
+    #[serde(default)]
+    pub tokenjuice_compression: AgentTokenjuiceCompression,
+
     // ── delegation surface ─────────────────────────────────────────────
     /// Subagents this agent is allowed to spawn via synthesised
     /// `delegate_*` tools. Each entry expands at agent-build time into
@@ -312,6 +322,57 @@ impl AgentTier {
     }
 }
 
+impl std::fmt::Display for AgentTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Single source of truth for the spawn-hierarchy rule: is a `parent`-tier
+/// agent allowed to delegate to a `child`-tier agent?
+///
+/// Returns `Ok(())` for the legal handoffs and `Err(reason)` for the three
+/// forbidden shapes, where `reason` is a tier-only human-readable explanation
+/// (no agent ids — callers prepend their own context):
+///
+/// - `Worker → *` — workers are leaf executors and must not spawn anything.
+/// - `Chat → Chat` — the chat tier is a leaf in its own dimension; cloning it
+///   defeats the fast-path and risks unbounded `chat → chat → …` chains.
+/// - `Reasoning → Reasoning` — reasoning agents compose downward into workers,
+///   not into each other (a depth-blowing recursion of slow models).
+///
+/// Note this forbids same-tier and worker-as-parent hops, **not** upward hops:
+/// `reasoning → chat` is a real, intentional builtin edge (the `subconscious`
+/// reasoner can hand a follow-up back to the `orchestrator` chat agent), so it
+/// must stay legal. The harness'es `MAX_SPAWN_DEPTH` cap bounds chain length
+/// independently of tier direction.
+///
+/// This is the static authoring rule the loader walks over declared `subagents`
+/// pairs at boot (see
+/// [`crate::openhuman::agent_registry::agents::validate_tier_hierarchy`]). The
+/// runtime spawn gate (`run_subagent`) reuses it as defense-in-depth, but
+/// deliberately exempts worker *parents* — at runtime a worker only reaches the
+/// spawn chokepoint via the documented collapsed `delegate_to_integrations_agent`
+/// path (→ `integrations_agent`, itself a worker), which the loader intentionally
+/// leaves untouched.
+pub fn validate_tier_transition(parent: AgentTier, child: AgentTier) -> Result<(), String> {
+    match (parent, child) {
+        (AgentTier::Worker, _) => Err(format!(
+            "a `worker` tier agent must not spawn `{}` — workers are leaf executors",
+            child.as_str()
+        )),
+        (AgentTier::Chat, AgentTier::Chat) => Err(
+            "the chat tier is a leaf in its own dimension — hand off to a `reasoning` or \
+             `worker` agent instead"
+                .to_string(),
+        ),
+        (AgentTier::Reasoning, AgentTier::Reasoning) => {
+            Err("reasoning agents compose downward into workers, not into each other".to_string())
+        }
+        _ => Ok(()),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Subagent delegation entries
 // ─────────────────────────────────────────────────────────────────────────────
@@ -396,6 +457,19 @@ impl AgentDefinition {
             IterationPolicy::Extended => self
                 .max_iterations
                 .max(super::tool_loop::EXTENDED_MAX_TOOL_ITERATIONS),
+        }
+    }
+
+    /// Resolve the authored TokenJuice profile to the concrete per-call policy.
+    pub fn effective_tokenjuice_compression(&self) -> AgentTokenjuiceCompression {
+        match self.tokenjuice_compression {
+            AgentTokenjuiceCompression::Auto => match &self.model {
+                ModelSpec::Hint(hint) if hint.trim().eq_ignore_ascii_case("coding") => {
+                    AgentTokenjuiceCompression::Light
+                }
+                _ => AgentTokenjuiceCompression::Full,
+            },
+            other => other,
         }
     }
 }

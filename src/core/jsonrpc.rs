@@ -2246,6 +2246,12 @@ fn register_domain_subscribers(
         // initial throttle decision on battery-powered hosts).
         crate::openhuman::scheduler_gate::init_global(&config);
 
+        // Install the TokenJuice content-router runtime config (compressor
+        // toggles + CCR cache limits + optional on-disk tier). Compaction runs
+        // on every agent's tool output, so this must be set before any agent
+        // loop executes a tool.
+        crate::openhuman::tokenjuice::install_from_config(&config);
+
         // Seed the scheduler-gate signed-out override from the on-disk
         // session. Without this, a sidecar that boots with no stored JWT
         // would happily spin up cron / channel loops and fire LLM requests
@@ -2549,6 +2555,16 @@ pub async fn bootstrap_core_runtime(host_kind: crate::core::types::HostKind) {
             },
         );
     }
+    // Bridge interactive web-surface events to the frontend: ApprovalRequested →
+    // `approval_request` AND PlanReviewRequested → `plan_review_request` (both
+    // handled by the same subscriber). Registered UNCONDITIONALLY here on the
+    // always-run serve boot — the plan-review gate is independent of the approval
+    // gate and parks turns even when `OPENHUMAN_APPROVAL_GATE=0`, while
+    // `start_channels` is skipped for web-chat-only cores. Without this an
+    // unguarded standalone/CLI/Docker core would park a plan review that never
+    // reaches the UI and dies at the gate TTL. Idempotent (Once-guarded).
+    crate::openhuman::channels::providers::web::register_approval_surface_subscriber();
+
     if decision.install_gate {
         // Per-launch correlation token for the approval gate. This is
         // a fresh UUID every boot — it is NOT derived from the
@@ -2565,13 +2581,8 @@ pub async fn bootstrap_core_runtime(host_kind: crate::core::types::HostKind) {
             "[runtime] approval gate installed (on by default; set OPENHUMAN_APPROVAL_GATE=0 to disable, session_id={session_id}) — \
              Prompt-class external-effect tool calls park for approval in interactive chat turns"
         );
-        // Bridge ApprovalRequested → `approval_request` web socket event. This MUST
-        // be registered here on the always-run serve boot, not only inside
-        // `start_channels` — that path is skipped when no messaging integrations
-        // (Telegram/Discord/…) are configured, which is the common web-chat-only
-        // case. Without this, the gate parks and publishes but nothing reaches the
-        // frontend → every prompt dies at the TTL. Idempotent (Once-guarded).
-        crate::openhuman::channels::providers::web::register_approval_surface_subscriber();
+        // (The approval/plan-review surface bridge is registered unconditionally
+        // above — it must run even when this gate-install branch is skipped.)
         crate::openhuman::channels::providers::web::register_artifact_surface_subscriber();
     } else {
         log::error!(

@@ -982,6 +982,120 @@ fn ensure_test_rpc_auth() {
 }
 
 #[tokio::test]
+async fn json_rpc_tokenjuice_detect_and_cache_stats() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{rpc_addr}");
+
+    // detect: a JSON array of objects classifies as `json`.
+    let detect = post_json_rpc(
+        &rpc_base,
+        1860_1,
+        "openhuman.tokenjuice_detect",
+        json!({ "content": r#"[{"a":1,"b":2},{"a":3,"b":4}]"# }),
+    )
+    .await;
+    let detect_result = assert_no_jsonrpc_error(&detect, "tokenjuice_detect");
+    assert_eq!(
+        detect_result.get("kind").and_then(Value::as_str),
+        Some("json")
+    );
+
+    // cache_stats: returns numeric occupancy fields.
+    let stats = post_json_rpc(
+        &rpc_base,
+        1860_2,
+        "openhuman.tokenjuice_cache_stats",
+        json!({}),
+    )
+    .await;
+    let stats_result = assert_no_jsonrpc_error(&stats, "tokenjuice_cache_stats");
+    assert!(stats_result
+        .get("entries")
+        .and_then(Value::as_u64)
+        .is_some());
+    assert!(stats_result.get("bytes").and_then(Value::as_u64).is_some());
+
+    rpc_join.abort();
+}
+
+#[tokio::test]
+async fn json_rpc_tokenjuice_settings_and_savings() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{rpc_addr}");
+
+    // settings_get: returns the [tokenjuice] block with the configurable
+    // CCR token threshold (default 500) and the router master switch.
+    let get = post_json_rpc(
+        &rpc_base,
+        1861_1,
+        "openhuman.tokenjuice_settings_get",
+        json!({}),
+    )
+    .await;
+    let get_result = assert_no_jsonrpc_error(&get, "tokenjuice_settings_get");
+    let settings = get_result
+        .get("settings")
+        .expect("settings_get returns a settings object");
+    assert!(settings
+        .get("router_enabled")
+        .and_then(Value::as_bool)
+        .is_some());
+    assert!(settings
+        .get("ccr_min_tokens")
+        .and_then(Value::as_u64)
+        .is_some());
+
+    // settings_update: flip the CCR token threshold and confirm it round-trips.
+    let updated = post_json_rpc(
+        &rpc_base,
+        1861_2,
+        "openhuman.tokenjuice_settings_update",
+        json!({ "patch": { "ccr_min_tokens": 750 } }),
+    )
+    .await;
+    let updated_result = assert_no_jsonrpc_error(&updated, "tokenjuice_settings_update");
+    assert_eq!(
+        updated_result
+            .get("settings")
+            .and_then(|s| s.get("ccr_min_tokens"))
+            .and_then(Value::as_u64),
+        Some(750)
+    );
+
+    // savings_stats: returns the aggregate shape (total + attribution model + cache).
+    let savings = post_json_rpc(
+        &rpc_base,
+        1861_3,
+        "openhuman.tokenjuice_savings_stats",
+        json!({}),
+    )
+    .await;
+    let savings_result = assert_no_jsonrpc_error(&savings, "tokenjuice_savings_stats");
+    assert!(savings_result.get("attributionModel").is_some());
+    assert!(savings_result
+        .get("total")
+        .and_then(|t| t.get("tokensSaved"))
+        .and_then(Value::as_u64)
+        .is_some());
+    assert!(savings_result.get("cache").is_some());
+
+    // savings_reset: zeroes the totals.
+    let reset = post_json_rpc(
+        &rpc_base,
+        1861_4,
+        "openhuman.tokenjuice_savings_reset",
+        json!({}),
+    )
+    .await;
+    let reset_result = assert_no_jsonrpc_error(&reset, "tokenjuice_savings_reset");
+    assert_eq!(reset_result.get("ok").and_then(Value::as_bool), Some(true));
+
+    rpc_join.abort();
+}
+
+#[tokio::test]
 async fn json_rpc_tool_registry_lists_and_gets_entries() {
     let _env_lock = json_rpc_e2e_env_lock();
     let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
@@ -2514,6 +2628,140 @@ async fn json_rpc_todos_crud_on_personal_board() {
             .is_empty(),
         "board empty after remove"
     );
+
+    api_join.abort();
+    rpc_join.abort();
+}
+
+#[tokio::test]
+async fn json_rpc_todos_revise_plan_rejects_awaiting() {
+    // Plan-mode "Send feedback" path: a parked plan (card awaiting approval) is
+    // cleared by `todos_revise_plan` so the orchestrator can re-plan from the
+    // user's feedback. Awaiting cards become `rejected`; non-awaiting cards are
+    // left untouched.
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_url_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+    let _api_url_guard = EnvVarGuard::unset("OPENHUMAN_API_URL");
+
+    let (api_addr, api_join) = serve_on_ephemeral(mock_upstream_router()).await;
+    let api_origin = format!("http://{api_addr}");
+    write_min_config(openhuman_home.as_path(), &api_origin);
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{rpc_addr}");
+    let board = "plan-review-thread";
+
+    // 1. Add a card and park it for review (awaiting_approval).
+    let add = post_json_rpc(
+        &rpc_base,
+        9201,
+        "openhuman.todos_add",
+        json!({ "thread_id": board, "content": "Refactor schema", "status": "awaiting_approval" }),
+    )
+    .await;
+    let add_result = assert_no_jsonrpc_error(&add, "todos_add awaiting");
+    let card_id = add_result
+        .get("cards")
+        .and_then(Value::as_array)
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("id"))
+        .and_then(Value::as_str)
+        .expect("parked card id")
+        .to_string();
+
+    // 2. Send feedback → revise_plan rejects the parked card.
+    let revise = post_json_rpc(
+        &rpc_base,
+        9202,
+        "openhuman.todos_revise_plan",
+        json!({ "thread_id": board, "feedback": "split into smaller steps" }),
+    )
+    .await;
+    let revise_result = assert_no_jsonrpc_error(&revise, "todos_revise_plan");
+    let revised_cards = revise_result
+        .get("cards")
+        .and_then(Value::as_array)
+        .expect("cards in revise response");
+    assert_eq!(revised_cards.len(), 1, "card retained, status changed");
+    assert_eq!(
+        revised_cards[0].get("id").and_then(Value::as_str),
+        Some(card_id.as_str()),
+        "same card id"
+    );
+    assert_eq!(
+        revised_cards[0].get("status").and_then(Value::as_str),
+        Some("rejected"),
+        "parked card is rejected after revise_plan"
+    );
+
+    api_join.abort();
+    rpc_join.abort();
+}
+
+#[tokio::test]
+async fn json_rpc_plan_review_decide_unknown_and_invalid() {
+    // The plan-review gate is in-memory and parks a live turn; over RPC we can
+    // still exercise the decision surface: deciding an unknown/expired request
+    // resolves nothing (`resolved: false`), and an invalid decision errors.
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_url_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+    let _api_url_guard = EnvVarGuard::unset("OPENHUMAN_API_URL");
+
+    let (api_addr, api_join) = serve_on_ephemeral(mock_upstream_router()).await;
+    let api_origin = format!("http://{api_addr}");
+    write_min_config(openhuman_home.as_path(), &api_origin);
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{rpc_addr}");
+
+    // Unknown request id → resolved:false (no parked turn to wake).
+    let unknown = post_json_rpc(
+        &rpc_base,
+        9301,
+        "openhuman.plan_review_decide",
+        json!({ "request_id": "plan-does-not-exist", "decision": "approve" }),
+    )
+    .await;
+    let unknown_result = assert_no_jsonrpc_error(&unknown, "plan_review_decide unknown");
+    assert_eq!(
+        unknown_result.get("resolved").and_then(Value::as_bool),
+        Some(false),
+        "deciding an unknown request resolves nothing"
+    );
+
+    // revise without feedback → error.
+    let bad_revise = post_json_rpc(
+        &rpc_base,
+        9302,
+        "openhuman.plan_review_decide",
+        json!({ "request_id": "plan-x", "decision": "revise" }),
+    )
+    .await;
+    assert_jsonrpc_error(&bad_revise, "plan_review_decide revise w/o feedback");
+
+    // Unknown decision verb → error.
+    let bad_decision = post_json_rpc(
+        &rpc_base,
+        9303,
+        "openhuman.plan_review_decide",
+        json!({ "request_id": "plan-x", "decision": "maybe" }),
+    )
+    .await;
+    assert_jsonrpc_error(&bad_decision, "plan_review_decide invalid decision");
 
     api_join.abort();
     rpc_join.abort();
@@ -13015,4 +13263,128 @@ async fn poll_team_task_status(rpc_base: &str, team_id: &str, task_id: &str, wan
         }
     }
     false
+}
+
+/// End-to-end: plant a thread's session transcript on disk, then verify the
+/// `openhuman.threads_token_usage` RPC reads back the correct cumulative token
+/// totals, cost, last-turn usage, model, and inferred context window — the data
+/// the composer footer seeds itself from when a thread is selected.
+#[tokio::test]
+async fn json_rpc_threads_token_usage_reads_persisted_thread_totals() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+    let workspace = home.join("workspace");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::set_to_path("OPENHUMAN_WORKSPACE", &workspace);
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+
+    write_min_config(&openhuman_home, "http://127.0.0.1:9");
+
+    // Plant a root session transcript for thread "thr-e2e": a `_meta` header with
+    // the cumulative totals + an assistant message carrying last-turn usage/model.
+    let raw = workspace.join("session_raw");
+    std::fs::create_dir_all(&raw).expect("mkdir session_raw");
+    let jsonl = format!(
+        "{}\n{}\n{}\n",
+        json!({"_meta": {
+            "agent": "main", "dispatcher": "native",
+            "created": "2026-04-11T14:30:00Z", "updated": "2026-04-11T14:35:22Z",
+            "turn_count": 2, "input_tokens": 4200, "output_tokens": 900,
+            "cached_input_tokens": 600, "charged_amount_usd": 0.0123, "thread_id": "thr-e2e"
+        }}),
+        json!({"role": "user", "content": "hi"}),
+        json!({"role": "assistant", "content": "hello", "model": "reasoning-v1",
+            "usage": {"input": 350, "output": 80, "cached_input": 40, "cost_usd": 0.0009},
+            "ts": "2026-04-11T14:35:22Z"}),
+    );
+    std::fs::write(raw.join("1700000000_main.jsonl"), jsonl).expect("write transcript");
+
+    // A sub-agent transcript (stem contains `__`) for the SAME thread: a `coder`
+    // archetype. Its message carries NO model (mirroring how sub-agent
+    // transcripts were historically written), so pricing must fall back to the
+    // thread's model rather than $0. Its spend is grouped under `coder` and
+    // folded into the thread totals — not collapsed into the orchestrator.
+    let sub_jsonl = format!(
+        "{}\n{}\n",
+        json!({"_meta": {
+            "agent": "coder", "dispatcher": "native",
+            "created": "2026-04-11T14:33:00Z", "updated": "2026-04-11T14:34:00Z",
+            "turn_count": 1, "input_tokens": 1000, "output_tokens": 200,
+            "cached_input_tokens": 0, "charged_amount_usd": 0.0, "thread_id": "thr-e2e"
+        }}),
+        json!({"role": "assistant", "content": "done"}),
+    );
+    std::fs::write(
+        raw.join("1700000000_main__1700000050_coder.jsonl"),
+        sub_jsonl,
+    )
+    .expect("write subagent transcript");
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{rpc_addr}");
+
+    // Known thread → totals read back from the transcripts (orchestrator + coder).
+    let resp = post_json_rpc(
+        &rpc_base,
+        1,
+        "openhuman.threads_token_usage",
+        json!({ "thread_id": "thr-e2e" }),
+    )
+    .await;
+    let envelope = assert_no_jsonrpc_error(&resp, "threads_token_usage");
+    let data = envelope
+        .get("data")
+        .unwrap_or_else(|| panic!("missing data envelope: {envelope}"));
+    // Top-level totals include the sub-agent: 4200+1000 in, 900+200 out.
+    assert_eq!(data["input_tokens"], 5200);
+    assert_eq!(data["output_tokens"], 1100);
+    assert_eq!(data["cached_input_tokens"], 600);
+    // Cost is RE-AUDITED at current pricing, NOT the stale persisted charge.
+    // The coder sub-agent has no model, so it's priced at the thread's model
+    // (reasoning-v1 = "Pro"), NOT $0.
+    // orchestrator: (4200-600)*0.435 + 600*0.003625 + 900*0.87 = 0.002351175
+    // coder:        1000*0.435 + 0 + 200*0.87                  = 0.000609
+    // total                                                     = 0.002960175
+    let cost = data["cost_usd"].as_f64().expect("cost_usd");
+    assert!(
+        (cost - 0.002_960_175).abs() < 1e-9,
+        "re-audited total cost should be ~0.00296, got {cost}"
+    );
+    assert_eq!(data["turn_count"], 2);
+    assert_eq!(data["last_turn_input_tokens"], 350);
+    assert_eq!(data["last_turn_output_tokens"], 80);
+    assert_eq!(data["model"], "reasoning-v1");
+    // reasoning-v1 resolves to a 1M context window.
+    assert_eq!(data["context_window"], 1_000_000);
+    assert_eq!(data["has_usage"], true);
+    // Sub-agent breakdown grouped by archetype.
+    let subs = data["subagents"].as_array().expect("subagents array");
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0]["agent_id"], "coder");
+    assert_eq!(subs[0]["input_tokens"], 1000);
+    assert_eq!(subs[0]["output_tokens"], 200);
+    assert_eq!(subs[0]["runs"], 1);
+    assert!((subs[0]["cost_usd"].as_f64().expect("sub cost") - 0.000_609).abs() < 1e-9);
+
+    // Unknown thread → all-zero totals with has_usage=false (brand-new thread).
+    let resp_unknown = post_json_rpc(
+        &rpc_base,
+        2,
+        "openhuman.threads_token_usage",
+        json!({ "thread_id": "thr-does-not-exist" }),
+    )
+    .await;
+    let unknown = assert_no_jsonrpc_error(&resp_unknown, "threads_token_usage unknown");
+    let unknown_data = unknown
+        .get("data")
+        .unwrap_or_else(|| panic!("missing data envelope: {unknown}"));
+    assert_eq!(unknown_data["input_tokens"], 0);
+    assert_eq!(unknown_data["cost_usd"], 0.0);
+    assert_eq!(unknown_data["has_usage"], false);
+
+    rpc_join.abort();
 }

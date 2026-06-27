@@ -12,12 +12,27 @@ const log = debug('openhuman:model-health');
 interface ModelEntry {
   id: string;
   provider: string;
+  /** USD per 1M input tokens (0/absent ⇒ unknown). */
+  cost_per_1m_input?: number;
   cost_per_1m_output: number;
+  /** Max context window in tokens (0/absent ⇒ unknown). */
+  context_window?: number;
   vision: boolean;
   quality_score: number | null;
   hallucination_rate: number | null;
   agents_using: number;
   tasks_evaluated: number;
+}
+
+/** Compact token-count label, e.g. 1_000_000 → "1M", 128_000 → "128K". */
+function formatContextWindow(tokens: number | undefined): string {
+  if (!tokens) return '—';
+  if (tokens >= 1_000_000) {
+    const m = tokens / 1_000_000;
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+  }
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
+  return String(tokens);
 }
 
 interface HealthConfig {
@@ -179,13 +194,13 @@ const ModelHealthPanel = () => {
             <option value="staging">{t('settings.modelHealth.badge.staging')}</option>
             <option value="vision">{t('settings.modelHealth.badge.vision')}</option>
           </SettingsSelect>
-          <span className="text-neutral-500 dark:text-neutral-400">
+          <span className="text-content-muted">
             {filtered.length} {t('settings.modelHealth.models')}
           </span>
         </div>
 
         {loading ? (
-          <p className="text-xs text-neutral-500 dark:text-neutral-400 py-4 text-center">
+          <p className="text-xs text-content-muted py-4 text-center">
             {t('settings.modelHealth.loading')}
           </p>
         ) : filtered.length === 0 ? (
@@ -194,7 +209,7 @@ const ModelHealthPanel = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-stone-200 dark:border-neutral-800">
+                <tr className="border-b border-line">
                   <th
                     className="text-left py-2 px-2 cursor-pointer"
                     onClick={() => handleSort('id')}>
@@ -239,12 +254,17 @@ const ModelHealthPanel = () => {
                   return (
                     <tr
                       key={m.id}
-                      className={`border-b border-stone-100 dark:border-neutral-800/50 ${isReplace ? 'bg-red-500/5' : ''}`}>
+                      className={`border-b border-line-subtle dark:border-line/50 ${isReplace ? 'bg-red-500/5' : ''}`}>
                       <td className="py-2 px-2">
-                        <div className="font-semibold text-stone-900 dark:text-neutral-100">
-                          {m.id}
+                        <div className="font-semibold text-content">{m.id}</div>
+                        <div className="text-[10px] text-content-faint">
+                          {m.provider}
+                          {m.context_window ? (
+                            <span className="ml-1 font-mono text-content-faint/80">
+                              · {formatContextWindow(m.context_window)} ctx
+                            </span>
+                          ) : null}
                         </div>
-                        <div className="text-[10px] text-stone-400">{m.provider}</div>
                       </td>
                       <td className="py-2 px-2 text-amber-400">{qualityStars(m.quality_score)}</td>
                       <td className="py-2 px-2 font-mono">
@@ -261,7 +281,11 @@ const ModelHealthPanel = () => {
                           '—'
                         )}
                       </td>
-                      <td className="py-2 px-2 font-mono">${m.cost_per_1m_output.toFixed(2)}</td>
+                      <td className="py-2 px-2 font-mono whitespace-nowrap">
+                        {m.cost_per_1m_input
+                          ? `$${m.cost_per_1m_input.toFixed(2)} / $${m.cost_per_1m_output.toFixed(2)}`
+                          : `$${m.cost_per_1m_output.toFixed(2)}`}
+                      </td>
                       <td className="py-2 px-2">{m.agents_using}</td>
                       <td className="py-2 px-2">
                         <span
@@ -296,10 +320,10 @@ const ModelHealthPanel = () => {
               setSelectedCandidate(null);
             }}>
             <div
-              className="bg-white dark:bg-neutral-900 border border-stone-200 dark:border-neutral-700 rounded-xl p-5 max-w-sm w-full mx-4"
+              className="bg-surface border border-line rounded-xl p-5 max-w-sm w-full mx-4"
               onClick={e => e.stopPropagation()}>
               <h3 className="text-sm font-bold mb-2">{t('settings.modelHealth.modal.title')}</h3>
-              <p className="text-xs text-stone-500 dark:text-neutral-400 mb-3">
+              <p className="text-xs text-content-muted mb-3">
                 {swapTarget.id} — {t('settings.modelHealth.modal.hallucRate')}:{' '}
                 {((swapTarget.hallucination_rate ?? 0) * 100).toFixed(1)}%
               </p>
@@ -316,7 +340,7 @@ const ModelHealthPanel = () => {
                       className={`w-full text-left rounded-lg border p-2 flex items-center justify-between cursor-pointer ${isSelected ? 'border-green-500 bg-green-500/15' : 'border-green-500/30 bg-green-500/5'}`}>
                       <span>
                         <span className="block text-xs font-semibold">{c.id}</span>
-                        <span className="block text-[10px] text-stone-400">
+                        <span className="block text-[10px] text-content-faint">
                           {c.hallucination_rate !== null
                             ? (c.hallucination_rate * 100).toFixed(1)
                             : '?'}
