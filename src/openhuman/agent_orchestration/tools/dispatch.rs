@@ -3,7 +3,9 @@
 use crate::core::event_bus::{publish_global, DomainEvent};
 use crate::openhuman::agent::harness::definition::AgentDefinitionRegistry;
 use crate::openhuman::agent::harness::fork_context::current_parent;
-use crate::openhuman::agent::harness::subagent_runner::{run_subagent, SubagentRunOptions};
+use crate::openhuman::agent::harness::subagent_runner::{
+    run_subagent, SubagentRunOptions, SubagentRunStatus,
+};
 use crate::openhuman::agent::progress::AgentProgress;
 use crate::openhuman::tools::traits::ToolResult;
 
@@ -165,7 +167,18 @@ pub(crate) async fn dispatch_subagent(
                 outcome.iterations,
                 outcome.output.chars().count()
             );
-            Ok(ToolResult::success(outcome.output))
+            // A stuck halt / iteration-cap stop returns `Incomplete`; frame the
+            // partial progress so the orchestrator can't mistake it for a
+            // finished result or re-run the identical delegation (#4096).
+            match outcome.status {
+                SubagentRunStatus::Incomplete { ref reason } => Ok(ToolResult::success(format!(
+                    "[SUBAGENT_INCOMPLETE] the {tool_name} sub-agent {reason} and did not \
+                         finish. Below is partial progress only — do NOT report it as done or \
+                         re-run the identical delegation unchanged.\n\nPartial progress:\n{}",
+                    outcome.output
+                ))),
+                _ => Ok(ToolResult::success(outcome.output)),
+            }
         }
         Err(err) => {
             let message = err.to_string();

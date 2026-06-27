@@ -445,6 +445,72 @@ impl RepeatOutputGuard {
     }
 }
 
+/// If the model emits the IDENTICAL set of tool calls (the same `(tool, args)`
+/// batch) this many times in a row — regardless of whether each call
+/// *succeeds* — it is spinning the same action with no new information. Set just
+/// below [`REPEAT_OUTPUT_THRESHOLD`] so a verbatim call loop is caught a step
+/// earlier than the broader narration+call loop, and low enough to bail before
+/// the iteration cap burns the whole budget (#4088).
+pub(crate) const REPEAT_CALL_THRESHOLD: u32 = 3;
+
+/// Repeated-CALL circuit breaker — closes the gap between [`RepeatFailureGuard`]
+/// (resets on every success, so a repeated *successful* no-op never trips it)
+/// and [`RepeatOutputGuard`] (keys on the assistant narration TOO, so trivially
+/// varied prose around the same call resets the streak).
+///
+/// This guard keys ONLY on the canonical `(tool, args)` batch — no narration,
+/// independent of success — so `list_dir("/app")` issued verbatim N times in a
+/// row trips it even when each call returns 200 and the model reworded its
+/// reasoning each time. A genuinely different call (different path / query / id)
+/// changes the signature and resets the streak, so real progress — including the
+/// read → write → read pattern, where the write is a distinct intervening call —
+/// never trips it.
+///
+/// The caller builds the signature from `serde_json::Value::to_string()` of each
+/// call's arguments, which is key-sorted and whitespace-free in this tree (no
+/// `preserve_order` feature), so the SAME call expressed with reordered JSON keys
+/// still collapses to one signature and cannot evade the guard.
+#[derive(Default)]
+pub(crate) struct RepeatCallGuard {
+    last_hash: Option<u64>,
+    consecutive: u32,
+}
+
+impl RepeatCallGuard {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record one iteration's tool-call signature (the canonical `(tool, args)`
+    /// of every call in the assistant message, in order). Returns `Some(halt
+    /// summary)` once the identical batch has repeated [`REPEAT_CALL_THRESHOLD`]
+    /// times back-to-back; a different signature (real progress) resets the run.
+    pub(crate) fn record(&mut self, signature: &str) -> Option<String> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        signature.hash(&mut hasher);
+        let h = hasher.finish();
+        if self.last_hash == Some(h) {
+            self.consecutive += 1;
+        } else {
+            self.last_hash = Some(h);
+            self.consecutive = 1;
+        }
+        if self.consecutive >= REPEAT_CALL_THRESHOLD {
+            return Some(format!(
+                "Stopping: the same tool call was issued {} times in a row with identical \
+                 arguments and no new information — the run is stuck repeating one action \
+                 without making progress. Re-issuing it will not help. Summarise what (if \
+                 anything) was actually accomplished and report that the task could not \
+                 progress, or take a genuinely different action (a different tool, different \
+                 arguments, or hand back).",
+                self.consecutive,
+            ));
+        }
+        None
+    }
+}
+
 /// Clamp the last-error text embedded in a circuit-breaker halt summary so a huge
 /// tool error (already capped at 1MB upstream) can't blow up the agent's result.
 pub(crate) fn truncate_for_halt(s: &str) -> String {

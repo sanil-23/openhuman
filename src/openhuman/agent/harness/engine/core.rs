@@ -33,12 +33,32 @@ use crate::openhuman::inference::provider::{
 use super::super::parse::build_native_assistant_history;
 use super::super::run_queue::RunQueue;
 use super::super::token_budget::trim_chat_messages_to_budget;
-use super::super::tool_loop::{RepeatFailureGuard, RepeatOutputGuard, STREAM_CHUNK_MIN_CHARS};
+use super::super::tool_loop::{
+    RepeatCallGuard, RepeatFailureGuard, RepeatOutputGuard, STREAM_CHUNK_MIN_CHARS,
+};
 use super::checkpoint::CheckpointStrategy;
 use super::parser::ResponseParser;
 use super::progress::ProgressReporter;
 use super::state::TurnObserver;
 use super::tool_source::ToolSource;
+
+/// Why a turn ended. Both `Halted` and `Cap` produce a summary `text` but mean
+/// the task did NOT reach its goal — stateful callers (notably the sub-agent
+/// runner) use this to tell a genuine finish apart from a stuck stop, instead of
+/// having to sniff the summary prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TurnStop {
+    /// The model returned a final response with no tool calls — a real finish.
+    Final,
+    /// A circuit breaker halted the run (repeated identical call / repeated
+    /// output / repeated failure). `text` is the no-progress halt summary.
+    Halted,
+    /// The iteration cap was reached; `text` is the checkpoint summary.
+    Cap,
+    /// An early-exit tool (e.g. `ask_user_clarification`) requested the stop;
+    /// the tool name is in [`TurnEngineOutcome::early_exit_tool`].
+    EarlyExit,
+}
 
 /// What a completed turn yields. `text` is the final assistant text (or the
 /// circuit-breaker / checkpoint summary); `iterations` and `cost` let stateful
@@ -47,11 +67,10 @@ pub(crate) struct TurnEngineOutcome {
     pub text: String,
     pub iterations: u32,
     pub cost: TurnCost,
-    /// True when the turn stopped because it hit the iteration cap (the
-    /// `CheckpointStrategy` produced `text`), false for a normal final response
-    /// or an early circuit-breaker halt. `Agent::turn` keys its checkpoint-only
-    /// history/transcript handling off this.
-    pub hit_cap: bool,
+    /// Why the turn ended. `Agent::turn` keys its checkpoint-only
+    /// history/transcript handling off `Cap`; the sub-agent runner maps
+    /// `Halted`/`Cap` to an incomplete status.
+    pub stop: TurnStop,
     /// When set, the turn exited early because a specific tool requested
     /// it (e.g. `ask_user_clarification` inside a sub-agent). The tool
     /// result is in `text`. Callers use this to propagate pause semantics
@@ -185,6 +204,11 @@ pub(crate) async fn run_turn_engine(
     // response + tool call across iterations even when each call "succeeds"
     // (the gap left by the failure guard + per-generation frequency_penalty).
     let mut repeat_guard = RepeatOutputGuard::new();
+    // Repeated-CALL breaker — trips when the model re-issues the identical
+    // `(tool, args)` batch back-to-back even when each call SUCCEEDS (the gap
+    // left by the failure guard, which resets on success, and the repeat-output
+    // guard, which also keys on narration text so varied prose evades it).
+    let mut call_guard = RepeatCallGuard::new();
     let mut halt_reason: Option<String> = None;
     for iteration in 0..max_iterations {
         progress
@@ -713,7 +737,7 @@ pub(crate) async fn run_turn_engine(
                 text: final_out,
                 iterations: (iteration + 1) as u32,
                 cost: turn_cost,
-                hit_cap: false,
+                stop: TurnStop::Final,
                 early_exit_tool: None,
             });
         }
@@ -757,7 +781,52 @@ pub(crate) async fn run_turn_engine(
                     text: reason,
                     iterations: (iteration + 1) as u32,
                     cost: turn_cost,
-                    hit_cap: false,
+                    stop: TurnStop::Halted,
+                    early_exit_tool: None,
+                });
+            }
+        }
+
+        // No-progress CALL breaker: if this iteration's `(tool, args)` batch is
+        // identical to the previous N in a row — regardless of success and
+        // regardless of the narration around it — the run is stuck re-issuing
+        // the same action. Halt with a summary rather than grinding to the
+        // iteration cap. Checked BEFORE executing so the redundant call never
+        // runs (#4095). Keyed on calls only, so it trips where the repeat-output
+        // breaker (which also hashes narration) and the failure guard (which
+        // resets on success) both miss.
+        {
+            let mut call_sig = String::new();
+            for call in &tool_calls {
+                call_sig.push('\u{1}');
+                call_sig.push_str(&call.name);
+                call_sig.push('\u{1}');
+                call_sig.push_str(&call.arguments.to_string());
+            }
+            if let Some(reason) = call_guard.record(&call_sig) {
+                tracing::warn!(
+                    iteration,
+                    "[agent_loop] repeat-call circuit breaker tripped — identical (tool,args) batch repeated; halting with no-progress summary"
+                );
+                history.push(ChatMessage::assistant(assistant_history_content.clone()));
+                observer
+                    .on_assistant(
+                        &display_text,
+                        &response_text,
+                        reasoning_content.as_deref(),
+                        &native_tool_calls,
+                        &tool_calls,
+                        iteration,
+                        false,
+                    )
+                    .await;
+                observer.after_iteration(history, iteration);
+                progress.turn_completed((iteration + 1) as u32).await;
+                return Ok(TurnEngineOutcome {
+                    text: reason,
+                    iterations: (iteration + 1) as u32,
+                    cost: turn_cost,
+                    stop: TurnStop::Halted,
                     early_exit_tool: None,
                 });
             }
@@ -955,7 +1024,7 @@ pub(crate) async fn run_turn_engine(
                 text: exit_text,
                 iterations: (iteration + 1) as u32,
                 cost: turn_cost,
-                hit_cap: false,
+                stop: TurnStop::EarlyExit,
                 early_exit_tool,
             });
         }
@@ -971,7 +1040,7 @@ pub(crate) async fn run_turn_engine(
                 text: reason,
                 iterations: (iteration + 1) as u32,
                 cost: turn_cost,
-                hit_cap: false,
+                stop: TurnStop::Halted,
                 early_exit_tool: None,
             });
         }
@@ -1000,7 +1069,7 @@ pub(crate) async fn run_turn_engine(
         text: co.text,
         iterations: max_iterations as u32,
         cost: turn_cost,
-        hit_cap: true,
+        stop: TurnStop::Cap,
         early_exit_tool: None,
     })
 }

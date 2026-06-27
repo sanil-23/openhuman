@@ -636,3 +636,245 @@ async fn engine_does_not_autocompact_when_opted_out() {
         "no summary message should be inserted when opted out"
     );
 }
+
+/// Provider that returns the SAME single tool call on every `chat()` — the
+/// degenerate no-progress loop from #4095. Used to prove the repeat-call breaker
+/// halts the turn before the iteration cap even though every call succeeds.
+struct RepeatedCallProvider {
+    call: ToolCall,
+}
+
+#[async_trait]
+impl Provider for RepeatedCallProvider {
+    async fn chat_with_system(
+        &self,
+        _system: Option<&str>,
+        _message: &str,
+        _model: &str,
+        _temperature: f64,
+    ) -> anyhow::Result<String> {
+        Ok("noop".into())
+    }
+
+    async fn chat(
+        &self,
+        _request: ChatRequest<'_>,
+        _model: &str,
+        _temperature: f64,
+    ) -> anyhow::Result<ChatResponse> {
+        // Always the identical call, with varied narration text so the
+        // repeat-OUTPUT guard (which hashes narration too) can NOT be what
+        // trips — only the repeat-CALL guard catches this.
+        Ok(ChatResponse {
+            text: Some("Let me check the directory once more.".into()),
+            tool_calls: vec![self.call.clone()],
+            usage: None,
+            reasoning_content: None,
+        })
+    }
+
+    fn supports_native_tools(&self) -> bool {
+        true
+    }
+
+    async fn effective_context_window(&self, _model: &str) -> Option<u64> {
+        None
+    }
+}
+
+#[tokio::test]
+async fn repeat_call_breaker_halts_identical_successful_calls_before_cap() {
+    // #4095: an identical `(tool, args)` call that SUCCEEDS every time must halt
+    // via the repeat-call breaker well before the iteration cap (8 in
+    // `run_with_source`), with a no-progress summary — not run to exhaustion.
+    struct AlwaysOkToolSource {
+        specs: Vec<crate::openhuman::tools::ToolSpec>,
+    }
+    #[async_trait]
+    impl ToolSource for AlwaysOkToolSource {
+        fn request_specs(&self) -> &[crate::openhuman::tools::ToolSpec] {
+            &self.specs
+        }
+        async fn execute_call(
+            &mut self,
+            _call: &ParsedToolCall,
+            _iteration: usize,
+            _progress: &dyn super::ProgressReporter,
+            _progress_call_id: &str,
+        ) -> ToolRunResult {
+            ToolRunResult {
+                text: "[directory listing]".into(),
+                success: true,
+            }
+        }
+    }
+
+    let provider = Arc::new(RepeatedCallProvider {
+        call: ToolCall {
+            id: "loop-call".into(),
+            name: "list_dir".into(),
+            arguments: "{\"path\":\"/app\"}".into(),
+            extra_content: None,
+        },
+    });
+    let mut tool_source = AlwaysOkToolSource { specs: Vec::new() };
+    let mut history = vec![ChatMessage::system("SYSTEM"), ChatMessage::user("TASK")];
+
+    let outcome = run_with_source(provider.as_ref(), &mut history, &mut tool_source).await;
+
+    assert_eq!(
+        outcome.iterations,
+        crate::openhuman::agent::harness::tool_loop::REPEAT_CALL_THRESHOLD,
+        "should halt exactly when the identical-call streak hits the threshold"
+    );
+    assert_eq!(
+        outcome.stop,
+        TurnStop::Halted,
+        "an identical-call stop is a circuit-breaker Halt, not a Cap or clean Final"
+    );
+    assert!(
+        outcome.text.contains("same tool call") && outcome.text.contains("identical arguments"),
+        "halt text should be the no-progress summary: {}",
+        outcome.text
+    );
+}
+
+/// Provider that returns a tool call with a DIFFERENT argument each `chat()`, so
+/// the repeat-call breaker never trips and the loop runs to the iteration cap.
+struct VariedCallProvider {
+    counter: Mutex<u32>,
+}
+
+#[async_trait]
+impl Provider for VariedCallProvider {
+    async fn chat_with_system(
+        &self,
+        _system: Option<&str>,
+        _message: &str,
+        _model: &str,
+        _temperature: f64,
+    ) -> anyhow::Result<String> {
+        Ok("noop".into())
+    }
+
+    async fn chat(
+        &self,
+        _request: ChatRequest<'_>,
+        _model: &str,
+        _temperature: f64,
+    ) -> anyhow::Result<ChatResponse> {
+        let n = {
+            let mut c = self.counter.lock().unwrap();
+            *c += 1;
+            *c
+        };
+        Ok(ChatResponse {
+            text: Some(format!("step {n}")),
+            tool_calls: vec![ToolCall {
+                id: format!("call-{n}"),
+                name: "read_file".into(),
+                // Distinct arg every turn → no repeat-call streak → runs to cap.
+                arguments: format!("{{\"path\":\"f{n}.txt\"}}"),
+                extra_content: None,
+            }],
+            usage: None,
+            reasoning_content: None,
+        })
+    }
+
+    fn supports_native_tools(&self) -> bool {
+        true
+    }
+
+    async fn effective_context_window(&self, _model: &str) -> Option<u64> {
+        None
+    }
+}
+
+#[tokio::test]
+async fn iteration_cap_yields_turnstop_cap() {
+    // Varied, always-succeeding calls never trip a breaker, so the turn runs to
+    // the iteration cap (8 in `run_with_source`) and reports `TurnStop::Cap` —
+    // the signal the sub-agent runner maps to `Incomplete` (#4096).
+    struct AlwaysOkToolSource {
+        specs: Vec<crate::openhuman::tools::ToolSpec>,
+    }
+    #[async_trait]
+    impl ToolSource for AlwaysOkToolSource {
+        fn request_specs(&self) -> &[crate::openhuman::tools::ToolSpec] {
+            &self.specs
+        }
+        async fn execute_call(
+            &mut self,
+            _call: &ParsedToolCall,
+            _iteration: usize,
+            _progress: &dyn super::ProgressReporter,
+            _progress_call_id: &str,
+        ) -> ToolRunResult {
+            ToolRunResult {
+                text: "ok".into(),
+                success: true,
+            }
+        }
+    }
+
+    // A summarizing checkpoint (like the sub-agent path) so the cap yields
+    // Ok(TurnStop::Cap) instead of the ErrorCheckpoint's Err.
+    struct SummarizeCheckpoint;
+    #[async_trait]
+    impl super::super::CheckpointStrategy for SummarizeCheckpoint {
+        async fn on_max_iter(
+            &self,
+            _digest: &str,
+            _max: usize,
+        ) -> anyhow::Result<super::super::CheckpointOutcome> {
+            Ok(super::super::CheckpointOutcome {
+                text: "CHECKPOINT".into(),
+                usage: None,
+            })
+        }
+    }
+
+    let provider = Arc::new(VariedCallProvider {
+        counter: Mutex::new(0),
+    });
+    let mut tool_source = AlwaysOkToolSource { specs: Vec::new() };
+    let mut history = vec![ChatMessage::system("SYSTEM"), ChatMessage::user("TASK")];
+    let progress = NullProgress;
+    let mut observer = NullObserver;
+    let checkpoint = SummarizeCheckpoint;
+    let parser = DefaultParser;
+    let multimodal = MultimodalConfig::default();
+    let multimodal_files = MultimodalFileConfig::default();
+
+    let outcome = run_turn_engine(
+        provider.as_ref(),
+        &mut history,
+        &mut tool_source,
+        &progress,
+        &mut observer,
+        &checkpoint,
+        &parser,
+        "test-provider",
+        "ctx-test-model-xyz",
+        0.0,
+        true,
+        &multimodal,
+        &multimodal_files,
+        8,
+        None,
+        &[],
+        None,
+        None,
+    )
+    .await
+    .expect("summarizing checkpoint returns Ok at the cap");
+
+    assert_eq!(
+        outcome.stop,
+        TurnStop::Cap,
+        "varied calls should run to the cap"
+    );
+    assert_eq!(outcome.iterations, 8, "the cap is 8 iterations");
+    assert_eq!(outcome.text, "CHECKPOINT");
+}
