@@ -417,6 +417,14 @@ impl RepeatOutputGuard {
         Self::default()
     }
 
+    /// Reset the streak — used when an iteration is a legitimately-repeating
+    /// poll/wait (see [`is_repeat_call_exempt`]) that should count as a distinct
+    /// action rather than a no-progress repeat.
+    pub(crate) fn reset(&mut self) {
+        self.last_hash = None;
+        self.consecutive = 0;
+    }
+
     /// Record one iteration's output signature (assistant text + tool-call
     /// name/args). Returns `Some(halt summary)` once the identical signature has
     /// repeated [`REPEAT_OUTPUT_THRESHOLD`] times back-to-back.
@@ -453,6 +461,19 @@ impl RepeatOutputGuard {
 /// the iteration cap burns the whole budget (#4088).
 pub(crate) const REPEAT_CALL_THRESHOLD: u32 = 3;
 
+/// Tools whose contract is to be re-invoked with identical arguments, so an
+/// identical repeat is legitimate progress — not a no-progress loop. Today this
+/// is `wait_subagent`, which polls a running async sub-agent and explicitly
+/// tells the model to "call wait_subagent again" when a `timeout_secs` window
+/// elapses while the sub-agent is still running. Without this exemption a task
+/// that outlives two wait windows would have its third identical
+/// `wait_subagent({task_id})` halted by the no-progress breakers before it could
+/// collect the eventual result, and the parent would misreport a stuck turn
+/// (Codex P1 on #4230). The iteration cap + cost budget still bound the wait.
+pub(crate) fn is_repeat_call_exempt(tool: &str) -> bool {
+    matches!(tool, "wait_subagent")
+}
+
 /// Repeated-CALL circuit breaker — closes the gap between [`RepeatFailureGuard`]
 /// (resets on every success, so a repeated *successful* no-op never trips it)
 /// and [`RepeatOutputGuard`] (keys on the assistant narration TOO, so trivially
@@ -479,6 +500,14 @@ pub(crate) struct RepeatCallGuard {
 impl RepeatCallGuard {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Reset the streak — used when an iteration is a legitimately-repeating
+    /// poll/wait (see [`is_repeat_call_exempt`]) that should count as a distinct
+    /// action rather than a no-progress repeat.
+    pub(crate) fn reset(&mut self) {
+        self.last_hash = None;
+        self.consecutive = 0;
     }
 
     /// Record one iteration's tool-call signature (the canonical `(tool, args)`

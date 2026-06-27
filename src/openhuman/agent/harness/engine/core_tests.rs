@@ -886,3 +886,117 @@ async fn iteration_cap_yields_turnstop_cap() {
     assert_eq!(outcome.iterations, 8, "the cap is 8 iterations");
     assert_eq!(outcome.text, "CHECKPOINT");
 }
+
+/// Provider that emits an identical `wait_subagent` poll (same args, same
+/// narration) for the first 5 turns — past BOTH breaker thresholds — then a
+/// final answer. Proves polling tools are exempt from the no-progress breakers.
+struct PollingProvider {
+    served: Mutex<u32>,
+}
+
+#[async_trait]
+impl Provider for PollingProvider {
+    async fn chat_with_system(
+        &self,
+        _system: Option<&str>,
+        _message: &str,
+        _model: &str,
+        _temperature: f64,
+    ) -> anyhow::Result<String> {
+        Ok("noop".into())
+    }
+
+    async fn chat(
+        &self,
+        _request: ChatRequest<'_>,
+        _model: &str,
+        _temperature: f64,
+    ) -> anyhow::Result<ChatResponse> {
+        let n = {
+            let mut c = self.served.lock().unwrap();
+            *c += 1;
+            *c
+        };
+        if n <= 5 {
+            // Identical poll every turn — same tool, same args, same narration.
+            Ok(ChatResponse {
+                text: Some("Still waiting on the sub-agent.".into()),
+                tool_calls: vec![ToolCall {
+                    id: format!("wait-{n}"),
+                    name: "wait_subagent".into(),
+                    arguments: "{\"task_id\":\"t1\"}".into(),
+                    extra_content: None,
+                }],
+                usage: None,
+                reasoning_content: None,
+            })
+        } else {
+            Ok(ChatResponse {
+                text: Some("DONE — the sub-agent finished.".into()),
+                tool_calls: vec![],
+                usage: None,
+                reasoning_content: None,
+            })
+        }
+    }
+
+    fn supports_native_tools(&self) -> bool {
+        true
+    }
+
+    async fn effective_context_window(&self, _model: &str) -> Option<u64> {
+        None
+    }
+}
+
+#[tokio::test]
+async fn polling_tool_is_exempt_from_repeat_breakers() {
+    // #4230 (Codex P1): `wait_subagent` is contractually re-invoked with
+    // identical args while a task is still running. Five identical polls — past
+    // both REPEAT_CALL_THRESHOLD (3) and REPEAT_OUTPUT_THRESHOLD (4) — must NOT
+    // halt; the turn finishes normally once the poll returns a final result.
+    struct StillRunningToolSource {
+        specs: Vec<crate::openhuman::tools::ToolSpec>,
+    }
+    #[async_trait]
+    impl ToolSource for StillRunningToolSource {
+        fn request_specs(&self) -> &[crate::openhuman::tools::ToolSpec] {
+            &self.specs
+        }
+        async fn execute_call(
+            &mut self,
+            _call: &ParsedToolCall,
+            _iteration: usize,
+            _progress: &dyn super::ProgressReporter,
+            _progress_call_id: &str,
+        ) -> ToolRunResult {
+            ToolRunResult {
+                text: "sub-agent is still running; call wait_subagent again".into(),
+                success: true,
+            }
+        }
+    }
+
+    let provider = Arc::new(PollingProvider {
+        served: Mutex::new(0),
+    });
+    let mut tool_source = StillRunningToolSource { specs: Vec::new() };
+    let mut history = vec![ChatMessage::system("SYSTEM"), ChatMessage::user("TASK")];
+
+    let outcome = run_with_source(provider.as_ref(), &mut history, &mut tool_source).await;
+
+    assert_eq!(
+        outcome.stop,
+        TurnStop::Final,
+        "a legitimate poll loop must finish normally, not trip a no-progress halt"
+    );
+    assert!(
+        outcome.text.contains("DONE"),
+        "the final poll result should be returned: {}",
+        outcome.text
+    );
+    assert_eq!(
+        outcome.iterations, 6,
+        "5 identical polls + 1 final response"
+    );
+}

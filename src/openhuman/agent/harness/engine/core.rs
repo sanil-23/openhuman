@@ -742,12 +742,26 @@ pub(crate) async fn run_turn_engine(
             });
         }
 
+        // Polling/wait tools (e.g. `wait_subagent`) are contractually re-invoked
+        // with identical args + narration on each timeout while the work is still
+        // running, so an all-poll batch is legitimate progress, not a no-progress
+        // repeat. Exempt them from the no-progress breakers: reset the
+        // repeat-output guard here and skip its check, and skip the
+        // post-execution repeat-call guard below (Codex P1 on #4230). The
+        // iteration cap + cost budget still bound the wait.
+        let all_poll_exempt = tool_calls
+            .iter()
+            .all(|c| super::super::tool_loop::is_repeat_call_exempt(&c.name));
+        if all_poll_exempt {
+            repeat_guard.reset();
+        }
+
         // No-progress narration breaker: if this iteration's assistant output
         // (text + tool-call name/args) is byte-identical to the previous N in a
         // row, the run is stuck re-issuing the same step. Halt with a summary
         // rather than grinding to the iteration cap. Checked BEFORE executing
         // the (repeated) tool call so we don't burn another no-op iteration.
-        {
+        if !all_poll_exempt {
             let mut sig = response_text.trim().to_string();
             for call in &tool_calls {
                 sig.push('\u{1}');
@@ -787,51 +801,6 @@ pub(crate) async fn run_turn_engine(
             }
         }
 
-        // No-progress CALL breaker: if this iteration's `(tool, args)` batch is
-        // identical to the previous N in a row — regardless of success and
-        // regardless of the narration around it — the run is stuck re-issuing
-        // the same action. Halt with a summary rather than grinding to the
-        // iteration cap. Checked BEFORE executing so the redundant call never
-        // runs (#4095). Keyed on calls only, so it trips where the repeat-output
-        // breaker (which also hashes narration) and the failure guard (which
-        // resets on success) both miss.
-        {
-            let mut call_sig = String::new();
-            for call in &tool_calls {
-                call_sig.push('\u{1}');
-                call_sig.push_str(&call.name);
-                call_sig.push('\u{1}');
-                call_sig.push_str(&call.arguments.to_string());
-            }
-            if let Some(reason) = call_guard.record(&call_sig) {
-                tracing::warn!(
-                    iteration,
-                    "[agent_loop] repeat-call circuit breaker tripped — identical (tool,args) batch repeated; halting with no-progress summary"
-                );
-                history.push(ChatMessage::assistant(assistant_history_content.clone()));
-                observer
-                    .on_assistant(
-                        &display_text,
-                        &response_text,
-                        reasoning_content.as_deref(),
-                        &native_tool_calls,
-                        &tool_calls,
-                        iteration,
-                        false,
-                    )
-                    .await;
-                observer.after_iteration(history, iteration);
-                progress.turn_completed((iteration + 1) as u32).await;
-                return Ok(TurnEngineOutcome {
-                    text: reason,
-                    iterations: (iteration + 1) as u32,
-                    cost: turn_cost,
-                    stop: TurnStop::Halted,
-                    early_exit_tool: None,
-                });
-            }
-        }
-
         // Print any text the LLM produced alongside tool calls (unless silent)
         if !silent && !display_text.is_empty() {
             print!("{display_text}");
@@ -844,6 +813,11 @@ pub(crate) async fn run_turn_engine(
         let mut tool_results = String::new();
         let mut individual_results: Vec<String> = Vec::new();
         let mut early_exit_tool: Option<String> = None;
+        // Tracks whether every executed call this iteration succeeded — feeds the
+        // success-gated repeat-call breaker below (#4095). Failures are the
+        // failure guard's domain (with its per-class thresholds), so a batch with
+        // any failure resets the repeat-call streak instead of counting it.
+        let mut all_calls_succeeded = true;
         for (call_idx, call) in tool_calls.iter().enumerate() {
             // Stable id threaded through the start/complete pair. The fallback
             // includes `call_idx` to stay unique when the same tool name
@@ -859,6 +833,9 @@ pub(crate) async fn run_turn_engine(
                 .await;
 
             individual_results.push(outcome.text.clone());
+            if !outcome.success {
+                all_calls_succeeded = false;
+            }
             let _ = writeln!(
                 tool_results,
                 "<tool_result name=\"{}\">\n{}\n</tool_result>",
@@ -1027,6 +1004,34 @@ pub(crate) async fn run_turn_engine(
                 stop: TurnStop::EarlyExit,
                 early_exit_tool,
             });
+        }
+
+        // Repeat-call breaker for SUCCESSFUL no-op loops (#4095). The failure
+        // guard above owns repeated *failures* (with per-class thresholds) and
+        // resets on success, so an identical call that keeps SUCCEEDING with no
+        // new result slips past it. Count it here — post-execution and gated on
+        // success — so failing batches stay the failure guard's domain and
+        // poll/wait tools (`wait_subagent`) stay exempt. Sets `halt_reason`,
+        // handled just below; tool results are already in `history`.
+        if halt_reason.is_none() {
+            if all_poll_exempt || !all_calls_succeeded {
+                call_guard.reset();
+            } else {
+                let mut call_sig = String::new();
+                for call in &tool_calls {
+                    call_sig.push('\u{1}');
+                    call_sig.push_str(&call.name);
+                    call_sig.push('\u{1}');
+                    call_sig.push_str(&call.arguments.to_string());
+                }
+                if let Some(reason) = call_guard.record(&call_sig) {
+                    tracing::warn!(
+                        iteration,
+                        "[agent_loop] repeat-call circuit breaker tripped — identical successful (tool,args) batch repeated; halting with no-progress summary"
+                    );
+                    halt_reason = Some(reason);
+                }
+            }
         }
 
         // Circuit breaker tripped this iteration: return the root-cause summary

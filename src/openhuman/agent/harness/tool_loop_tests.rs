@@ -2136,3 +2136,26 @@ fn repeat_call_guard_collapses_reordered_keys() {
         "key-reordered repeats of the same call must accumulate and trip"
     );
 }
+
+#[test]
+fn polling_tools_are_repeat_exempt() {
+    // wait_subagent is contractually re-invoked with identical args; ordinary
+    // tools are not exempt.
+    assert!(is_repeat_call_exempt("wait_subagent"));
+    assert!(!is_repeat_call_exempt("list_dir"));
+    assert!(!is_repeat_call_exempt("read_file"));
+}
+
+#[test]
+fn repeat_call_guard_reset_clears_streak() {
+    // reset() (called for an all-poll iteration) drops the streak so a
+    // legitimate repeated wait never reaches the trip threshold.
+    let mut g = RepeatCallGuard::new();
+    assert!(g.record("wait_subagent\u{1}{}").is_none());
+    assert!(g.record("wait_subagent\u{1}{}").is_none()); // streak == 2
+    g.reset();
+    // Without the reset this 3rd identical call would trip; after reset it is
+    // only the 1st of a fresh streak.
+    assert!(g.record("wait_subagent\u{1}{}").is_none());
+    assert!(g.record("wait_subagent\u{1}{}").is_none());
+}
