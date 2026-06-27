@@ -642,6 +642,7 @@ async fn engine_does_not_autocompact_when_opted_out() {
 /// halts the turn before the iteration cap even though every call succeeds.
 struct RepeatedCallProvider {
     call: ToolCall,
+    counter: Mutex<u32>,
 }
 
 #[async_trait]
@@ -662,11 +663,17 @@ impl Provider for RepeatedCallProvider {
         _model: &str,
         _temperature: f64,
     ) -> anyhow::Result<ChatResponse> {
-        // Always the identical call, with varied narration text so the
-        // repeat-OUTPUT guard (which hashes narration too) can NOT be what
-        // trips — only the repeat-CALL guard catches this.
+        // Same (tool, args) every turn, but DIFFERENT narration each time, so the
+        // repeat-OUTPUT guard (which hashes narration too) keeps resetting and can
+        // never trip — only the repeat-CALL guard (keyed on the call alone) can
+        // catch this. That genuinely isolates the call breaker.
+        let n = {
+            let mut c = self.counter.lock().unwrap();
+            *c += 1;
+            *c
+        };
         Ok(ChatResponse {
-            text: Some("Let me check the directory once more.".into()),
+            text: Some(format!("Thinking about it a different way, attempt {n}.")),
             tool_calls: vec![self.call.clone()],
             usage: None,
             reasoning_content: None,
@@ -716,6 +723,7 @@ async fn repeat_call_breaker_halts_identical_successful_calls_before_cap() {
             arguments: "{\"path\":\"/app\"}".into(),
             extra_content: None,
         },
+        counter: Mutex::new(0),
     });
     let mut tool_source = AlwaysOkToolSource { specs: Vec::new() };
     let mut history = vec![ChatMessage::system("SYSTEM"), ChatMessage::user("TASK")];

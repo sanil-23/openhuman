@@ -316,6 +316,16 @@ impl Tool for ContinueSubagentTool {
                         // The continued sub-agent stopped short again (stuck halt
                         // / iteration cap). Hand back the partial progress framed
                         // as incomplete rather than a clean success (#4096).
+                        // The run is no longer awaiting input, so the checkpoint
+                        // written for the prior AwaitingUser pause is stale —
+                        // clean it up best-effort, mirroring the Completed arm.
+                        if let Err(e) = std::fs::remove_file(&checkpoint_path) {
+                            tracing::debug!(
+                                task_id = %task_id,
+                                error = %e,
+                                "[continue_subagent] failed to remove checkpoint after incomplete (best-effort)"
+                            );
+                        }
                         tracing::info!(
                             agent_id = %outcome.agent_id,
                             task_id = %outcome.task_id,
