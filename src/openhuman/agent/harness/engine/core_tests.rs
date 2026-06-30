@@ -872,6 +872,7 @@ async fn iteration_cap_yields_turnstop_cap() {
         &multimodal,
         &multimodal_files,
         8,
+        crate::openhuman::inference::provider::AGENT_TURN_MAX_OUTPUT_TOKENS,
         None,
         &[],
         None,
