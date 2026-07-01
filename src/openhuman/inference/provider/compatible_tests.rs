@@ -4818,3 +4818,34 @@ async fn stream_watchdog_tolerates_dropped_delta_receiver() {
         .expect("a dropped delta receiver must not fail the stream");
     assert_eq!(resp.text.as_deref(), Some("xy"));
 }
+
+#[tokio::test]
+async fn stream_stops_on_done_even_if_socket_lingers() {
+    // A provider that sends `[DONE]` then holds the socket open must finalize the
+    // (complete) response immediately — the watchdog must NOT re-arm and fail it
+    // as a stall. Regression for the watchdog + terminal-sentinel interaction
+    // (CodeRabbit review, PR #4393). With the pre-fix `continue`, this stream
+    // would trip the 300ms idle watchdog instead of completing.
+    let script = vec![
+        (
+            std::time::Duration::from_millis(0),
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done-content\"}}]}\n\n",
+        ),
+        (std::time::Duration::from_millis(0), "data: [DONE]\n\n"),
+    ];
+    // close_after = false: hold the socket open for 30s AFTER [DONE].
+    let url = spawn_scripted_sse(script, false, std::time::Duration::from_secs(30)).await;
+    let provider = OpenAiCompatibleProvider::new("donetest", &url, None, AuthStyle::None)
+        .with_stream_idle_timeout(std::time::Duration::from_millis(300));
+    let request = watchdog_request();
+    let (delta_tx, _delta_rx) = tokio::sync::mpsc::channel(8);
+    // Must return well under the 30s socket hold (and without a stall error).
+    let resp = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        provider.stream_native_chat(None, &request, &delta_tx, 0),
+    )
+    .await
+    .expect("must complete on [DONE], not wait for the socket to close")
+    .expect("[DONE] must finalize the response, not trip the watchdog");
+    assert_eq!(resp.text.as_deref(), Some("done-content"));
+}

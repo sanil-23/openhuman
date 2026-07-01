@@ -326,7 +326,13 @@ impl OpenAiCompatibleProvider {
                     };
                     let data = data.trim();
                     if data == "[DONE]" {
-                        continue;
+                        // `[DONE]` is the terminal SSE sentinel — the response is
+                        // complete. Stop reading immediately rather than looping
+                        // back to another watchdog-armed read: a provider that
+                        // sends `[DONE]` but lingers the socket would otherwise
+                        // trip the inactivity watchdog and fail a finished
+                        // response as a retryable stall (#4269 watchdog review).
+                        break 'stream;
                     }
 
                     let chunk: StreamChunkResponse = match serde_json::from_str(data) {
