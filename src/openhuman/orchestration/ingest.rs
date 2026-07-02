@@ -148,13 +148,31 @@ async fn ingest_one(
     let msg_id = envelope.id.clone();
     let agent_id = envelope.from.clone();
     log::debug!(target: LOG, "[orchestration] ingest.entry id={msg_id} from={agent_id}");
+    let workspace_dir = config.workspace_dir.clone();
+
+    // 0. Sender gate: only ingest DMs from linked (accepted) pairing agents —
+    //    i.e. wrapped Codex/Claude sessions. Decrypting advances the Signal
+    //    ratchet, so an unpaired sender's DM (an ordinary human message) must
+    //    never be decrypted or consumed here; it stays readable by the existing
+    //    Messaging UI via messages.list / signal.decryptMessage.
+    let linked =
+        crate::openhuman::agent_orchestration::pairing::linked_agent_ids(&workspace_dir).await;
+    if !linked.contains(&agent_id) {
+        log::debug!(target: LOG, "[orchestration] ingest.skip_unpaired from={agent_id}");
+        return Ok(());
+    }
 
     // 1. Dedupe BEFORE decrypt — protects the non-idempotent Signal ratchet.
-    let workspace_dir = config.workspace_dir.clone();
     let already = store::with_connection(&workspace_dir, |c| store::message_exists(c, &msg_id))
         .map_err(|e| format!("store lookup: {e}"))?;
     if already {
+        // The row already exists but a prior run may have crashed (or the relay
+        // ack failed) after persist. Retry the ack so the relay copy is
+        // consumed; never re-decrypt or re-publish.
         log::debug!(target: LOG, "[orchestration] ingest.dedupe id={msg_id}");
+        if let Err(e) = acknowledge_message(&msg_id).await {
+            log::warn!(target: LOG, "[orchestration] ingest.ack_failed_dedupe id={msg_id}: {e}");
+        }
         return Ok(());
     }
 
