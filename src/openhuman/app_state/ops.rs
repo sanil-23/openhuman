@@ -756,7 +756,19 @@ pub fn peek_cached_current_user_identity() -> Option<crate::openhuman::agent::pr
 /// Return the cached runtime snapshot when it is still within
 /// `RUNTIME_SNAPSHOT_TTL`, else `None`. Kept as a small helper so both the
 /// fast-path read and the post-lock double-check share identical freshness logic.
+/// A service-status mock is injected via `OPENHUMAN_SERVICE_MOCK` (test-only env
+/// hook that production `service` status already honors). While it is active the
+/// runtime snapshot must never be served from — or written to — the process-
+/// global cache: the mock's state changes between calls, so caching it would
+/// both mask the freshly-injected value and poison later (non-mocked) reads.
+fn service_status_mock_active() -> bool {
+    std::env::var_os("OPENHUMAN_SERVICE_MOCK").is_some()
+}
+
 fn fresh_cached_runtime_snapshot(req_id: u64) -> Option<RuntimeSnapshot> {
+    if service_status_mock_active() {
+        return None;
+    }
     let cache = RUNTIME_SNAPSHOT_CACHE.lock();
     let entry = cache.as_ref()?;
     let age = entry.fetched_at.elapsed();
@@ -909,10 +921,14 @@ async fn build_runtime_snapshot(config: &Config, req_id: u64) -> RuntimeSnapshot
         service: service.0,
     };
 
-    *RUNTIME_SNAPSHOT_CACHE.lock() = Some(CachedRuntimeSnapshot {
-        snapshot: snapshot.clone(),
-        fetched_at: Instant::now(),
-    });
+    // Don't cache a snapshot built under an injected service mock (see
+    // `service_status_mock_active`) — it would poison later non-mocked reads.
+    if !service_status_mock_active() {
+        *RUNTIME_SNAPSHOT_CACHE.lock() = Some(CachedRuntimeSnapshot {
+            snapshot: snapshot.clone(),
+            fetched_at: Instant::now(),
+        });
+    }
 
     snapshot
 }

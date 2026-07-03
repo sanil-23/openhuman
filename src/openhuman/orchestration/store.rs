@@ -72,8 +72,12 @@ const SCHEMA_DDL: &str = "
         timestamp       TEXT NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_world_diff_session
-        ON world_diff (agent_id, session_id, seq);
+    -- The UNIQUE index on (agent_id, session_id, seq) — which makes a racing
+    -- `MAX(seq)+1` allocation impossible to persist twice — is created by the
+    -- one-time `migrate()` step (user_version-gated), not here: the initial
+    -- release shipped a NON-unique `idx_world_diff_session`, and
+    -- `CREATE UNIQUE INDEX IF NOT EXISTS` under that name is a no-op on stores
+    -- that already have it. See `migrate`.
 
     -- Stage 6: append-only subconscious steering directives. 'Current' directive
     -- is the latest row with superseded_by IS NULL that has not expired
@@ -104,7 +108,43 @@ pub fn with_connection<T>(
         .with_context(|| format!("open orchestration DB: {}", db_path.display()))?;
     conn.execute_batch(SCHEMA_DDL)
         .context("initialise orchestration schema")?;
+    migrate(&conn).context("migrate orchestration schema")?;
     f(&conn)
+}
+
+/// One-time, `user_version`-gated migrations. Runs after the idempotent
+/// `SCHEMA_DDL`; each version block executes exactly once per DB.
+fn migrate(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+
+    // v1 — enforce uniqueness of the world-diff timeline position.
+    // The initial release created `idx_world_diff_session` NON-unique, so a
+    // race between concurrent `MAX(seq)+1` allocations could persist duplicate
+    // `(agent_id, session_id, seq)` rows. Drop the legacy index, de-dupe any
+    // pre-existing race rows (keep the earliest per key), create the unique
+    // index under a new name, then reconcile `terminal_state` so it can't point
+    // at a mutation from a deleted duplicate. Runs once (guarded), so it never
+    // rewrites `terminal_state` on steady-state opens.
+    if version < 1 {
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS idx_world_diff_session;
+             DELETE FROM world_diff WHERE rowid NOT IN (
+                 SELECT MIN(rowid) FROM world_diff GROUP BY agent_id, session_id, seq
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_world_diff_session_uniq
+                 ON world_diff (agent_id, session_id, seq);
+             INSERT OR REPLACE INTO kv (k, v)
+                 SELECT 'terminal_state:' || wd.agent_id || ':' || wd.session_id,
+                        wd.world_mutation
+                 FROM world_diff wd
+                 WHERE wd.seq = (
+                     SELECT MAX(seq) FROM world_diff w2
+                     WHERE w2.agent_id = wd.agent_id AND w2.session_id = wd.session_id
+                 );
+             PRAGMA user_version = 1;",
+        )?;
+    }
+    Ok(())
 }
 
 /// True if a relay message id is already persisted. This guard MUST run before
@@ -859,6 +899,81 @@ mod tests {
                 |r| r.get(0),
             )?;
             assert_eq!(seq, 5);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn migrates_legacy_nonunique_world_diff_index_to_unique() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("orchestration").join("orchestration.db");
+        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+
+        // Simulate a pre-migration store: the world_diff table with the OLD
+        // NON-unique index, holding two rows that share (agent, session, seq) —
+        // the exact duplicate the concurrent `MAX(seq)+1` race could produce.
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE world_diff (
+                    cycle_id TEXT PRIMARY KEY, seq INTEGER NOT NULL, session_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL, event_signature TEXT NOT NULL,
+                    world_mutation TEXT NOT NULL, delta TEXT NOT NULL, timestamp TEXT NOT NULL);
+                 CREATE INDEX idx_world_diff_session ON world_diff (agent_id, session_id, seq);",
+            )
+            .unwrap();
+            // Distinct mutations so we can prove terminal_state is reconciled.
+            conn.execute(
+                "INSERT INTO world_diff VALUES ('c1', 1, 's', '@a', 'sig', 'mut_c1', 'd', 't')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO world_diff VALUES ('c2', 1, 's', '@a', 'sig', 'mut_c2', 'd', 't')",
+                [],
+            )
+            .unwrap();
+            conn.execute("CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)", [])
+                .unwrap();
+            // Stale terminal_state pointing at the duplicate that will be deleted.
+            conn.execute(
+                "INSERT INTO kv VALUES ('terminal_state:@a:s', 'mut_c2')",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Opening through with_connection applies SCHEMA_DDL + the migration.
+        with_connection(tmp.path(), |conn| {
+            // Legacy duplicate race rows are de-duped to one per (agent, session, seq).
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM world_diff WHERE agent_id='@a' AND session_id='s' AND seq=1",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(n, 1, "duplicate legacy rows de-duped");
+
+            // terminal_state is reconciled to the surviving row's mutation (not the deleted one).
+            let ts: String =
+                conn.query_row("SELECT v FROM kv WHERE k='terminal_state:@a:s'", [], |r| {
+                    r.get(0)
+                })?;
+            assert_eq!(
+                ts, "mut_c1",
+                "terminal_state reconciled to the surviving row"
+            );
+
+            // The index is now UNIQUE — a fresh duplicate (agent, session, seq) is rejected.
+            let dup = conn.execute(
+                "INSERT INTO world_diff VALUES ('c3', 1, 's', '@a', 'sig', 'mut', 'd', 't')",
+                [],
+            );
+            assert!(dup.is_err(), "unique index rejects a duplicate seq");
+
+            // Migration is one-shot: user_version was bumped.
+            let uv: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+            assert_eq!(uv, 1, "migration marks user_version");
             Ok(())
         })
         .unwrap();

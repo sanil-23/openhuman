@@ -359,11 +359,16 @@ fn handle_status(_params: Map<String, Value>) -> ControllerFuture {
                     created_at: d.created_at,
                     expires_after_cycles: d.expires_after_cycles,
                 });
-            // MAX() always returns exactly one row (NULL when empty).
-            let ingest_last: Option<String> =
-                conn.query_row("SELECT MAX(last_message_at) FROM sessions", [], |r| {
-                    r.get::<_, Option<String>>(0)
-                })?;
+            // MAX() always returns exactly one row (NULL when empty). Exclude the
+            // pinned master/subconscious windows: they're bumped by manual owner
+            // DMs (`handle_send_master_message`) and steering writes, which would
+            // otherwise mask a stalled real ingestion pipeline with fresh traffic.
+            let ingest_last: Option<String> = conn.query_row(
+                "SELECT MAX(last_message_at) FROM sessions \
+                 WHERE session_id NOT IN ('master', 'subconscious')",
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            )?;
             let lag = store::ingest_cursor_lag(conn)?;
             let last_error = store::kv_get(conn, "orchestration:last_error")?;
             Ok((steering, ingest_last, lag, last_error))

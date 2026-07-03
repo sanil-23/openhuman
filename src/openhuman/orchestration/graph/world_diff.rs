@@ -52,7 +52,8 @@ mod tests {
     #[test]
     fn signature_and_mutation_reflect_terminal_state() {
         let mut s = OrchestrationState::seed("h1", "@peer", Vec::new());
-        assert!(event_signature(&s).contains("cycle=h1#0"));
+        // cycle id is agent-scoped: `<counterpart>#<session>#<latest_seq>`.
+        assert!(event_signature(&s).contains("cycle=@peer#h1#0"));
         assert!(event_signature(&s).contains("reply=no"));
         assert_eq!(world_mutation(&s), "(no reply)");
 

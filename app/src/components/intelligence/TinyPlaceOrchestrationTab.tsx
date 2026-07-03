@@ -514,10 +514,7 @@ export default function TinyPlaceOrchestrationTab() {
             <p>
               {t('tinyplaceOrchestration.failedToLoad')}: {messagesState.message}
             </p>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => selected && selectChat(selected.id)}>
+            <Button variant="secondary" size="sm" onClick={() => void refresh()}>
               {t('common.retry')}
             </Button>
           </div>

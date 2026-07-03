@@ -13,7 +13,7 @@ the staged plan under [`docs/plans/subconscious-orchestration/`](../../../docs/p
 
 ## End-to-end flow
 
-```
+```text
 Claude Code / Codex session
   └─ tinyplace harness wrapper — tails the session JSONL → SessionEnvelopeV1
        └─ Signal E2E DM → owner agent's tiny.place inbox   [tagged sessionId, source, role]

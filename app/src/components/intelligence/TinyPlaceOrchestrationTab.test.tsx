@@ -34,8 +34,7 @@ vi.mock('../../lib/orchestration/orchestrationClient', async importOriginal => {
 });
 
 vi.mock('../../services/socketService', () => {
-  const socket = { on: vi.fn(), off: vi.fn() };
-  return { socketService: { getSocket: vi.fn(() => socket) } };
+  return { socketService: { on: vi.fn(), off: vi.fn(), getSocket: vi.fn(() => null) } };
 });
 
 vi.mock('../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (k: string) => k }) }));
@@ -52,7 +51,7 @@ const pairingAcceptMock = vi.mocked(apiClient.orchestrationPairing.acceptRequest
 const pairingDeclineMock = vi.mocked(apiClient.orchestrationPairing.declineRequest);
 const pairingBlockMock = vi.mocked(apiClient.orchestrationPairing.blockRequest);
 
-const getSocketMock = vi.mocked(socketService.getSocket);
+const socketOnMock = vi.mocked(socketService.on);
 
 const PINNED_SESSIONS = [
   {
@@ -260,13 +259,11 @@ describe('TinyPlaceOrchestrationTab', () => {
 
   it('refetches when an orchestration:message socket event fires', async () => {
     let handler: ((payload: unknown) => void) | undefined;
-    const socket = {
-      on: vi.fn((event: string, cb: (payload: unknown) => void) => {
-        if (event === 'orchestration:message') handler = cb;
-      }),
-      off: vi.fn(),
-    };
-    getSocketMock.mockReturnValue(socket as never);
+    // Listeners are registered through socketService.on (which queues until the
+    // socket exists), so capture the handler there rather than on a raw socket.
+    socketOnMock.mockImplementation(((event: string, cb: (payload: unknown) => void) => {
+      if (event === 'orchestration:message') handler = cb;
+    }) as never);
 
     render(<TinyPlaceOrchestrationTab />);
 

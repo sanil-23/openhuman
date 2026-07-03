@@ -311,8 +311,6 @@ export function useOrchestrationChats(t: Translate): UseOrchestrationChatsResult
 
   // Live updates: refetch the affected chat + sessions list on new messages.
   useEffect(() => {
-    const socket = socketService.getSocket();
-    if (!socket) return;
     const handler = (payload: unknown) => {
       const event = payload as OrchestrationMessageEvent | null;
       if (!event || typeof event !== 'object') return;
@@ -323,11 +321,14 @@ export function useOrchestrationChats(t: Translate): UseOrchestrationChatsResult
         void loadMessages(affected);
       }
     };
-    socket.on('orchestration:message', handler);
-    socket.on('orchestration_message', handler);
+    // Register through socketService (not the raw socket): it queues listeners
+    // until the socket exists, so live refetch still attaches when the tab mounts
+    // while the core socket is still being created or is reconnecting.
+    socketService.on('orchestration:message', handler);
+    socketService.on('orchestration_message', handler);
     return () => {
-      socket.off('orchestration:message', handler);
-      socket.off('orchestration_message', handler);
+      socketService.off('orchestration:message', handler);
+      socketService.off('orchestration_message', handler);
     };
   }, [loadSessions, loadMessages, refreshStatus]);
 

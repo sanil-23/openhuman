@@ -130,19 +130,30 @@ pub fn seed_state(
         if messages.is_empty() {
             return Ok(None);
         }
-        let mut state =
+        let state =
             OrchestrationState::seed(session_id.to_string(), agent_id.to_string(), messages);
-        // Out-of-band writer pattern (spec §6): bump the global reasoning-cycle
-        // counter and load the current (non-expired) subconscious steering
-        // directive into state at cycle start — the reasoning `execute` node then
-        // weaves it into its prompt. The subconscious never edges into the graph.
+        Ok(Some(state))
+    })
+    .map_err(|e| format!("seed_state: {e}"))
+}
+
+/// Bump the global reasoning-cycle counter and load the current (non-expired)
+/// subconscious steering directive into `state` — the reasoning `execute` node
+/// then weaves it into its prompt (out-of-band writer pattern, spec §6; the
+/// subconscious never edges into the graph).
+///
+/// Called only *after* the idempotence check confirms the wake will proceed, so
+/// no-op triggers (retries, duplicate ingest events, debounce edge cases) don't
+/// consume a cycle tick and prematurely expire an active steering directive.
+fn apply_cycle_steering(config: &Config, state: &mut OrchestrationState) -> Result<(), String> {
+    store::with_connection(&config.workspace_dir, |conn| {
         let cycle = store::bump_cycle_counter(conn)?;
         state.subconscious_steering = store::current_steering_directive(conn, cycle)?
             .map(|d| d.text)
             .filter(|t| !t.trim().is_empty());
-        Ok(Some(state))
+        Ok(())
     })
-    .map_err(|e| format!("seed_state: {e}"))
+    .map_err(|e| format!("apply_cycle_steering: {e}"))
 }
 
 /// The highest message seq currently persisted for the session.
@@ -399,7 +410,7 @@ pub async fn invoke_with_runtime(
     session_id: &str,
     runtime: Arc<dyn OrchestrationRuntime>,
 ) -> Result<(), String> {
-    let Some(state) = seed_state(config, agent_id, session_id)? else {
+    let Some(mut state) = seed_state(config, agent_id, session_id)? else {
         log::debug!(target: LOG, "[orchestration] wake.skip_empty session={session_id}");
         return Ok(());
     };
@@ -411,6 +422,10 @@ pub async fn invoke_with_runtime(
         );
         return Ok(());
     }
+    // Only now that the cycle is confirmed to proceed: advance the reasoning-cycle
+    // counter and inject the current steering directive. Keeping this after the
+    // idempotence guard prevents no-op wakes from expiring steering early.
+    apply_cycle_steering(config, &mut state)?;
 
     // Defer under a paused/throttled scheduler gate — the permit is held for the
     // whole cycle so background pressure backs off without dropping the message.
@@ -1008,7 +1023,11 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let state = seed_state(&config, "@peer", "h1").unwrap().expect("seeded");
+        let mut state = seed_state(&config, "@peer", "h1").unwrap().expect("seeded");
+        // Steering is injected once the wake is confirmed to proceed (mirrors
+        // `invoke_with_runtime` calling `apply_cycle_steering` after the
+        // idempotence guard), not by `seed_state` itself.
+        apply_cycle_steering(&config, &mut state).unwrap();
         assert_eq!(
             state.subconscious_steering.as_deref(),
             Some("prioritize the billing migration"),
