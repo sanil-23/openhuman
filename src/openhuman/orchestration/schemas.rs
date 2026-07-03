@@ -14,10 +14,7 @@ use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
 use crate::openhuman::config::{rpc as config_rpc, Config};
 
 use super::store;
-use super::types::{
-    ChatKind, HarnessEnvelopeMessage, HarnessScope, OrchestrationMessage, OrchestrationSession,
-    SessionEnvelopeV1, SESSION_ENVELOPE_VERSION_V1,
-};
+use super::types::{ChatKind, OrchestrationMessage, OrchestrationSession, SessionEnvelopeV1};
 
 /// Active-window: a session is "active" if it saw traffic within this many ms.
 const ACTIVE_WINDOW_MS: i64 = 45 * 60 * 1000;
@@ -331,25 +328,10 @@ fn session_envelope_plaintext(
     message_id: &str,
     now: &str,
 ) -> Result<String, String> {
-    let envelope = SessionEnvelopeV1 {
-        envelope_version: SESSION_ENVELOPE_VERSION_V1.to_string(),
-        version: 1,
-        scope: HarnessScope {
-            scope_type: "session".to_string(),
-            wrapper_session_id: session_id.to_string(),
-            harness_session_id: session_id.to_string(),
-            ..Default::default()
-        },
-        message: HarnessEnvelopeMessage {
-            id: message_id.to_string(),
-            role: "owner".to_string(),
-            text: body.to_string(),
-            timestamp: now.to_string(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    serde_json::to_string(&envelope).map_err(|e| format!("envelope encode: {e}"))
+    serde_json::to_string(&SessionEnvelopeV1::outgoing(
+        session_id, body, message_id, now,
+    ))
+    .map_err(|e| format!("envelope encode: {e}"))
 }
 
 fn handle_send_master_message(params: Map<String, Value>) -> ControllerFuture {
