@@ -4871,11 +4871,10 @@ async fn app_state_snapshot_degrades_runtime_service_status_failures() {
     let _service_state =
         EnvVarGuard::set_to_path("OPENHUMAN_SERVICE_MOCK_STATE_FILE", &service_state_path);
 
-    // The runtime snapshot cache is process-global and not keyed by config.
-    // Let prior app_state_snapshot tests age out so this call exercises the
-    // service-status fallback instead of returning a cached runtime.
-    tokio::time::sleep(Duration::from_millis(2_100)).await;
-
+    // The runtime snapshot cache is keyed by config identity (workspace_dir), so
+    // this harness's unique workspace guarantees a cache miss regardless of prior
+    // app_state_snapshot tests — the call exercises the service-status fallback
+    // against our injected mock rather than returning a foreign cached runtime.
     let snapshot = rpc(
         &harness.rpc_base,
         30_051,

@@ -3,7 +3,7 @@
 use super::channel_types::{
     TelegramChannel, TelegramUpdateWindow, TELEGRAM_RECENT_UPDATE_CACHE_SIZE,
 };
-use super::text::TELEGRAM_BIND_COMMAND;
+use super::text::{TELEGRAM_BIND_COMMAND, TELEGRAM_START_COMMAND};
 use crate::openhuman::config::{Config, StreamMode};
 use crate::openhuman::security::pairing::PairingGuard;
 use anyhow::Context;
@@ -123,6 +123,14 @@ impl TelegramChannel {
         format!("{}/bot{}/{method}", self.api_base, self.bot_token)
     }
 
+    /// Point outbound Telegram API calls at `base` (test-only seam). Used to
+    /// aim `send()` at a dead local port so onboarding tests exercise the
+    /// decision logic without reaching api.telegram.org.
+    #[cfg(test)]
+    pub(crate) fn set_api_base_for_tests(&mut self, base: impl Into<String>) {
+        self.api_base = base.into();
+    }
+
     pub(crate) fn pairing_code_active(&self) -> bool {
         self.pairing
             .as_ref()
@@ -138,6 +146,21 @@ impl TelegramChannel {
             return None;
         }
         parts.next().map(str::trim).filter(|code| !code.is_empty())
+    }
+
+    /// Whether `text` is the standard Telegram `/start` bot-onboarding command
+    /// (optionally addressed as `/start@botname`, with or without a payload).
+    ///
+    /// On the self-bot-token path this is the operator's explicit "I'm setting up
+    /// my bot" signal: the first `/start` while pairing is still pending pairs the
+    /// sender (see `handle_unauthorized_message`), matching the "first sender after
+    /// /start" behaviour sanctioned by openhuman#4381.
+    pub(crate) fn is_start_command(text: &str) -> bool {
+        let Some(command) = text.split_whitespace().next() else {
+            return false;
+        };
+        let base_command = command.split('@').next().unwrap_or(command);
+        base_command == TELEGRAM_START_COMMAND
     }
 
     pub(crate) fn track_update_id(&self, update_id: i64) -> bool {

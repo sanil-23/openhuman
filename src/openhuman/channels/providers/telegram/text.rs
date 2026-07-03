@@ -3,6 +3,7 @@
 /// Telegram's maximum message length for text messages
 pub(crate) const TELEGRAM_MAX_MESSAGE_LENGTH: usize = 4096;
 pub(crate) const TELEGRAM_BIND_COMMAND: &str = "/bind";
+pub(crate) const TELEGRAM_START_COMMAND: &str = "/start";
 
 pub(crate) fn split_message_for_telegram(message: &str) -> Vec<String> {
     if message.chars().count() <= TELEGRAM_MAX_MESSAGE_LENGTH {

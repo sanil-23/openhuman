@@ -314,6 +314,70 @@ fn telegram_extract_bind_code_rejects_invalid_forms() {
 }
 
 #[test]
+fn telegram_is_start_command_accepts_valid_forms() {
+    assert!(TelegramChannel::is_start_command("/start"));
+    // Addressed to a specific bot in a group.
+    assert!(TelegramChannel::is_start_command("/start@openhuman_bot"));
+    // Deep-link / payload after the command (still a /start).
+    assert!(TelegramChannel::is_start_command("/start deadbeef"));
+    // Leading whitespace is tolerated (split_whitespace skips it).
+    assert!(TelegramChannel::is_start_command("  /start"));
+}
+
+#[test]
+fn telegram_is_start_command_rejects_non_start() {
+    assert!(!TelegramChannel::is_start_command("/bind 123"));
+    assert!(!TelegramChannel::is_start_command("start"));
+    assert!(!TelegramChannel::is_start_command("hello"));
+    assert!(!TelegramChannel::is_start_command(""));
+    // Must be the whole command token, not a prefix.
+    assert!(!TelegramChannel::is_start_command("/started"));
+}
+
+#[test]
+fn telegram_bindable_identity_prefers_numeric_id() {
+    // Numeric id is immutable, so it wins over a mutable username.
+    assert_eq!(
+        TelegramChannel::bindable_identity("alice", Some("123456789")),
+        Some("123456789".to_string())
+    );
+}
+
+#[test]
+fn telegram_bindable_identity_falls_back_to_username() {
+    assert_eq!(
+        TelegramChannel::bindable_identity("alice", None),
+        Some("alice".to_string())
+    );
+    // An empty id string is ignored, not used as the identity.
+    assert_eq!(
+        TelegramChannel::bindable_identity("alice", Some("")),
+        Some("alice".to_string())
+    );
+}
+
+#[test]
+fn telegram_bindable_identity_none_when_unidentified() {
+    assert_eq!(TelegramChannel::bindable_identity("unknown", None), None);
+    assert_eq!(TelegramChannel::bindable_identity("", None), None);
+}
+
+#[test]
+fn telegram_allowlist_is_empty_tracks_runtime_state() {
+    // Fresh pairing-mode channel starts empty ...
+    let ch = TelegramChannel::new("t".into(), vec![], false);
+    assert!(ch.allowlist_is_empty());
+    // ... and flips to non-empty once the first sender is approved at runtime,
+    // which is what closes the `/start` first-run onboarding window.
+    ch.add_allowed_identity_runtime("123456789");
+    assert!(!ch.allowlist_is_empty());
+
+    // A channel constructed with an explicit allowlist is never "empty".
+    let configured = TelegramChannel::new("t".into(), vec!["alice".into()], false);
+    assert!(!configured.allowlist_is_empty());
+}
+
+#[test]
 fn parse_attachment_markers_extracts_multiple_types() {
     let message = "Here are files [IMAGE:/tmp/a.png] and [DOCUMENT:https://example.com/a.pdf]";
     let (cleaned, attachments) = parse_attachment_markers(message);
@@ -2165,5 +2229,60 @@ fn approval_debounce_evicts_entries_past_window() {
             "new_sender"
         )),
         "[telegram][approval] the new entry must be inserted"
+    );
+}
+
+#[tokio::test]
+async fn start_onboarding_is_private_only_and_consumes_the_code() {
+    // Aim outbound sends at a dead local port so the approve/hint `self.send()`
+    // fast-fails (connection refused) instead of reaching api.telegram.org — the
+    // onboarding *decision* (runtime allowlist + one-time code) is asserted
+    // regardless of the send outcome.
+    let mut ch = TelegramChannel::new("fake-token".into(), vec![], false);
+    ch.set_api_base_for_tests("http://127.0.0.1:1");
+    assert!(ch.allowlist_is_empty());
+    assert!(
+        ch.pairing_code_active(),
+        "fresh pairing-mode channel arms a code"
+    );
+
+    // A PRIVATE `/start` onboards the first sender AND consumes the code, so it
+    // can't later be replayed via `/bind`.
+    let private_start = serde_json::json!({
+        "message": {
+            "chat": { "id": 111, "type": "private" },
+            "from": { "id": 222, "username": "operator" },
+            "text": "/start"
+        }
+    });
+    ch.handle_unauthorized_message(&private_start).await;
+    assert!(
+        !ch.allowlist_is_empty(),
+        "private /start onboards the operator"
+    );
+    assert!(
+        !ch.pairing_code_active(),
+        "the one-time code is consumed on /start onboarding"
+    );
+
+    // A GROUP `/start` must NOT onboard — otherwise any member could claim
+    // operator ownership. It falls through to the normal approval prompt.
+    let mut group_ch = TelegramChannel::new("fake-token".into(), vec![], false);
+    group_ch.set_api_base_for_tests("http://127.0.0.1:1");
+    let group_start = serde_json::json!({
+        "message": {
+            "chat": { "id": -100, "type": "supergroup" },
+            "from": { "id": 333, "username": "member" },
+            "text": "/start"
+        }
+    });
+    group_ch.handle_unauthorized_message(&group_start).await;
+    assert!(
+        group_ch.allowlist_is_empty(),
+        "a group /start must not onboard anyone"
+    );
+    assert!(
+        group_ch.pairing_code_active(),
+        "a group /start leaves the one-time code intact"
     );
 }

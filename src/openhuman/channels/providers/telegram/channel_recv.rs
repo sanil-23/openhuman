@@ -204,12 +204,16 @@ impl TelegramChannel {
     /// Legitimate first-run pairing (`allowed_users=[]` at construction) always sets
     /// `pairing = Some(...)` so it is never suppressed here.
     pub(crate) fn is_race_condition_instance(&self) -> bool {
-        let runtime_empty = self
-            .allowed_users
+        self.allowlist_is_empty() && self.pairing.is_none()
+    }
+
+    /// Whether the runtime allowlist currently has no entries. A poisoned lock is
+    /// treated as non-empty (fail-closed) so we never widen access on a lock error.
+    pub(crate) fn allowlist_is_empty(&self) -> bool {
+        self.allowed_users
             .read()
             .map(|users| users.is_empty())
-            .unwrap_or(false);
-        runtime_empty && self.pairing.is_none()
+            .unwrap_or(false)
     }
 
     /// Build the de-bounce key for approval prompts: `"{chat_id}:{sender}"`.
@@ -308,55 +312,92 @@ impl TelegramChannel {
             return;
         }
 
+        // ── First-run onboarding: `/start` pairs the operator ────────────────────
+        // On the self-bot-token path a blank allowlist arms `pairing = Some(..)` (a
+        // fresh bot is world-reachable by @username, so we must not allow-all like
+        // Discord). The one-time bind code, however, is only printed to core stdout
+        // and is invisible to a desktop operator — leaving the gate un-openable and
+        // every message stuck on the approval prompt (openhuman#4381).
+        //
+        // The operator's first `/start` is their explicit "I'm setting up my bot"
+        // signal. While pairing is still pending we treat that sender as the owner,
+        // add them to the allowlist, and let their subsequent messages reach the
+        // agent — matching the "first sender after /start" behaviour the issue
+        // sanctions. The guard is tight: `pairing.is_some()` excludes an
+        // explicitly-configured allowlist, and `allowlist_is_empty()` restricts
+        // onboarding to the genuine first sender — once the operator is bound the
+        // list is non-empty, so a later stranger's `/start` falls through to the
+        // normal approval prompt instead of being auto-approved.
+        // SECURITY (first-sender-wins TOFU): unlike `/bind <code>` — which
+        // requires the stdout secret and goes through `try_pair`'s lockout —
+        // `/start` onboarding trusts the first sender with no secret and no
+        // rate-limit. Anyone who learns the bot's `@username` before the operator
+        // sends the first message could claim ownership. The private-chat guard
+        // below removes the group attack surface (the common hijack); the residual
+        // window is a stale, world-reachable un-paired bot. Bounding onboarding to
+        // a startup time-window is a reasonable future hardening (see openhuman#4381).
+        if self.pairing.is_some()
+            && self.allowlist_is_empty()
+            // Private chats only: operator setup for a self-bot-token is a DM
+            // action. Onboarding the first `/start` sender in a *group* would let
+            // any member claim operator ownership (the un-paired bot may be added
+            // to a group mid-setup), so a group `/start` falls through to the
+            // normal approval prompt instead.
+            && !Self::is_group_message(message)
+            && text.map(Self::is_start_command).unwrap_or(false)
+        {
+            match Self::bindable_identity(&normalized_username, normalized_sender_id.as_deref()) {
+                Some(identity) => {
+                    tracing::info!(
+                        chat_id,
+                        identity,
+                        "[telegram][approval] /start onboarding: pairing first sender as operator"
+                    );
+                    self.approve_and_persist_sender(&identity, &chat_id).await;
+                    // Finish the one-time pairing flow: the operator is bound
+                    // via /start rather than /bind <code>, so consume the code
+                    // here too — otherwise the stdout code stays live and a
+                    // later sender who obtains it could still /bind themselves.
+                    if let Some(pairing) = self.pairing.as_ref() {
+                        pairing.invalidate_code();
+                    }
+                }
+                None => {
+                    let _ = self
+                        .send(&SendMessage::new(
+                            "❌ Could not identify your Telegram account from /start. Ensure your account has a username or stable user ID, then try again.",
+                            &chat_id,
+                        ))
+                        .await;
+                }
+            }
+            return;
+        }
+
         if let Some(code) = text.and_then(Self::extract_bind_code) {
             if let Some(pairing) = self.pairing.as_ref() {
                 match pairing.try_pair(code).await {
                     Ok(Some(_token)) => {
-                        let bind_identity = normalized_sender_id.clone().or_else(|| {
-                            if normalized_username.is_empty() || normalized_username == "unknown" {
-                                None
-                            } else {
-                                Some(normalized_username.clone())
+                        match Self::bindable_identity(
+                            &normalized_username,
+                            normalized_sender_id.as_deref(),
+                        ) {
+                            Some(identity) => {
+                                tracing::info!(
+                                    chat_id,
+                                    identity,
+                                    "[telegram][approval] paired via bind code and allowlisted identity"
+                                );
+                                self.approve_and_persist_sender(&identity, &chat_id).await;
                             }
-                        });
-
-                        if let Some(identity) = bind_identity {
-                            self.add_allowed_identity_runtime(&identity);
-                            match self.persist_allowed_identity(&identity).await {
-                                Ok(()) => {
-                                    let _ = self
-                                        .send(&SendMessage::new(
-                                            "✅ Telegram account bound successfully. You can talk to OpenHuman now.",
-                                            &chat_id,
-                                        ))
-                                        .await;
-                                    tracing::info!(
-                                        chat_id,
-                                        identity,
-                                        "[telegram][approval] paired and allowlisted identity"
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        chat_id,
-                                        error = %e,
-                                        "[telegram][approval] failed to persist allowlist after bind"
-                                    );
-                                    let _ = self
-                                        .send(&SendMessage::new(
-                                            "⚠️ Bound for this runtime, but failed to persist config. Access may be lost after restart; check config file permissions.",
-                                            &chat_id,
-                                        ))
-                                        .await;
-                                }
+                            None => {
+                                let _ = self
+                                    .send(&SendMessage::new(
+                                        "❌ Could not identify your Telegram account. Ensure your account has a username or stable user ID, then retry.",
+                                        &chat_id,
+                                    ))
+                                    .await;
                             }
-                        } else {
-                            let _ = self
-                                .send(&SendMessage::new(
-                                    "❌ Could not identify your Telegram account. Ensure your account has a username or stable user ID, then retry.",
-                                    &chat_id,
-                                ))
-                                .await;
                         }
                     }
                     Ok(None) => {
@@ -411,25 +452,86 @@ impl TelegramChannel {
              Allowlist Telegram username (without '@') or numeric user ID."
         );
 
-        let _ = self
-            .send(&SendMessage::new(
-                "🔐 This bot requires operator approval.\n\nAsk the operator to approve the pairing in the web UI, then send your message again.".to_string(),
-                &chat_id,
-            ))
-            .await;
-
-        if self.pairing_code_active() {
+        // Copy depends on whether first-run pairing is armed. In pairing mode the
+        // operator unlocks the bot by sending `/start` (or `/bind <code>` if they
+        // have the code from the app); there is no "approve in the web UI" action for
+        // the self-bot-token path, so we must not point the user at one (openhuman#4381).
+        //
+        // Only advertise the `/start` onboarding hint in a private chat — in a group
+        // it would invite any member to claim operator ownership, matching the
+        // private-only onboarding gate above.
+        if self.pairing_code_active() && !Self::is_group_message(message) {
             tracing::debug!(
                 chat_id,
                 sender = sender_key,
-                "[telegram][approval] pairing code active — sending /bind hint"
+                "[telegram][approval] pairing pending — sending /start onboarding prompt"
             );
             let _ = self
                 .send(&SendMessage::new(
-                    "ℹ️ If operator provides a one-time pairing code, you can also run `/bind <code>`.",
+                    "🔐 This bot isn't set up yet.\n\nIf you're the operator, send /start to finish connecting your bot. \
+                     Otherwise ask the operator to add your Telegram username (without '@') or numeric user ID to the bot's Allowed Users, then message again.\n\n\
+                     If the operator gave you a one-time pairing code, run `/bind <code>`.".to_string(),
                     &chat_id,
                 ))
                 .await;
+        } else {
+            let _ = self
+                .send(&SendMessage::new(
+                    "🔐 This bot requires operator approval.\n\nAsk the operator to add your Telegram username (without '@') or numeric user ID to the bot's Allowed Users, then send your message again.".to_string(),
+                    &chat_id,
+                ))
+                .await;
+        }
+    }
+
+    /// Resolve a stable identity to allowlist for a sender: prefer the numeric user
+    /// ID (immutable), fall back to a real username. Returns `None` when the sender
+    /// has neither (`normalized_username` empty or the `"unknown"` sentinel and no id).
+    pub(crate) fn bindable_identity(
+        normalized_username: &str,
+        normalized_sender_id: Option<&str>,
+    ) -> Option<String> {
+        if let Some(id) = normalized_sender_id.filter(|id| !id.is_empty()) {
+            return Some(id.to_string());
+        }
+        if normalized_username.is_empty() || normalized_username == "unknown" {
+            return None;
+        }
+        Some(normalized_username.to_string())
+    }
+
+    /// Add `identity` to the allowlist (runtime + persisted config) and acknowledge
+    /// to the chat. Shared by the `/start` onboarding and `/bind <code>` paths so
+    /// both stay in lock-step on persistence and messaging.
+    pub(crate) async fn approve_and_persist_sender(&self, identity: &str, chat_id: &str) {
+        self.add_allowed_identity_runtime(identity);
+        match self.persist_allowed_identity(identity).await {
+            Ok(()) => {
+                let _ = self
+                    .send(&SendMessage::new(
+                        "✅ You're all set — OpenHuman is connected. Send me a message and I'll take it from here.",
+                        chat_id,
+                    ))
+                    .await;
+                tracing::info!(
+                    chat_id,
+                    identity,
+                    "[telegram][approval] allowlisted identity (runtime + persisted)"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    chat_id,
+                    error = %e,
+                    "[telegram][approval] failed to persist allowlist after approval"
+                );
+                let _ = self
+                    .send(&SendMessage::new(
+                        "⚠️ Connected for now, but I couldn't save it — access may be lost after a restart. Check the config file permissions.",
+                        chat_id,
+                    ))
+                    .await;
+            }
         }
     }
 

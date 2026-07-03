@@ -86,6 +86,24 @@ impl PairingGuard {
         self.pairing_code.lock().clone()
     }
 
+    /// Invalidate the one-time pairing code without pairing a token.
+    ///
+    /// `try_pair` consumes the code as part of a successful `/bind <code>`, but
+    /// some onboarding flows bind the operator through a different signal (e.g.
+    /// the Telegram self-token `/start` path allowlists the first sender
+    /// directly). Those paths must still finish the one-time flow so the code
+    /// can't later be replayed by another sender who obtains it — call this once
+    /// the operator is bound. Idempotent; a no-op if the code is already gone.
+    pub fn invalidate_code(&self) {
+        let mut code = self.pairing_code.lock();
+        if code.is_some() {
+            *code = None;
+            log::info!(
+                "[openhuman:pairing] one-time pairing code invalidated (operator onboarded)"
+            );
+        }
+    }
+
     /// Whether pairing is required at all.
     pub fn require_pairing(&self) -> bool {
         self.require_pairing

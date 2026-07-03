@@ -52,6 +52,7 @@ fn tracing_config_round_trips_through_json() {
         enabled: true,
         backend: AgentTracingBackend::Langfuse,
         export_path: Some("/tmp/spans.ndjson".to_string()),
+        capture_content: false,
     };
     let s = serde_json::to_string(&cfg).unwrap();
     let back: AgentTracingConfig = serde_json::from_str(&s).unwrap();
@@ -570,6 +571,7 @@ fn export_disabled_is_a_noop_and_writes_nothing() {
         enabled: false,
         backend: AgentTracingBackend::Otel,
         export_path: Some(path.to_string_lossy().to_string()),
+        capture_content: false,
     };
     export_spans(&cfg, &one_turn_spans());
     assert!(
@@ -588,6 +590,7 @@ fn export_appends_ndjson_to_the_configured_file() {
         enabled: true,
         backend: AgentTracingBackend::Otel,
         export_path: Some(path.to_string_lossy().to_string()),
+        capture_content: false,
     };
     let spans = one_turn_spans();
     export_spans(&cfg, &spans);
@@ -611,6 +614,7 @@ fn export_with_no_path_does_not_panic() {
         enabled: true,
         backend: AgentTracingBackend::Langfuse,
         export_path: None,
+        capture_content: false,
     };
     export_spans(&cfg, &one_turn_spans());
     export_spans(&cfg, &[]); // empty slice short-circuits.
@@ -643,6 +647,7 @@ async fn export_run_trace_otel_backend_uses_local_sink() {
         enabled: true,
         backend: AgentTracingBackend::Otel,
         export_path: Some(path.to_string_lossy().to_string()),
+        capture_content: false,
     };
     export_run_trace(&config, &one_turn_spans()).await;
 
@@ -652,4 +657,62 @@ async fn export_run_trace_otel_backend_uses_local_sink() {
         "spans should be appended locally"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── Route A: content + grouping + span-id uniqueness ────────────────────────
+
+#[test]
+fn turn_content_attaches_input_output_to_turn_span() {
+    let c = collect(&[
+        (AgentProgress::TurnStarted, 1_000),
+        (
+            AgentProgress::TurnContent {
+                input: Some("what is your favorite color?".to_string()),
+                output: Some("i'm partial to teal".to_string()),
+            },
+            1_100,
+        ),
+    ]);
+    let turn = find(c.spans(), "agent.turn");
+    assert_eq!(
+        turn.input.as_ref().and_then(|v| v.as_str()),
+        Some("what is your favorite color?"),
+        "TurnContent input must land on the turn span"
+    );
+    assert_eq!(
+        turn.output.as_ref().and_then(|v| v.as_str()),
+        Some("i'm partial to teal")
+    );
+}
+
+#[test]
+fn turn_span_stamps_user_and_thread_grouping_attributes() {
+    let mut c = SpanCollector::new(
+        TraceContext::new("trace:req-1", Some("client-7".to_string()))
+            .with_session_group("thread-abc"),
+    );
+    c.record(&AgentProgress::TurnStarted, 1_000);
+    let turn = find(c.spans(), "agent.turn");
+    assert_eq!(
+        turn.attributes.get("user.id").and_then(|v| v.as_str()),
+        Some("client-7")
+    );
+    assert_eq!(
+        turn.attributes.get("thread.id").and_then(|v| v.as_str()),
+        Some("thread-abc"),
+        "session_group must be stamped as thread.id for the Langfuse sessionId"
+    );
+}
+
+#[test]
+fn span_ids_are_unique_across_turns() {
+    // Two separate collectors (two turns) must not reuse span ids, or Langfuse
+    // dedupes their observations onto whichever trace claimed the id first.
+    let a = collect(&[(AgentProgress::TurnStarted, 1)]);
+    let b = collect(&[(AgentProgress::TurnStarted, 1)]);
+    assert_ne!(
+        find(a.spans(), "agent.turn").span_id,
+        find(b.spans(), "agent.turn").span_id,
+        "span ids must be globally unique across turns"
+    );
 }
