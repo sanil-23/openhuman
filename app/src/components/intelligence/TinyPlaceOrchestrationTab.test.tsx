@@ -443,8 +443,13 @@ describe('TinyPlaceOrchestrationTab', () => {
 
     render(<TinyPlaceOrchestrationTab />);
 
-    // Expand the contact row, then create a session under it.
-    fireEvent.click(await screen.findByTestId(`tinyplace-contact-${ACCEPTED_CONTACT_ADDRESS}`));
+    // Expand the contact row (exposes state to assistive tech), then create.
+    const contactToggle = await screen.findByTestId(
+      `tinyplace-contact-${ACCEPTED_CONTACT_ADDRESS}`
+    );
+    expect(contactToggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(contactToggle);
+    expect(contactToggle).toHaveAttribute('aria-expanded', 'true');
     fireEvent.click(await screen.findByTestId(`tinyplace-new-session-${ACCEPTED_CONTACT_ADDRESS}`));
 
     await waitFor(() =>

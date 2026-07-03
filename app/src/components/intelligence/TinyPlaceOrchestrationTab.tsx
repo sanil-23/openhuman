@@ -576,6 +576,7 @@ export default function TinyPlaceOrchestrationTab() {
                       <button
                         type="button"
                         data-testid={`tinyplace-contact-${address}`}
+                        aria-expanded={isOpen}
                         onClick={() => toggleContact(address)}
                         className="flex w-full items-center gap-2 px-2 py-2 text-left transition hover:bg-surface-hover">
                         <span className="flex-none text-[10px] text-content-muted">
