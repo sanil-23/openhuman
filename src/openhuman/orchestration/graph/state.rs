@@ -51,8 +51,10 @@ pub struct OrchestrationState {
     /// Master window).
     pub session_id: String,
     /// Stable id for this wake cycle. Derived deterministically from
-    /// `session_id` + the latest message seq so a resumed run reuses it and the
-    /// compressed-history / world-diff store writes stay idempotent.
+    /// `counterpart_agent_id` + `session_id` + the latest message seq so a
+    /// resumed run reuses it and the compressed-history / world-diff store
+    /// writes stay idempotent. The agent id scopes the key so two linked peers
+    /// reporting the same `harness_session_id`/seq don't collide (see `seed`).
     pub cycle_id: String,
     /// The tiny.place `@handle` of the counterpart the reply DM goes back to.
     pub counterpart_agent_id: String,

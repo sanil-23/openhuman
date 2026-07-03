@@ -1,8 +1,9 @@
 //! System prompt builder for the `reasoning_agent` built-in.
 //!
 //! Assembled per cycle: the base archetype + the active subconscious steering
-//! directive (from the [`super::ORCHESTRATION_STEERING`] task-local, or
-//! [`super::DEFAULT_STEERING`] when none is set) + tool/safety/workspace context.
+//! directive (from the [`super::steering::ORCHESTRATION_STEERING`] task-local,
+//! or [`super::DEFAULT_STEERING`] when none is set) + tool/safety/workspace
+//! context.
 
 use crate::openhuman::context::prompt::{
     render_safety, render_tools, render_workspace, PromptContext,
