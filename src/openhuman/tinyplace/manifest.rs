@@ -3609,12 +3609,13 @@ pub(crate) fn handle_tinyplace_contacts_stats(_params: Map<String, Value>) -> Co
 
 // ── Signal: encryption key registration (0D) ────────────────────────────────
 
-/// Publish the user's X25519 identity public key on their directory card as
+/// Publish the user's Ed25519 identity key (the addressable cryptoId, where the
+/// Signal prekey bundle + mailbox live) on their directory card as
 /// `metadata.encryptionPublicKey`. This makes the user discoverable for
-/// encrypted DMs via `find_agent_by_encryption_key`.
+/// encrypted DMs via `find_agent_by_encryption_key`; peers derive the X25519 DH
+/// key from the fetched bundle themselves.
 ///
-/// SECURITY: only the PUBLIC key is published. The private key never leaves
-/// the `FileSessionStore`.
+/// SECURITY: only the PUBLIC key is published.
 pub(crate) fn handle_tinyplace_signal_register_encryption_key(
     _params: Map<String, Value>,
 ) -> ControllerFuture {
