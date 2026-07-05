@@ -197,6 +197,46 @@ async fn ingest_one(
     Ok(())
 }
 
+/// Poll the relay mailbox once and run every delivered envelope through the
+/// ingest pipeline.
+///
+/// The relay delivers DMs to `/messages` (poll-only) and — unlike inbox items —
+/// never publishes them to the `/inbox/stream` WebSocket, so a poller is the
+/// only way orchestration learns about inbound DMs. Envelopes from senders that
+/// are not orchestration-linked are skipped by [`ingest_one`] WITHOUT being
+/// decrypted or acknowledged, so they stay in the mailbox for the Messaging UI.
+///
+/// Returns the number of envelopes examined this pass. Best-effort per envelope:
+/// a decrypt/persist failure on one is logged and does not abort the batch.
+pub async fn drain_mailbox_once(config: &Config) -> Result<usize, String> {
+    if !config.orchestration.enabled {
+        return Ok(0);
+    }
+    let client = crate::openhuman::tinyplace::ops::global_state()
+        .client()
+        .await?;
+    let signer = client
+        .http()
+        .signer()
+        .ok_or_else(|| "no signer configured".to_string())?;
+    let agent_id = signer.agent_id();
+    let resp = client
+        .messages
+        .list(&agent_id, Some(100))
+        .await
+        .map_err(|e| format!("messages.list: {e}"))?;
+    let count = resp.messages.len();
+    if count > 0 {
+        log::debug!(target: LOG, "[orchestration] drain.fetched count={count}");
+    }
+    for envelope in resp.messages {
+        if let Err(e) = ingest_one(config, envelope).await {
+            log::warn!(target: LOG, "[orchestration] drain.ingest_error: {e}");
+        }
+    }
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +258,15 @@ mod tests {
         assert!(is_dm_stream("DM", "x"));
         assert!(is_dm_stream("other", "conversation:abc"));
         assert!(!is_dm_stream("inbox", "inbox"));
+    }
+
+    #[tokio::test]
+    async fn drain_is_a_noop_when_orchestration_disabled() {
+        // Guard short-circuits before touching the tiny.place client, so this
+        // exercises the early return without any wallet/network.
+        let mut config = Config::default();
+        config.orchestration.enabled = false;
+        assert_eq!(drain_mailbox_once(&config).await, Ok(0));
     }
 
     #[test]

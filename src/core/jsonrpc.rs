@@ -2294,6 +2294,10 @@ fn register_domain_subscribers(
         crate::openhuman::orchestration::register_orchestration_ingest_subscriber();
         // Orchestration: wake the split-brain graph on each persisted session DM.
         crate::openhuman::orchestration::register_orchestration_wake_subscriber();
+        // Orchestration: relay DMs are poll-only (`/messages`) and never traverse
+        // `/inbox/stream`, so this poller is the delivery path that surfaces
+        // inbound DMs from paired agents into the wake graph.
+        crate::openhuman::orchestration::start_message_drain_supervisor();
         // Task-sources proactive ingestion: connection-created hook + poll.
         crate::openhuman::task_sources::bus::register_task_sources_subscriber();
         crate::openhuman::task_sources::start_periodic_poll();

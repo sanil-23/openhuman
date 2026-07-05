@@ -117,6 +117,33 @@ pub async fn schedule_wake(agent_id: String, session_id: String, chat_kind: Stri
     });
 }
 
+/// Periodically drain the relay mailbox through orchestration ingest.
+///
+/// tiny.place relay DMs are delivered to `/messages` (poll-only) and are NOT
+/// published to the `/inbox/stream` WebSocket — the backend only streams inbox
+/// items for payments/notifications, never `PUT /messages`. So a poller is the
+/// actual delivery path: it lists `/messages` and feeds each envelope through
+/// the same decrypt → classify → persist → acknowledge pipeline the wake graph
+/// consumes. Unlinked senders are skipped without being consumed, so their DMs
+/// remain readable by the Messaging UI.
+pub fn start_message_drain_supervisor() {
+    tokio::spawn(async {
+        loop {
+            match Config::load_or_init().await {
+                Ok(config) => match super::ingest::drain_mailbox_once(&config).await {
+                    Ok(n) if n > 0 => {
+                        log::debug!(target: LOG, "[orchestration] drain: examined {n} envelope(s)")
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::debug!(target: LOG, "[orchestration] drain error: {e}"),
+                },
+                Err(e) => log::debug!(target: LOG, "[orchestration] drain config load: {e}"),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        }
+    });
+}
+
 /// Seed a wake-cycle [`OrchestrationState`] from the store: the counterpart to
 /// reply to plus the recent-message window. Returns `None` when the session has
 /// no persisted messages (nothing to wake for).

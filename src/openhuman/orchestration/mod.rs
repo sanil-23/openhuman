@@ -30,4 +30,5 @@ pub use graph::{
     build_orchestration_graph, orchestration_graph_topology, run_orchestration_graph,
     OrchestrationState,
 };
+pub use ops::start_message_drain_supervisor;
 pub use schemas::{all_controller_schemas, all_registered_controllers};
