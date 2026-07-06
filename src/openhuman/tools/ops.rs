@@ -262,6 +262,15 @@ pub fn all_tools_with_runtime(
         // graph's front-end agent routes by calling exactly one of these.
         Box::new(crate::openhuman::orchestration::tools::DeferToOrchestratorTool),
         Box::new(crate::openhuman::orchestration::tools::ReplyToChannelTool),
+        // Orchestration session-history read tools (Master chat) — the reasoning
+        // core browses its persisted OpenHuman↔agent transcripts to answer from
+        // its own history. Read-only; workspace-internal store access.
+        Box::new(crate::openhuman::orchestration::tools::ListSessionsTool::new(
+            config.clone(),
+        )),
+        Box::new(crate::openhuman::orchestration::tools::ReadSessionTool::new(
+            config.clone(),
+        )),
         Box::new(CronAddTool::new(config.clone(), security.clone())),
         Box::new(CronListTool::new(config.clone())),
         Box::new(CronRemoveTool::new(config.clone())),

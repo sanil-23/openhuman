@@ -215,6 +215,25 @@ only). It closes the P0 foundation and adds plumbing the answer path reuses — 
 
 Three follow-ups #4599 explicitly defers (its "Related") are folded in below as **F1/F2/F3**.
 
+### Design pivot — agentic tools, not static seed (branch `feat/master-chat-orchestration-tools`)
+
+Per the owner: the master orchestration layer should have **tools** to (1) browse its
+OpenHuman↔agent session chats and (2) send messages on OpenHuman's behalf — rather than the
+graph pre-loading history into the prompt. This **replaces W3/W4** ("seed history into state")
+with on-demand read tools the reasoning core calls, and reframes W5 as the send tool.
+
+**Shipped in this branch (read slice):**
+
+- ✅ `orchestration_list_sessions` + `orchestration_read_session` read tools
+  (`orchestration/tools.rs`), registered in `tools/ops.rs`, added to the `reasoning_agent`
+  allowlist + prompt nudge. Read-only, concurrency-safe, workspace-internal store access via
+  `store::{list_sessions,count_messages,list_recent_messages,list_messages_by_session}`. Unit
+  tests green (`cargo test openhuman::orchestration::tools` → 7/7; full orchestration 61/61,
+  loader 85/85). Delivers target half (a): answer from own history.
+
+**Still to do here:** the gated **send-on-behalf** tool (W5) + id chooser (W6) + reply
+threading (W7); RPC/UI/tests (W8–W12).
+
 ### Prioritized work-item CHECKLIST (ordered Rust core → JSON-RPC → UI → tests) — remaining after #4599
 
 **P0 — foundation / correctness**
