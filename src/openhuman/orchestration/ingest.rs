@@ -104,33 +104,39 @@ fn persist_message(
         // strictly-increasing per-(agent, session) ingest ordinal. Messages are
         // append-only and deduped-by-id upstream, so `MAX(seq)+1` is monotonic and
         // every genuinely-new DM advances `last_seq` past the cursor → wakes the graph.
-        let ingest_seq = store::next_session_seq(c, agent_id, &classified.session_id)?;
-        store::upsert_session(
-            c,
-            &OrchestrationSession {
-                session_id: classified.session_id.clone(),
-                agent_id: agent_id.to_string(),
-                source: classified.source.clone(),
-                label: classified.label.clone(),
-                workspace: classified.workspace.clone(),
-                last_seq: ingest_seq,
-                created_at: now.to_string(),
-                last_message_at: classified.timestamp.clone(),
-            },
-        )?;
-        store::insert_message(
-            c,
-            &OrchestrationMessage {
-                id: msg_id.to_string(),
-                agent_id: agent_id.to_string(),
-                session_id: classified.session_id.clone(),
-                chat_kind: classified.chat_kind,
-                role: classified.role.clone(),
-                body: classified.body.clone(),
-                timestamp: classified.timestamp.clone(),
-                seq: ingest_seq,
-            },
-        )
+        //
+        // Allocate the ordinal and write both rows in one IMMEDIATE txn so a
+        // concurrent writer on the same session (the drain here vs the graph's
+        // `send_dm` reply persist) can't read the same `MAX(seq)` and duplicate it.
+        store::in_immediate_txn(c, |c| {
+            let ingest_seq = store::next_session_seq(c, agent_id, &classified.session_id)?;
+            store::upsert_session(
+                c,
+                &OrchestrationSession {
+                    session_id: classified.session_id.clone(),
+                    agent_id: agent_id.to_string(),
+                    source: classified.source.clone(),
+                    label: classified.label.clone(),
+                    workspace: classified.workspace.clone(),
+                    last_seq: ingest_seq,
+                    created_at: now.to_string(),
+                    last_message_at: classified.timestamp.clone(),
+                },
+            )?;
+            store::insert_message(
+                c,
+                &OrchestrationMessage {
+                    id: msg_id.to_string(),
+                    agent_id: agent_id.to_string(),
+                    session_id: classified.session_id.clone(),
+                    chat_kind: classified.chat_kind,
+                    role: classified.role.clone(),
+                    body: classified.body.clone(),
+                    timestamp: classified.timestamp.clone(),
+                    seq: ingest_seq,
+                },
+            )
+        })
     })
     .map_err(|e| format!("persist: {e}"))
 }

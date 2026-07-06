@@ -641,34 +641,45 @@ impl ProductionRuntime {
         };
         let now = chrono::Utc::now().to_rfc3339();
         let msg_id = format!("orch-reply:{}", uuid::Uuid::new_v4());
+        // Allocate the ordinal + write both rows in one IMMEDIATE txn so this
+        // reply persist can't race the drain's inbound persist on the same
+        // session and duplicate `seq` (see `store::in_immediate_txn`).
         let result = store::with_connection(&self.config.workspace_dir, |c| {
-            let seq = store::next_session_seq(c, &self.agent_id, &self.session_id)?;
-            store::upsert_session(
-                c,
-                &OrchestrationSession {
-                    session_id: self.session_id.clone(),
-                    agent_id: self.agent_id.clone(),
-                    source: String::new(),
-                    label: None,
-                    workspace: None,
-                    last_seq: seq,
-                    created_at: now.clone(),
-                    last_message_at: now.clone(),
-                },
-            )?;
-            store::insert_message(
-                c,
-                &OrchestrationMessage {
-                    id: msg_id.clone(),
-                    agent_id: self.agent_id.clone(),
-                    session_id: self.session_id.clone(),
-                    chat_kind,
-                    role: "owner".to_string(),
-                    body: body.to_string(),
-                    timestamp: now.clone(),
-                    seq,
-                },
-            )
+            store::in_immediate_txn(c, |c| {
+                let seq = store::next_session_seq(c, &self.agent_id, &self.session_id)?;
+                store::upsert_session(
+                    c,
+                    &OrchestrationSession {
+                        session_id: self.session_id.clone(),
+                        agent_id: self.agent_id.clone(),
+                        source: String::new(),
+                        label: None,
+                        workspace: None,
+                        // Do NOT advance the wake-driven `last_seq` for our own
+                        // outbound reply: the wake cursor only tracks inbound seqs,
+                        // so bumping it here would make `ingest_cursor_lag` (and
+                        // `orchestration.status`) falsely report pending work until
+                        // the next inbound DM. `upsert_session` clamps with
+                        // `MAX(..)`, so 0 refreshes `last_message_at` only.
+                        last_seq: 0,
+                        created_at: now.clone(),
+                        last_message_at: now.clone(),
+                    },
+                )?;
+                store::insert_message(
+                    c,
+                    &OrchestrationMessage {
+                        id: msg_id.clone(),
+                        agent_id: self.agent_id.clone(),
+                        session_id: self.session_id.clone(),
+                        chat_kind,
+                        role: "owner".to_string(),
+                        body: body.to_string(),
+                        timestamp: now.clone(),
+                        seq,
+                    },
+                )
+            })
         });
         match result {
             Ok(_) => {
