@@ -221,12 +221,13 @@ pub fn session_last_seq(
     agent_id: &str,
     session_id: &str,
 ) -> Result<Option<i64>> {
-    conn.query_row(
-        "SELECT last_seq FROM sessions WHERE agent_id = ?1 AND session_id = ?2",
-        params![agent_id, session_id],
-        |row| row.get(0),
-    )
-    .optional()
+    Ok(conn
+        .query_row(
+            "SELECT last_seq FROM sessions WHERE agent_id = ?1 AND session_id = ?2",
+            params![agent_id, session_id],
+            |row| row.get(0),
+        )
+        .optional()?)
 }
 
 /// List every persisted session row, newest activity first (stage-7 read surface).
