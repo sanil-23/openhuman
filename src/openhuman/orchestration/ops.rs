@@ -248,6 +248,93 @@ fn advance_cursor(config: &Config, agent_id: &str, session_id: &str, latest: i64
     }
 }
 
+// ── W7: Master-chat reply-threading (outbound-ask correlation) ────────────────
+
+/// The origin window a pending OpenHuman-initiated ask on `session_id` should
+/// thread its answer back to, or `None` when no ask is pending.
+fn pending_ask_origin(config: &Config, session_id: &str) -> Option<String> {
+    store::with_connection(&config.workspace_dir, |conn| {
+        store::pending_ask_origin(conn, session_id)
+    })
+    .ok()
+    .flatten()
+}
+
+/// Clear a consumed one-shot pending ask.
+fn clear_pending_ask(config: &Config, session_id: &str) {
+    if let Err(e) = store::with_connection(&config.workspace_dir, |conn| {
+        store::clear_pending_ask(conn, session_id)
+    }) {
+        log::warn!(target: LOG, "[orchestration] pending_ask.clear_failed session={session_id}: {e}");
+    }
+}
+
+/// The newest inbound (non-`owner`) message in the window — the peer's reply. Our
+/// own outbound ask is `role = "owner"`, so this skips it.
+fn newest_inbound(state: &OrchestrationState) -> Option<&OrchestrationMessage> {
+    state.messages.iter().rev().find(|m| m.role != "owner")
+}
+
+/// Thread a peer's answer into the window the ask originated from, so it surfaces
+/// in the Master chat (or the asking session) alongside the human's question. The
+/// row is a fresh id (no dedupe collision with the source message) and is fanned
+/// to the renderer socket. Best-effort: a store error is logged, never fatal.
+fn thread_reply_to_origin(
+    config: &Config,
+    origin_session_id: &str,
+    peer_agent_id: &str,
+    answer: &OrchestrationMessage,
+) {
+    let chat_kind = match origin_session_id {
+        "master" => ChatKind::Master,
+        SUBCONSCIOUS_SESSION => ChatKind::Subconscious,
+        _ => ChatKind::Session,
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let msg_id = format!("orch-threaded:{}", uuid::Uuid::new_v4());
+    let body = answer.body.clone();
+    let role = answer.role.clone();
+    let result = store::with_connection(&config.workspace_dir, |conn| {
+        let seq = store::next_session_seq(conn, peer_agent_id, origin_session_id)?;
+        store::upsert_session(
+            conn,
+            &OrchestrationSession {
+                session_id: origin_session_id.to_string(),
+                agent_id: peer_agent_id.to_string(),
+                source: String::new(),
+                label: None,
+                workspace: None,
+                last_seq: seq,
+                created_at: now.clone(),
+                last_message_at: now.clone(),
+            },
+        )?;
+        store::insert_message(
+            conn,
+            &OrchestrationMessage {
+                id: msg_id.clone(),
+                agent_id: peer_agent_id.to_string(),
+                session_id: origin_session_id.to_string(),
+                chat_kind,
+                role,
+                body,
+                timestamp: now.clone(),
+                seq,
+            },
+        )
+    });
+    match result {
+        Ok(_) => super::bus::notify_orchestration_message(
+            peer_agent_id,
+            origin_session_id,
+            chat_kind.as_str(),
+        ),
+        Err(e) => {
+            log::warn!(target: LOG, "[orchestration] reply_thread.persist_failed origin={origin_session_id}: {e}");
+        }
+    }
+}
+
 // ── Stage 6: subconscious orchestration review ──────────────────────────────
 //
 // The review is driven by the dedicated **`tinyplace` subconscious instance**
@@ -538,6 +625,26 @@ pub async fn invoke_with_runtime(
         );
         return Ok(());
     }
+
+    // W7 — Master-chat reply-threading. If this session is the target of a
+    // one-shot OpenHuman-initiated ask (`orchestration_send_to_agent`), the newest
+    // inbound message is the peer's ANSWER: thread it into the window the ask came
+    // from (the Master chat, or the asking session) and finish here — do NOT run
+    // the reply graph, so OpenHuman does not auto-reply to the peer's answer to its
+    // own question (no ping-pong). One-shot: consumed by this first reply.
+    if let Some(origin) = pending_ask_origin(config, session_id) {
+        if let Some(answer) = newest_inbound(&state) {
+            log::debug!(
+                target: LOG,
+                "[orchestration] wake.reply_threaded session={session_id} origin={origin}",
+            );
+            thread_reply_to_origin(config, &origin, agent_id, answer);
+            clear_pending_ask(config, session_id);
+            advance_cursor(config, agent_id, session_id, latest);
+            return Ok(());
+        }
+    }
+
     // Only now that the cycle is confirmed to proceed: advance the reasoning-cycle
     // counter and inject the current steering directive. Keeping this after the
     // idempotence guard prevents no-op wakes from expiring steering early.
@@ -761,11 +868,16 @@ impl OrchestrationRuntime for ProductionRuntime {
             render_transcript(state),
         );
         // Scope the current steering directive so the reasoning agent's prompt
-        // builder weaves it into the system prompt (spec §3.2).
+        // builder weaves it into the system prompt (spec §3.2). Also scope the
+        // origin session id so `orchestration_send_to_agent` can correlate a peer's
+        // async reply back to this window (Master chat reply-threading, W7).
         let steering = state.subconscious_steering.clone().unwrap_or_default();
         let reply = super::reasoning_agent::with_steering(
             steering,
-            self.run_agent_turn("reasoning_agent", "hint:reasoning", "reasoning", prompt),
+            super::tools::with_origin_session(
+                self.session_id.clone(),
+                self.run_agent_turn("reasoning_agent", "hint:reasoning", "reasoning", prompt),
+            ),
         )
         .await?;
         // The trace the compression node condenses. `run_single` surfaces the
@@ -1717,6 +1829,59 @@ mod tests {
             1,
             "no duplicate DM on re-trigger"
         );
+    }
+
+    #[tokio::test]
+    async fn outbound_ask_reply_threads_to_origin_and_skips_the_reply_graph() {
+        // W7: OpenHuman asked peer @peer under session S (origin = master). When the
+        // peer's answer lands under S, the wake must thread it into the master
+        // window and NOT run the reply graph (no DM back to the peer — no ping-pong).
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(&tmp);
+        store::with_connection(&config.workspace_dir, |conn| {
+            store::set_pending_ask(conn, "S", "master")?;
+            // Our outbound ask (role=owner) then the peer's reply (role=agent).
+            let mut owner = msg("S", 1);
+            owner.id = "out-1".into();
+            owner.role = "owner".into();
+            owner.body = "what's the status?".into();
+            store::insert_message(conn, &owner)?;
+            let mut reply = msg("S", 2);
+            reply.id = "in-2".into();
+            reply.role = "agent".into();
+            reply.body = "shipped v2".into();
+            reply.timestamp = "2026-07-02T00:00:05Z".into();
+            store::insert_message(conn, &reply)?;
+            Ok(())
+        })
+        .unwrap();
+
+        let sends = Arc::new(AtomicUsize::new(0));
+        let runtime = Arc::new(StubRuntime {
+            config: Arc::new(config.clone()),
+            agent_id: "@me".into(),
+            sends: sends.clone(),
+            fail_execute: false,
+        });
+        invoke_with_runtime(&config, "@peer", "S", runtime)
+            .await
+            .expect("wake threads the reply");
+
+        // Reply graph was skipped → no DM back to the peer.
+        assert_eq!(sends.load(Ordering::SeqCst), 0, "no ping-pong DM");
+
+        store::with_connection(&config.workspace_dir, |conn| {
+            // The peer's answer surfaced in the master window.
+            let master = store::list_messages_by_session(conn, "master", 100, None)?;
+            assert!(
+                master.iter().any(|m| m.body == "shipped v2"),
+                "answer threaded into master"
+            );
+            // The one-shot pending ask was consumed.
+            assert!(store::pending_ask_origin(conn, "S")?.is_none());
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

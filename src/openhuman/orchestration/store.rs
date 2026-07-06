@@ -786,6 +786,48 @@ pub fn kv_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Delete a `kv` value (no-op if absent).
+pub fn kv_delete(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute("DELETE FROM kv WHERE k = ?1", params![key])?;
+    Ok(())
+}
+
+// ── Outbound-ask correlation (Master chat, W7) ───────────────────────────────
+//
+// When OpenHuman DMs a peer on the user's behalf (`orchestration_send_to_agent`),
+// we record a ONE-SHOT pending ask keyed by the outbound session id, mapping it
+// to the window the ask originated from (usually `master`). When the peer's reply
+// lands under that session id (shared `wrapper_session_id`), the wake path threads
+// the answer back into the origin window instead of auto-replying to the peer.
+//
+// This is a pragmatic 1:1 request/response correlation: it assumes the next
+// inbound message on the ask session is the answer. A robust many-in-flight
+// correlation needs an explicit envelope `inReplyTo` (tracked as F3 / #4583's
+// follow-ups); until then this covers the common single-ask case.
+
+fn pending_ask_key(ask_session_id: &str) -> String {
+    format!("pending_ask:{ask_session_id}")
+}
+
+/// Record a one-shot pending outbound ask: `ask_session_id` → `origin_session_id`.
+pub fn set_pending_ask(
+    conn: &Connection,
+    ask_session_id: &str,
+    origin_session_id: &str,
+) -> Result<()> {
+    kv_set(conn, &pending_ask_key(ask_session_id), origin_session_id)
+}
+
+/// The origin window for a pending ask on `ask_session_id`, if one is pending.
+pub fn pending_ask_origin(conn: &Connection, ask_session_id: &str) -> Result<Option<String>> {
+    kv_get(conn, &pending_ask_key(ask_session_id))
+}
+
+/// Clear a pending ask once its answer has been threaded back (one-shot).
+pub fn clear_pending_ask(conn: &Connection, ask_session_id: &str) -> Result<()> {
+    kv_delete(conn, &pending_ask_key(ask_session_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::types::ChatKind;
@@ -1039,6 +1081,28 @@ mod tests {
 
             // Scoped by agent: a different peer has no thread.
             assert!(latest_session_for_agent(conn, "@other")?.is_none());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn pending_ask_correlation_is_one_shot() {
+        let tmp = tempfile::tempdir().unwrap();
+        with_connection(tmp.path(), |conn| {
+            // Nothing pending initially.
+            assert!(pending_ask_origin(conn, "s-ask")?.is_none());
+            // Record an ask on session `s-ask` originating from the master window.
+            set_pending_ask(conn, "s-ask", "master")?;
+            assert_eq!(
+                pending_ask_origin(conn, "s-ask")?.as_deref(),
+                Some("master")
+            );
+            // Scoped by session id — an unrelated session is unaffected.
+            assert!(pending_ask_origin(conn, "s-other")?.is_none());
+            // Clearing consumes it (one-shot).
+            clear_pending_ask(conn, "s-ask")?;
+            assert!(pending_ask_origin(conn, "s-ask")?.is_none());
             Ok(())
         })
         .unwrap();

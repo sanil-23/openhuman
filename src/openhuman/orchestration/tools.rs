@@ -72,6 +72,25 @@ fn record_decision(payload: &str) {
     });
 }
 
+tokio::task_local! {
+    /// The window the current wake cycle is serving (the reasoning core's session
+    /// id). `orchestration_send_to_agent` reads it to record where a peer's async
+    /// reply should thread back to (the ask's origin). Scoped by the `execute`
+    /// node around the reasoning agent's turn (see [`super::ops`]).
+    static ORIGIN_SESSION: String;
+}
+
+/// Scope the originating wake session id around the reasoning agent's turn `fut`,
+/// so the send-on-behalf tool can correlate the eventual reply back to it.
+pub async fn with_origin_session<F: Future>(session_id: String, fut: F) -> F::Output {
+    ORIGIN_SESSION.scope(session_id, Box::pin(fut)).await
+}
+
+/// The current wake cycle's origin session id, or `None` outside a scope.
+fn current_origin_session() -> Option<String> {
+    ORIGIN_SESSION.try_with(|s| s.clone()).ok()
+}
+
 /// `reply_to_channel` — the front end's pass-2 terminal decision.
 pub struct ReplyToChannelTool;
 
@@ -570,6 +589,21 @@ impl Tool for SendToAgentTool {
                 &session_id,
                 ChatKind::Session.as_str(),
             );
+        }
+
+        // Correlate the eventual reply back to the window this ask came from, so
+        // the wake path threads the peer's answer into the Master chat (or the
+        // originating session) instead of auto-replying to the peer. One-shot:
+        // consumed by the next inbound message on this session. Skipped when the
+        // origin is unknown (tool invoked outside a wake) or is the same session.
+        if let Some(origin) = current_origin_session() {
+            if origin != session_id && !origin.is_empty() {
+                if let Err(e) = store::with_connection(&workspace, |conn| {
+                    store::set_pending_ask(conn, &session_id, &origin)
+                }) {
+                    log::warn!(target: "orchestration", "[orchestration] tool.send_to_agent correlate failed: {e}");
+                }
+            }
         }
 
         log::debug!(

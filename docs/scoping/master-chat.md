@@ -242,10 +242,27 @@ with on-demand read tools the reasoning core calls, and reframes W5 as the send 
   `PermissionLevel::Write`. Added to the `reasoning_agent` allowlist + prompt.
 - Verified: `cargo test openhuman::orchestration` → 64/64 (6 new); loader 85/85; lib clean.
 
-**Still to do here:** **W7** — thread the async peer reply back into the *originating* Master
-question (correlation; needs **F3** envelope `inReplyTo`). Today the reply lands in its session
-and surfaces there, but is not tied back to the master ask. Then RPC/UI/tests (W8–W12) and
-perf/robustness **F1/F2**.
+**Shipped in this branch (reply-threading — W7, core-only):**
+
+- ✅ One-shot outbound-ask correlation. The `execute` node scopes the origin window
+  (`tools::with_origin_session`, task-local, mirrors `with_steering`/`with_decision_capture`);
+  `orchestration_send_to_agent` records `store::set_pending_ask(ask_session → origin)`. When the
+  peer's reply lands under that session, `invoke_with_runtime` threads the newest inbound message
+  into the origin window (`thread_reply_to_origin` → master/asking session) and **finishes the
+  cycle without running the reply graph** — no ping-pong reply to the peer. One-shot: consumed by
+  the first inbound reply (`store::{pending_ask_origin,clear_pending_ask}`). Additive — only
+  sessions OpenHuman itself initiated ever carry a pending marker; peer-initiated + master wakes
+  are unchanged.
+- Verified: `cargo test openhuman::orchestration` → 66/66 (incl. `outbound_ask_reply_threads_to_
+  origin_and_skips_the_reply_graph`, `pending_ask_correlation_is_one_shot`); lib clean; fmt clean.
+- **Limitation (needs F3):** correlation is a pragmatic 1:1 request/response — it assumes the
+  *next* inbound message on the ask session is the answer. Many-in-flight / interleaved replies
+  need an explicit envelope `inReplyTo`/`fromSession` (F3, cross-repo). Also: the threaded answer
+  is the peer's raw reply surfaced into the window (OpenHuman does not yet re-synthesize a final
+  answer to the human — that would re-wake the origin; deferred).
+
+**Still to do here:** RPC/UI surface for the human-facing master ask/answer (W8–W12) and
+perf/robustness **F1/F2**; robust correlation **F3** (cross-repo).
 
 ### Prioritized work-item CHECKLIST (ordered Rust core → JSON-RPC → UI → tests) — remaining after #4599
 
