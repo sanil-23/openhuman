@@ -1581,7 +1581,11 @@ mod tests {
             .join("orchestration_graph_checkpoints.db");
         let cp = SqliteCheckpointer::<OrchestrationState>::open(&checkpoint_db)
             .expect("open checkpoint store");
-        let list = cp.list("orchestration:h1").await.expect("list checkpoints");
+        // Thread id is scoped by (counterpart, session) — see run_orchestration_graph.
+        let list = cp
+            .list("orchestration:@peer:h1")
+            .await
+            .expect("list checkpoints");
         assert!(!list.is_empty(), "wake cycle persisted checkpoints");
     }
 

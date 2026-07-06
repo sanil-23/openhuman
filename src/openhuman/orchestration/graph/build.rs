@@ -347,7 +347,8 @@ pub fn build_orchestration_graph(
 }
 
 /// Drive one wake cycle for `state.session_id`, checkpointing every super-step
-/// boundary under thread `orchestration:<session_id>`. Returns the terminal state.
+/// boundary under thread `orchestration:<counterpart>:<session_id>`. Returns the
+/// terminal state.
 pub async fn run_orchestration_graph(
     config: Arc<Config>,
     runtime: Arc<dyn OrchestrationRuntime>,
@@ -355,7 +356,17 @@ pub async fn run_orchestration_graph(
 ) -> anyhow::Result<OrchestrationState> {
     let max = config.orchestration.max_supersteps;
     let threshold = config.orchestration.effective_evict_threshold();
-    let thread_id = format!("orchestration:{}", state.session_id);
+    // Scope the checkpoint thread by (counterpart, session) — the same key the
+    // store uses for sessions — so two peers that share a session id (a legacy
+    // `harness_session_id` fallback collision) never resume from each other's
+    // checkpoint. Migration seam: a cycle checkpointed under the old
+    // `orchestration:<session_id>` key that only resumes AFTER this upgrade starts
+    // a fresh thread — one extra in-flight cycle at the boundary (Beta, gated by
+    // `[orchestration]`), the same worst case as the `cycle_id` format change.
+    let thread_id = format!(
+        "orchestration:{}:{}",
+        state.counterpart_agent_id, state.session_id
+    );
     let label = thread_id.clone();
     // `SqlRunLedgerCheckpointer` was retired in favor of the crate's own
     // `SqliteCheckpointer` (see `agent_orchestration/delegation.rs`); mirrors
