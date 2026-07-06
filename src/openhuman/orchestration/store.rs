@@ -213,6 +213,22 @@ pub fn count_messages(conn: &Connection, agent_id: &str, session_id: &str) -> Re
     )?)
 }
 
+/// The current `last_seq` for a session, or `None` if the session row does not
+/// exist yet. Used to detect a non-monotonic inbound `seq` before the upsert
+/// clamps it away via `MAX(...)`.
+pub fn session_last_seq(
+    conn: &Connection,
+    agent_id: &str,
+    session_id: &str,
+) -> Result<Option<i64>> {
+    conn.query_row(
+        "SELECT last_seq FROM sessions WHERE agent_id = ?1 AND session_id = ?2",
+        params![agent_id, session_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
 /// List every persisted session row, newest activity first (stage-7 read surface).
 pub fn list_sessions(conn: &Connection) -> Result<Vec<OrchestrationSession>> {
     let mut stmt = conn.prepare(

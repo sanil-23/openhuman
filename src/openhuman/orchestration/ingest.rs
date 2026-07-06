@@ -92,6 +92,27 @@ fn persist_message(
     now: &str,
 ) -> Result<bool, String> {
     store::with_connection(workspace_dir, |c| {
+        // Invariant guard (session windows only): the wake cursor keys on `session_id`
+        // while `seq` (= `env.message.line`) is monotonic only within one emitting
+        // harness. `upsert_session` clamps `last_seq` with `MAX(..)` and the wake fires
+        // only on `last_seq > cursor`, so a non-monotonic inbound `seq` (a peer reusing
+        // one `wrapper_session_id` across harness sessions, or a plugin-composed message
+        // whose line is 0) is persisted + acked but can SILENTLY skip the graph. Log it
+        // so the break surfaces in prod instead of dropping quietly. Robust fix (a
+        // per-wrapper monotonic ingest cursor) tracked in #4583.
+        if classified.chat_kind == ChatKind::Session {
+            if let Ok(Some(existing_last_seq)) =
+                store::session_last_seq(c, agent_id, &classified.session_id)
+            {
+                if classified.seq <= existing_last_seq {
+                    log::warn!(
+                        target: LOG,
+                        "[orchestration] wrapper session {} got seq {} <= last_seq {} — possible cross-harness reuse; wake may skip",
+                        classified.session_id, classified.seq, existing_last_seq
+                    );
+                }
+            }
+        }
         store::upsert_session(
             c,
             &OrchestrationSession {
@@ -316,6 +337,30 @@ mod tests {
         store::with_connection(tmp.path(), |c| {
             assert_eq!(store::count_messages(c, "@peer", "w1")?, 1); // per-pair wrapper id
             assert_eq!(store::count_messages(c, "@peer", "master")?, 1);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn persist_still_stores_a_lower_seq_in_the_same_wrapper_session() {
+        // The non-monotonic-seq guard only WARNS — it must never block persistence.
+        // A later message on the same wrapper session with a LOWER seq (e.g. a
+        // plugin-composed line 0, or a different emitting harness) still lands.
+        let tmp = tempfile::tempdir().unwrap();
+        let hi = classify_message(ENVELOPE.to_string(), "2026-07-02T09:00:00Z"); // seq 7
+        assert!(persist_message(tmp.path(), "m1", "@peer", &hi, "now").unwrap());
+
+        let lo = classify_message(
+            ENVELOPE.replace("\"line\": 7", "\"line\": 3"),
+            "2026-07-02T09:00:00Z",
+        );
+        assert_eq!(lo.session_id, "w1");
+        assert_eq!(lo.seq, 3); // lower than the stored last_seq (7) → guard warns
+        assert!(persist_message(tmp.path(), "m9", "@peer", &lo, "now").unwrap());
+
+        store::with_connection(tmp.path(), |c| {
+            assert_eq!(store::count_messages(c, "@peer", "w1")?, 2); // both stored despite the warn
             Ok(())
         })
         .unwrap();
