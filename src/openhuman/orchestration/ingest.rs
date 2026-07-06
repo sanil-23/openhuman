@@ -42,6 +42,9 @@ fn is_dm_stream(kind: &str, stream_id: &str) -> bool {
 fn classify_message(plaintext: String, fallback_timestamp: &str) -> ClassifiedMessage {
     match SessionEnvelopeV1::parse(&plaintext) {
         Some(env) => {
+            // Compute the session key while `env` is still fully intact (before any
+            // field moves below), since `session_key` borrows `&env`.
+            let session_id = env.session_key();
             let label = (env.scope.scope_type == "folder").then(|| env.scope.key.clone());
             let workspace = (!env.scope.cwd.is_empty()).then(|| env.scope.cwd.clone());
             let timestamp = if env.message.timestamp.is_empty() {
@@ -51,7 +54,11 @@ fn classify_message(plaintext: String, fallback_timestamp: &str) -> ClassifiedMe
             };
             ClassifiedMessage {
                 chat_kind: ChatKind::Session,
-                session_id: env.scope.harness_session_id,
+                // Key on the single per-pair session id (the shared `wrapper_session_id`
+                // both peers put on every message for a thread), so a reply threads back
+                // into the same session. Falls back to `harness_session_id` for a legacy
+                // envelope with no per-pair id. See `SessionEnvelopeV1::session_key`.
+                session_id,
                 role: env.message.role,
                 source: env.harness.provider,
                 label,
@@ -273,7 +280,7 @@ mod tests {
     fn classifies_harness_envelope_as_session() {
         let c = classify_message(ENVELOPE.to_string(), "2026-07-02T09:00:00Z");
         assert_eq!(c.chat_kind, ChatKind::Session);
-        assert_eq!(c.session_id, "h1");
+        assert_eq!(c.session_id, "w1"); // keyed on the shared per-pair wrapper_session_id
         assert_eq!(c.role, "user");
         assert_eq!(c.source, "codex");
         assert_eq!(c.label.as_deref(), Some("my-repo")); // folder scope → label
@@ -307,7 +314,7 @@ mod tests {
         assert!(persist_message(tmp.path(), "m2", "@peer", &master, "now").unwrap());
 
         store::with_connection(tmp.path(), |c| {
-            assert_eq!(store::count_messages(c, "@peer", "h1")?, 1);
+            assert_eq!(store::count_messages(c, "@peer", "w1")?, 1); // per-pair wrapper id
             assert_eq!(store::count_messages(c, "@peer", "master")?, 1);
             Ok(())
         })
