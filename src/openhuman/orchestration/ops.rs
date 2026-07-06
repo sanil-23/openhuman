@@ -111,8 +111,46 @@ pub async fn schedule_wake(agent_id: String, session_id: String, chat_kind: Stri
             log::debug!(target: LOG, "[orchestration] wake.coalesced key={key} gen={gen}");
             return;
         }
-        if let Err(e) = invoke_orchestration_graph(&config, &agent_id, &session_id).await {
-            log::warn!(target: LOG, "[orchestration] wake.run_failed session={session_id}: {e}");
+        // Retry on failure with backoff. A graph-run error (e.g. a transient
+        // relay HTTP 400 / rate-limit / Signal-session hiccup on send_dm) leaves
+        // the idempotence cursor unmoved, but the wake is one-shot and the DM was
+        // already acked from the relay — so without this the message is orphaned
+        // in silence with nothing to re-trigger it. The graph checkpoints every
+        // super-step under `orchestration:<session>`, so a retry resumes from the
+        // last good boundary (execute/compress already cached) and just re-attempts
+        // the failed tail — cheap, no repeated LLM work. Bail if a newer wake
+        // supersedes this one; it will reprocess the same (or a wider) window.
+        const WAKE_RETRY_BACKOFF_MS: [u64; 3] = [5_000, 15_000, 45_000];
+        let mut attempt = 0usize;
+        loop {
+            match invoke_orchestration_graph(&config, &agent_id, &session_id).await {
+                Ok(()) => break,
+                Err(e) => {
+                    if attempt >= WAKE_RETRY_BACKOFF_MS.len() {
+                        log::warn!(
+                            target: LOG,
+                            "[orchestration] wake.run_failed session={session_id} gave up after {} attempts: {e}",
+                            attempt + 1,
+                        );
+                        break;
+                    }
+                    let backoff = WAKE_RETRY_BACKOFF_MS[attempt];
+                    attempt += 1;
+                    log::warn!(
+                        target: LOG,
+                        "[orchestration] wake.run_failed session={session_id} attempt={attempt}/{} retrying in {backoff}ms: {e}",
+                        WAKE_RETRY_BACKOFF_MS.len() + 1,
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+                    if !is_latest_generation(&key, gen) {
+                        log::debug!(
+                            target: LOG,
+                            "[orchestration] wake.retry_superseded key={key} gen={gen}"
+                        );
+                        break;
+                    }
+                }
+            }
         }
     });
 }
@@ -588,6 +626,71 @@ impl ProductionRuntime {
             .await
             .map_err(|e| anyhow::anyhow!("{agent_id} run: {e}"))
     }
+
+    /// Persist the agent's own outgoing reply into the orchestration store so it
+    /// surfaces in the chat window (`orchestration_messages_list`) alongside the
+    /// inbound DMs. Ingest only persists inbound messages, so without this the
+    /// agent's replies never appear in the UI. Best-effort: a store error is
+    /// logged, never fails the (already-sent) DM. Does not trigger a wake — the
+    /// wake fires only on ingest's `OrchestrationSessionMessage`, not this write.
+    fn persist_outgoing_reply(&self, body: &str) {
+        let chat_kind = match self.session_id.as_str() {
+            "master" => ChatKind::Master,
+            "subconscious" => ChatKind::Subconscious,
+            _ => ChatKind::Session,
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        let msg_id = format!("orch-reply:{}", uuid::Uuid::new_v4());
+        let result = store::with_connection(&self.config.workspace_dir, |c| {
+            let seq = store::next_session_seq(c, &self.agent_id, &self.session_id)?;
+            store::upsert_session(
+                c,
+                &OrchestrationSession {
+                    session_id: self.session_id.clone(),
+                    agent_id: self.agent_id.clone(),
+                    source: String::new(),
+                    label: None,
+                    workspace: None,
+                    last_seq: seq,
+                    created_at: now.clone(),
+                    last_message_at: now.clone(),
+                },
+            )?;
+            store::insert_message(
+                c,
+                &OrchestrationMessage {
+                    id: msg_id.clone(),
+                    agent_id: self.agent_id.clone(),
+                    session_id: self.session_id.clone(),
+                    chat_kind,
+                    role: "owner".to_string(),
+                    body: body.to_string(),
+                    timestamp: now.clone(),
+                    seq,
+                },
+            )
+        });
+        match result {
+            Ok(_) => {
+                // Fan the reply out to the renderer socket so the chat window
+                // live-refetches it. Without this the row lands in the store but
+                // the UI (which only refetches on `orchestration:message`) never
+                // surfaces it. Mirrors the inbound path and the send_master RPC.
+                super::bus::notify_orchestration_message(
+                    &self.agent_id,
+                    &self.session_id,
+                    chat_kind.as_str(),
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    target: LOG,
+                    "[orchestration] persist_outgoing_reply failed session={}: {e}",
+                    self.session_id
+                );
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -599,8 +702,17 @@ impl OrchestrationRuntime for ProductionRuntime {
              macro-instructions for the reasoning core.",
             render_transcript(state),
         );
-        self.run_agent_turn("frontend_agent", "hint:chat", "frontend", prompt)
-            .await
+        // Prefer the `defer_to_orchestrator` / `reply_to_channel` argument the
+        // model actually passed over `run_single`'s trailing narration.
+        let (raw, decision) = super::tools::with_decision_capture(self.run_agent_turn(
+            "frontend_agent",
+            "hint:chat",
+            "frontend",
+            prompt,
+        ))
+        .await;
+        let raw = raw?;
+        Ok(decision.unwrap_or(raw))
     }
 
     async fn frontend_compile(&self, state: &OrchestrationState) -> anyhow::Result<String> {
@@ -612,8 +724,18 @@ impl OrchestrationRuntime for ProductionRuntime {
             render_transcript(state),
             reply,
         );
-        self.run_agent_turn("frontend_agent", "hint:chat", "frontend", prompt)
-            .await
+        // The finished reply is the `reply_to_channel` argument the model passed,
+        // NOT the trailing "Done — sent to the session" narration `run_single`
+        // returns. Fall back to the raw text only if no decision tool fired.
+        let (raw, decision) = super::tools::with_decision_capture(self.run_agent_turn(
+            "frontend_agent",
+            "hint:chat",
+            "frontend",
+            prompt,
+        ))
+        .await;
+        let raw = raw?;
+        Ok(decision.unwrap_or(raw))
     }
 
     async fn execute(&self, state: &OrchestrationState) -> anyhow::Result<ExecuteOutcome> {
@@ -811,8 +933,10 @@ impl OrchestrationRuntime for ProductionRuntime {
         params.insert("plaintext".to_string(), Value::from(plaintext));
         crate::openhuman::tinyplace::handle_tinyplace_signal_send_message(params)
             .await
-            .map(|_| ())
-            .map_err(|e| anyhow::anyhow!("signal send: {e}"))
+            .map_err(|e| anyhow::anyhow!("signal send: {e}"))?;
+        // Record our own reply in the chat model so it shows in the UI.
+        self.persist_outgoing_reply(body);
+        Ok(())
     }
 }
 
