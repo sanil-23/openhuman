@@ -213,6 +213,21 @@ pub fn count_messages(conn: &Connection, agent_id: &str, session_id: &str) -> Re
     )?)
 }
 
+/// The next monotonic per-session ingest ordinal: `MAX(seq) + 1` over the
+/// session's messages (`1` for the first message). Stamped at persist time so
+/// the wake idempotence cursor rides a strictly-increasing value instead of the
+/// harness `message.line`, which is unreliable (a wrapped Claude harness stamps
+/// `line = 0` on every DM, and a peer can reuse/reset it across harness sessions
+/// under one shared `wrapper_session_id`). Messages are append-only and
+/// deduped-by-id before persist, so this is strictly increasing. (#4583)
+pub fn next_session_seq(conn: &Connection, agent_id: &str, session_id: &str) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE agent_id = ?1 AND session_id = ?2",
+        params![agent_id, session_id],
+        |row| row.get(0),
+    )?)
+}
+
 /// The current `last_seq` for a session, or `None` if the session row does not
 /// exist yet. Used to detect a non-monotonic inbound `seq` before the upsert
 /// clamps it away via `MAX(...)`.
