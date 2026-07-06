@@ -36,10 +36,10 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::openhuman::config::Config;
-use crate::openhuman::tools::{Tool, ToolResult};
+use crate::openhuman::tools::{PermissionLevel, Tool, ToolResult};
 
 use super::store;
-use super::types::OrchestrationSession;
+use super::types::{ChatKind, OrchestrationMessage, OrchestrationSession, SessionEnvelopeV1};
 
 tokio::task_local! {
     /// Task-local capture of the front end's decision payload. The decision
@@ -389,6 +389,203 @@ impl Tool for ReadSessionTool {
     }
 }
 
+// ── Reasoning-core send-on-behalf tool (Master chat) ─────────────────────────
+
+/// `orchestration_send_to_agent` — DM another agent on OpenHuman's behalf.
+///
+/// Guardrail (owner decision): **linked peers only** — the recipient must be a
+/// linked/paired agent OR one this OpenHuman already has a session with. This
+/// tool runs under a background origin that bypasses the interactive approval
+/// gate, so cold-DMing an arbitrary new address is refused here rather than
+/// prompting.
+///
+/// Session id (owner decision): **reuse-or-mint per peer** — reuse the peer's
+/// most recent thread (its shared `wrapper_session_id`) so the reply threads
+/// back into the same session (#227/#4582); mint a fresh uuid only when there is
+/// no existing thread. An explicit `sessionId` overrides the lookup.
+///
+/// Effect: sends a v1 session envelope over the tiny.place Signal channel and
+/// records the outbound message (`role = "owner"`) in the session window (so it
+/// shows in the chat + the agent's own history). The peer's reply arrives
+/// asynchronously via the normal ingest → wake path — this call does not block
+/// for it.
+pub struct SendToAgentTool {
+    config: Arc<Config>,
+}
+
+impl SendToAgentTool {
+    pub fn new(config: Arc<Config>) -> Self {
+        Self { config }
+    }
+}
+
+#[async_trait]
+impl Tool for SendToAgentTool {
+    fn name(&self) -> &str {
+        "orchestration_send_to_agent"
+    }
+
+    fn description(&self) -> &str {
+        "Send a direct message to another agent on OpenHuman's behalf (e.g. to ask them \
+         something for the user). Only works for agents you are already linked with or have \
+         chatted with before. By default the message threads into your existing conversation \
+         with that agent (so their reply comes back into the same session); pass `sessionId` to \
+         target a specific thread. The reply arrives asynchronously — it will show up in that \
+         session, not as this tool's return value."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "recipient": {
+                    "type": "string",
+                    "description": "The agent id (address/@handle) to message. Must be a linked or already-known peer."
+                },
+                "message": {
+                    "type": "string",
+                    "description": "The message body to send."
+                },
+                "sessionId": {
+                    "type": "string",
+                    "description": "Optional: send under this existing session id. Omit to reuse your latest thread with the peer, or mint a new one."
+                }
+            },
+            "required": ["recipient", "message"],
+            "additionalProperties": false
+        })
+    }
+
+    fn permission_level(&self) -> PermissionLevel {
+        // External send effect — a Write-class action, so a read-only channel
+        // cannot invoke it even though the deep-reasoning core can.
+        PermissionLevel::Write
+    }
+
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+        let recipient = match required_str(&args, "recipient") {
+            Ok(s) => s,
+            Err(e) => return Ok(e),
+        };
+        let message = match required_str(&args, "message") {
+            Ok(s) => s,
+            Err(e) => return Ok(e),
+        };
+        let explicit_session = args
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && !is_pinned_window(s))
+            .map(str::to_string);
+
+        let workspace = self.config.workspace_dir.clone();
+
+        // Guardrail: linked peer OR an existing session with them. Never cold-DM
+        // an arbitrary new address from this un-gated background origin.
+        let linked =
+            crate::openhuman::agent_orchestration::pairing::linked_agent_ids(&workspace).await;
+        let known_session = store::with_connection(&workspace, |conn| {
+            store::latest_session_for_agent(conn, &recipient)
+        })
+        .map_err(|e| anyhow::anyhow!("lookup session: {e}"))?;
+        if !linked.contains(&recipient) && known_session.is_none() {
+            log::debug!(
+                target: "orchestration",
+                "[orchestration] tool.send_to_agent refused unlinked recipient",
+            );
+            return Ok(ToolResult::error(
+                "recipient is not a linked or previously-contacted agent — cannot send".to_string(),
+            ));
+        }
+
+        // Session id: explicit → reuse latest thread → mint fresh.
+        let session_id = explicit_session
+            .or(known_session)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let message_id = format!("orch-ask:{}", uuid::Uuid::new_v4());
+
+        // Wrap in a v1 session envelope so a compliant peer threads its reply
+        // under the same session id.
+        let plaintext = match serde_json::to_string(&SessionEnvelopeV1::outgoing(
+            &session_id,
+            &message,
+            &message_id,
+            &now,
+        )) {
+            Ok(s) => s,
+            Err(e) => return Ok(ToolResult::error(format!("envelope encode: {e}"))),
+        };
+
+        // Send over the tiny.place Signal channel (same op the graph's send_dm and
+        // the send_master RPC use).
+        let mut send_params = serde_json::Map::new();
+        send_params.insert("recipient".to_string(), Value::from(recipient.clone()));
+        send_params.insert("plaintext".to_string(), Value::from(plaintext));
+        if let Err(e) =
+            crate::openhuman::tinyplace::handle_tinyplace_signal_send_message(send_params).await
+        {
+            log::warn!(target: "orchestration", "[orchestration] tool.send_to_agent send failed: {e}");
+            return Ok(ToolResult::error(format!("send failed: {e}")));
+        }
+
+        // Record the outbound message in the session window (role=owner) so it
+        // surfaces in the chat + the agent's own history, and notify the renderer.
+        // Mirrors ProductionRuntime::persist_outgoing_reply and the send_master RPC.
+        let persisted = store::with_connection(&workspace, |conn| {
+            let seq = store::next_session_seq(conn, &recipient, &session_id)?;
+            store::upsert_session(
+                conn,
+                &OrchestrationSession {
+                    session_id: session_id.clone(),
+                    agent_id: recipient.clone(),
+                    source: String::new(),
+                    label: None,
+                    workspace: None,
+                    last_seq: seq,
+                    created_at: now.clone(),
+                    last_message_at: now.clone(),
+                },
+            )?;
+            store::insert_message(
+                conn,
+                &OrchestrationMessage {
+                    id: message_id.clone(),
+                    agent_id: recipient.clone(),
+                    session_id: session_id.clone(),
+                    chat_kind: ChatKind::Session,
+                    role: "owner".to_string(),
+                    body: message.clone(),
+                    timestamp: now.clone(),
+                    seq,
+                },
+            )
+        });
+        if let Err(e) = persisted {
+            log::warn!(target: "orchestration", "[orchestration] tool.send_to_agent persist failed: {e}");
+        } else {
+            super::bus::notify_orchestration_message(
+                &recipient,
+                &session_id,
+                ChatKind::Session.as_str(),
+            );
+        }
+
+        log::debug!(
+            target: "orchestration",
+            "[orchestration] tool.send_to_agent sent session={session_id}",
+        );
+        let body = serde_json::to_string(&json!({
+            "ok": true,
+            "sessionId": session_id,
+            "note": "Message sent. The reply will arrive asynchronously in this session.",
+        }))
+        .unwrap_or_else(|_| "{\"ok\":true}".to_string());
+        Ok(ToolResult::success(body))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,7 +697,14 @@ mod tests {
         let config = test_config(&tmp);
         store::with_connection(&config.workspace_dir, |conn| {
             seed_session(conn, "s-1", "claude", "2026-07-02T00:01:00Z");
-            seed_msg(conn, "s-1", 1, "user", "how do I ship it?", "2026-07-02T00:01:00Z");
+            seed_msg(
+                conn,
+                "s-1",
+                1,
+                "user",
+                "how do I ship it?",
+                "2026-07-02T00:01:00Z",
+            );
             // A pinned window must be excluded from the history browser.
             seed_session(conn, "master", "master", "2026-07-02T00:02:00Z");
             seed_msg(conn, "master", 1, "user", "steer", "2026-07-02T00:02:00Z");
@@ -550,10 +754,46 @@ mod tests {
         let config = test_config(&tmp);
         let tool = ReadSessionTool::new(config);
         assert!(tool.execute(json!({})).await.unwrap().is_error);
-        assert!(tool
-            .execute(json!({ "sessionId": "master" }))
+        assert!(
+            tool.execute(json!({ "sessionId": "master" }))
+                .await
+                .unwrap()
+                .is_error
+        );
+    }
+
+    // ── send-on-behalf tool ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn send_to_agent_rejects_missing_args() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tool = SendToAgentTool::new(test_config(&tmp));
+        assert!(tool.execute(json!({})).await.unwrap().is_error);
+        assert!(
+            tool.execute(json!({ "recipient": "@peer" }))
+                .await
+                .unwrap()
+                .is_error
+        ); // missing message
+        assert!(
+            tool.execute(json!({ "message": "hi" }))
+                .await
+                .unwrap()
+                .is_error
+        ); // missing recipient
+    }
+
+    #[tokio::test]
+    async fn send_to_agent_refuses_unlinked_unknown_recipient() {
+        // Empty workspace: no linked peers, no existing session. The guardrail
+        // must refuse BEFORE any network send (this test does no I/O to tiny.place).
+        let tmp = tempfile::tempdir().unwrap();
+        let tool = SendToAgentTool::new(test_config(&tmp));
+        let out = tool
+            .execute(json!({ "recipient": "@stranger", "message": "hello" }))
             .await
-            .unwrap()
-            .is_error);
+            .unwrap();
+        assert!(out.is_error);
+        assert!(out.text().contains("not a linked"));
     }
 }

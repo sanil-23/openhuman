@@ -39,4 +39,5 @@ named = [
     "resolve_time",
     "orchestration_list_sessions",
     "orchestration_read_session",
+    "orchestration_send_to_agent",
 ]

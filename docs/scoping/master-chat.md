@@ -227,12 +227,25 @@ with on-demand read tools the reasoning core calls, and reframes W5 as the send 
 - ✅ `orchestration_list_sessions` + `orchestration_read_session` read tools
   (`orchestration/tools.rs`), registered in `tools/ops.rs`, added to the `reasoning_agent`
   allowlist + prompt nudge. Read-only, concurrency-safe, workspace-internal store access via
-  `store::{list_sessions,count_messages,list_recent_messages,list_messages_by_session}`. Unit
-  tests green (`cargo test openhuman::orchestration::tools` → 7/7; full orchestration 61/61,
-  loader 85/85). Delivers target half (a): answer from own history.
+  `store::{list_sessions,count_messages,list_recent_messages,list_messages_by_session}`.
+  Delivers target half (a): answer from own history.
 
-**Still to do here:** the gated **send-on-behalf** tool (W5) + id chooser (W6) + reply
-threading (W7); RPC/UI/tests (W8–W12).
+**Shipped in this branch (send slice — W5 + W6):**
+
+- ✅ `orchestration_send_to_agent` (`orchestration/tools.rs`) — DM a peer on OpenHuman's
+  behalf. **Guardrail: linked-peers-only** (`pairing::linked_agent_ids` OR an existing session
+  with the peer) — refuses cold-DMs from the un-gated background origin. **Session id:
+  reuse-or-mint per peer** via new `store::latest_session_for_agent` (reuse the peer's newest
+  thread's shared `wrapper_session_id` so the reply threads back; else mint a uuid). Sends a v1
+  envelope via `handle_tinyplace_signal_send_message`, records the outbound `role=owner`
+  message + `notify_orchestration_message` (mirrors #4599's `persist_outgoing_reply`).
+  `PermissionLevel::Write`. Added to the `reasoning_agent` allowlist + prompt.
+- Verified: `cargo test openhuman::orchestration` → 64/64 (6 new); loader 85/85; lib clean.
+
+**Still to do here:** **W7** — thread the async peer reply back into the *originating* Master
+question (correlation; needs **F3** envelope `inReplyTo`). Today the reply lands in its session
+and surfaces there, but is not tied back to the master ask. Then RPC/UI/tests (W8–W12) and
+perf/robustness **F1/F2**.
 
 ### Prioritized work-item CHECKLIST (ordered Rust core → JSON-RPC → UI → tests) — remaining after #4599
 

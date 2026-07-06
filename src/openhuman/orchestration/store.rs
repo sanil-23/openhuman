@@ -423,6 +423,23 @@ pub fn session_agent_id(conn: &Connection, session_id: &str) -> Result<Option<St
     .map_err(Into::into)
 }
 
+/// The most recent non-pinned session id for a peer agent, if any — the thread to
+/// reuse when OpenHuman initiates an outbound ask to that peer, so the peer's
+/// reply threads back into the same session (shared `wrapper_session_id` model,
+/// #227/#4582). Newest by `last_message_at`. Returns `None` when there is no
+/// existing thread with the peer (caller mints a fresh session id).
+pub fn latest_session_for_agent(conn: &Connection, agent_id: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT session_id FROM sessions
+           WHERE agent_id = ?1 AND session_id NOT IN ('master', 'subconscious')
+           ORDER BY last_message_at DESC LIMIT 1",
+        params![agent_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
 fn read_cursor_key(session_id: &str) -> String {
     format!("read:{session_id}")
 }
@@ -986,6 +1003,42 @@ mod tests {
             master.chat_kind = ChatKind::Master;
             insert_message(conn, &master)?;
             assert_eq!(latest_master_peer(conn)?.as_deref(), Some("@owner-agent"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn latest_session_for_agent_reuses_newest_thread_and_ignores_pinned() {
+        let tmp = tempfile::tempdir().unwrap();
+        with_connection(tmp.path(), |conn| {
+            // No thread with the peer yet → caller mints a fresh id.
+            assert!(latest_session_for_agent(conn, "@peer")?.is_none());
+
+            // Two threads with the peer; the newest by last_message_at wins.
+            let mut old = session("@peer", "s-old", 1);
+            old.last_message_at = "2026-07-02T00:01:00Z".into();
+            upsert_session(conn, &old)?;
+            let mut new = session("@peer", "s-new", 1);
+            new.last_message_at = "2026-07-02T00:09:00Z".into();
+            upsert_session(conn, &new)?;
+            assert_eq!(
+                latest_session_for_agent(conn, "@peer")?.as_deref(),
+                Some("s-new")
+            );
+
+            // A pinned window for the same agent id must never be reused.
+            let mut pinned = session("@peer", "master", 1);
+            pinned.last_message_at = "2026-07-02T23:00:00Z".into();
+            upsert_session(conn, &pinned)?;
+            assert_eq!(
+                latest_session_for_agent(conn, "@peer")?.as_deref(),
+                Some("s-new"),
+                "pinned window excluded despite newer timestamp"
+            );
+
+            // Scoped by agent: a different peer has no thread.
+            assert!(latest_session_for_agent(conn, "@other")?.is_none());
             Ok(())
         })
         .unwrap();
