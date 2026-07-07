@@ -30,7 +30,9 @@ use super::steering::{
     build_steering_prompt, is_explicit_none, parse_steering_output, ParsedSteering,
 };
 use super::store;
-use super::types::{ChatKind, OrchestrationMessage, OrchestrationSession, SessionEnvelopeV1};
+use super::types::{
+    ChatKind, OrchestrationMessage, OrchestrationSession, SessionEnvelopeV1, LOCAL_MASTER_AGENT,
+};
 
 /// Assumed model context window (tokens) for the `context_guard` utilization
 /// estimate until per-model resolution is wired. Sized to the reasoning tier.
@@ -1051,6 +1053,52 @@ impl OrchestrationRuntime for ProductionRuntime {
     }
 
     async fn send_dm(&self, counterpart_agent_id: &str, body: &str) -> anyhow::Result<()> {
+        // W2 — a local Master-chat cycle (the human asked OpenHuman itself) has no
+        // external peer: the answer belongs in the Master window, not an outbound
+        // tiny.place DM. Persist it as an assistant message and notify the UI.
+        if counterpart_agent_id == crate::openhuman::orchestration::types::LOCAL_MASTER_AGENT {
+            let now = chrono::Utc::now().to_rfc3339();
+            let msg_id = format!("master-answer:{}", uuid::Uuid::new_v4());
+            let body_owned = body.to_string();
+            if let Err(e) = store::with_connection(&self.config.workspace_dir, |conn| {
+                let seq = store::next_session_seq(conn, LOCAL_MASTER_AGENT, "master")?;
+                store::upsert_session(
+                    conn,
+                    &OrchestrationSession {
+                        session_id: "master".to_string(),
+                        agent_id: LOCAL_MASTER_AGENT.to_string(),
+                        source: "master".to_string(),
+                        label: None,
+                        workspace: None,
+                        last_seq: seq,
+                        created_at: now.clone(),
+                        last_message_at: now.clone(),
+                    },
+                )?;
+                store::insert_message(
+                    conn,
+                    &OrchestrationMessage {
+                        id: msg_id.clone(),
+                        agent_id: LOCAL_MASTER_AGENT.to_string(),
+                        session_id: "master".to_string(),
+                        chat_kind: ChatKind::Master,
+                        role: "assistant".to_string(),
+                        body: body_owned,
+                        timestamp: now.clone(),
+                        seq,
+                    },
+                )
+            }) {
+                log::warn!(target: LOG, "[orchestration] master_answer.persist_failed: {e}");
+            }
+            super::bus::notify_orchestration_message(
+                LOCAL_MASTER_AGENT,
+                "master",
+                ChatKind::Master.as_str(),
+            );
+            return Ok(());
+        }
+
         // A reply into a real harness session is stamped with a v1 session
         // envelope so the peer threads it under the same session id; Master and
         // subconscious replies stay plain.
@@ -1883,6 +1931,35 @@ mod tests {
             );
             // The one-shot pending ask was consumed.
             assert!(store::pending_ask_origin(conn, "S")?.is_none());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_master_reply_lands_in_the_window_not_an_outbound_dm() {
+        // W2: when the human asks OpenHuman itself (counterpart = LOCAL_MASTER_AGENT),
+        // the reasoning core's answer must be persisted into the Master window as an
+        // assistant message — NOT sent as a tiny.place DM. The send_dm branch for the
+        // sentinel returns before any network call, so this is fully hermetic.
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(&tmp);
+        let rt = ProductionRuntime {
+            config: Arc::new(config.clone()),
+            agent_id: LOCAL_MASTER_AGENT.to_string(),
+            session_id: "master".to_string(),
+        };
+        rt.send_dm(LOCAL_MASTER_AGENT, "here is your answer")
+            .await
+            .expect("local master reply persists without a network send");
+
+        store::with_connection(&config.workspace_dir, |conn| {
+            let msgs = store::list_messages_by_session(conn, "master", 100, None)?;
+            assert!(
+                msgs.iter()
+                    .any(|m| m.role == "assistant" && m.body == "here is your answer"),
+                "answer stored as an assistant message in the master window"
+            );
             Ok(())
         })
         .unwrap();
