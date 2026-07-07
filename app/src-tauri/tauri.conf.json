@@ -2,10 +2,10 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OpenHuman",
   "version": "0.58.12",
-  "identifier": "com.openhuman.app.master-chat-scope",
+  "identifier": "com.openhuman.app",
   "build": {
     "beforeDevCommand": "pnpm run dev",
-    "devUrl": "http://localhost:1432",
+    "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm run build:app",
     "frontendDist": "../dist"
   },
