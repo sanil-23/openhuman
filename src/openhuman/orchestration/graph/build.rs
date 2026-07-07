@@ -150,6 +150,12 @@ pub fn build_orchestration_graph(
             let runtime = runtime.clone();
             async move {
                 let pass = s.pass + 1;
+                // Local Master chat (human ↔ OpenHuman itself): the A2A front-end
+                // triage does NOT run — the human talks straight to the reasoning
+                // core (OpenHuman). We feed the core a direct human-facing directive
+                // on the way in and use its answer verbatim on the way out.
+                let is_local_master = s.counterpart_agent_id
+                    == crate::openhuman::orchestration::types::LOCAL_MASTER_AGENT;
 
                 // Defensive terminate: a response already exists (re-entry / resume).
                 if s.channel_response.is_some() {
@@ -180,12 +186,19 @@ pub fn build_orchestration_graph(
                     ));
                 }
 
-                // Pass 2: reasoning replied → compile the channel response.
+                // Pass 2: reasoning replied → compile the channel response. For a
+                // local master cycle, skip the A2A "compile" and use the core's
+                // answer verbatim (it already phrased it for the human).
                 if s.agent_reply.is_some() {
-                    let body = runtime.frontend_compile(&s).await.map_err(graph_err)?;
+                    let body = if is_local_master {
+                        s.agent_reply.clone().unwrap_or_default()
+                    } else {
+                        runtime.frontend_compile(&s).await.map_err(graph_err)?
+                    };
                     tracing::debug!(
                         target: LOG, session_id = %s.session_id, node = "frontend", pass,
-                        route = "send_dm", reason = "reply_ready", "[orchestration] node.route",
+                        route = "send_dm", reason = "reply_ready", local = is_local_master,
+                        "[orchestration] node.route",
                     );
                     return Ok(NodeResult::Command(
                         Command::default()
@@ -196,11 +209,25 @@ pub fn build_orchestration_graph(
                     ));
                 }
 
-                // Pass 1: raw traffic → macro-instructions, hand down to the core.
-                let instructions = runtime.frontend_instruct(&s).await.map_err(graph_err)?;
+                // Pass 1: hand down to the reasoning core. For a local master cycle
+                // there is no A2A front-end triage — feed the core a direct
+                // human-facing directive instead of `frontend_instruct`.
+                let instructions = if is_local_master {
+                    "You are OpenHuman, talking directly to your human in the master chat. Answer \
+                     their latest message in the transcript below directly and concisely. Use your \
+                     tools as needed — `orchestration_list_contacts` (your agent contacts), \
+                     `orchestration_list_sessions` (pass `contactId` to scope to one contact) and \
+                     `orchestration_read_session` (read a saved transcript) to inspect what's \
+                     happening with other agents, and `orchestration_send_to_agent` to ask a \
+                     specific agent something on the human's behalf."
+                        .to_string()
+                } else {
+                    runtime.frontend_instruct(&s).await.map_err(graph_err)?
+                };
                 tracing::debug!(
                     target: LOG, session_id = %s.session_id, node = "frontend", pass,
-                    route = "execute", reason = "first_pass", "[orchestration] node.route",
+                    route = "execute", reason = "first_pass", local = is_local_master,
+                    "[orchestration] node.route",
                 );
                 Ok(NodeResult::Command(
                     Command::default()
