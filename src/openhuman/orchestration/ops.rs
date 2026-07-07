@@ -869,10 +869,13 @@ impl OrchestrationRuntime for ProductionRuntime {
         // direct conversation. A peer/A2A cycle runs the `reasoning_agent` with
         // the split-brain "macro-instructions from the front end" framing.
         let is_local_master = self.agent_id == LOCAL_MASTER_AGENT;
-        let agent_id = if is_local_master {
-            "master_agent"
+        // Master chat runs the human-facing `master_agent` on the `chat` model
+        // (the working staging tier); the A2A path keeps the deep `reasoning`
+        // tier. `run_agent_turn` forces the model via this hint.
+        let (agent_id, model_hint) = if is_local_master {
+            ("master_agent", "hint:chat")
         } else {
-            "reasoning_agent"
+            ("reasoning_agent", "hint:reasoning")
         };
         let prompt = if is_local_master {
             format!(
@@ -895,7 +898,7 @@ impl OrchestrationRuntime for ProductionRuntime {
             steering,
             super::tools::with_origin_session(
                 self.session_id.clone(),
-                self.run_agent_turn(agent_id, "hint:reasoning", "reasoning", prompt),
+                self.run_agent_turn(agent_id, model_hint, "reasoning", prompt),
             ),
         )
         .await?;

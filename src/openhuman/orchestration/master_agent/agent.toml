@@ -13,8 +13,8 @@ omit_safety_preamble = false
 omit_skills_catalog = true
 
 [model]
-# Reasoning tier (same as the core).
-hint = "reasoning"
+# Chat tier — the working staging model; master chat is a direct human turn.
+hint = "chat"
 
 [subagents]
 allowlist = [
