@@ -37,6 +37,7 @@ named = [
     "tinyplace_feed",
     "current_time",
     "resolve_time",
+    "orchestration_list_contacts",
     "orchestration_list_sessions",
     "orchestration_read_session",
     "orchestration_send_to_agent",

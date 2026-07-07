@@ -233,6 +233,10 @@ impl Tool for ListSessionsTool {
         json!({
             "type": "object",
             "properties": {
+                "contactId": {
+                    "type": "string",
+                    "description": "Optional: only sessions with this contact (peer agent id/address). Omit to list across all contacts."
+                },
                 "limit": {
                     "type": "integer",
                     "description": "Max sessions to return (default all, capped at 100).",
@@ -250,6 +254,13 @@ impl Tool for ListSessionsTool {
             .and_then(Value::as_u64)
             .map(|n| (n as usize).min(LIST_SESSIONS_MAX))
             .unwrap_or(LIST_SESSIONS_MAX);
+        // Optional contact filter: only sessions with this peer (contact-wise view).
+        let contact_id = args
+            .get("contactId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
 
         let workspace = self.config.workspace_dir.clone();
         let result = store::with_connection(&workspace, |conn| {
@@ -258,6 +269,11 @@ impl Tool for ListSessionsTool {
             for s in sessions {
                 if is_pinned_window(&s.session_id) {
                     continue;
+                }
+                if let Some(ref cid) = contact_id {
+                    if &s.agent_id != cid {
+                        continue;
+                    }
                 }
                 let count = store::count_messages(conn, &s.agent_id, &s.session_id)?;
                 // Newest message body as a one-line preview. `list_recent_messages`
@@ -400,6 +416,48 @@ impl Tool for ReadSessionTool {
                 Ok(ToolResult::success(body))
             }
             Err(e) => Ok(ToolResult::error(format!("read_session failed: {e}"))),
+        }
+    }
+
+    fn is_concurrency_safe(&self, _args: &Value) -> bool {
+        true
+    }
+}
+
+/// `orchestration_list_contacts` — enumerate this agent's tiny.place contacts.
+/// The starting point for the browse loop: list contacts → `orchestration_list_sessions`
+/// (with `contactId`) for a contact's threads → `orchestration_read_session` for history.
+/// Read-only; delegates to the tiny.place `contacts_list` controller (no new logic here).
+pub struct ListContactsTool;
+
+#[async_trait]
+impl Tool for ListContactsTool {
+    fn name(&self) -> &str {
+        "orchestration_list_contacts"
+    }
+
+    fn description(&self) -> &str {
+        "List your tiny.place contacts — the agents you're connected with and can message. Use \
+         this to find who to read a session history from (orchestration_list_sessions with that \
+         contactId, then orchestration_read_session) or who to message (orchestration_send_to_agent). \
+         Returns each contact's agent id (address) and handle/label."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({ "type": "object", "properties": {}, "additionalProperties": false })
+    }
+
+    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
+        match crate::openhuman::tinyplace::handle_tinyplace_contacts_list(serde_json::Map::new())
+            .await
+        {
+            Ok(v) => {
+                log::debug!(target: "orchestration", "[orchestration] tool.list_contacts ok");
+                Ok(ToolResult::success(
+                    serde_json::to_string(&v).unwrap_or_else(|_| "{}".to_string()),
+                ))
+            }
+            Err(e) => Ok(ToolResult::error(format!("list_contacts failed: {e}"))),
         }
     }
 
@@ -757,6 +815,46 @@ mod tests {
         assert_eq!(sessions[0]["source"], "claude");
         assert_eq!(sessions[0]["messageCount"], 1);
         assert_eq!(sessions[0]["preview"], "how do I ship it?");
+    }
+
+    #[tokio::test]
+    async fn list_sessions_tool_filters_by_contact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(&tmp);
+        // Two contacts, one session each.
+        let sess = |agent: &str, session: &str| OrchestrationSession {
+            session_id: session.into(),
+            agent_id: agent.into(),
+            source: "claude".into(),
+            label: None,
+            workspace: None,
+            last_seq: 0,
+            created_at: "2026-07-02T00:01:00Z".into(),
+            last_message_at: "2026-07-02T00:01:00Z".into(),
+        };
+        store::with_connection(&config.workspace_dir, |conn| {
+            store::upsert_session(conn, &sess("@alice", "s-alice"))?;
+            store::upsert_session(conn, &sess("@bob", "s-bob"))?;
+            Ok(())
+        })
+        .unwrap();
+
+        let tool = ListSessionsTool::new(config);
+        // No filter → both contacts' sessions.
+        let all = tool.execute(json!({})).await.unwrap();
+        let v: Value = serde_json::from_str(&all.text()).unwrap();
+        assert_eq!(v["sessions"].as_array().unwrap().len(), 2);
+
+        // contactId filter → only that contact's sessions.
+        let out = tool
+            .execute(json!({ "contactId": "@alice" }))
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_str(&out.text()).unwrap();
+        let sessions = v["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["peerAgentId"], "@alice");
+        assert_eq!(sessions[0]["sessionId"], "s-alice");
     }
 
     #[tokio::test]

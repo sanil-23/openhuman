@@ -267,6 +267,8 @@ pub fn all_tools_with_runtime(
         // its own history. Read-only; workspace-internal store access.
         Box::new(crate::openhuman::orchestration::tools::ListSessionsTool::new(config.clone())),
         Box::new(crate::openhuman::orchestration::tools::ReadSessionTool::new(config.clone())),
+        // List the agent's tiny.place contacts (browse-loop entry point).
+        Box::new(crate::openhuman::orchestration::tools::ListContactsTool),
         // Send-on-behalf: DM another agent for the user. Linked-peers-only,
         // reuse-or-mint per-peer session id; Write-class external effect.
         Box::new(crate::openhuman::orchestration::tools::SendToAgentTool::new(config.clone())),

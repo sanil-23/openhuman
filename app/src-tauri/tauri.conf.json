@@ -5,7 +5,7 @@
   "identifier": "com.openhuman.app.master-chat-scope",
   "build": {
     "beforeDevCommand": "pnpm run dev",
-    "devUrl": "http://localhost:1428",
+    "devUrl": "http://localhost:1430",
     "beforeBuildCommand": "pnpm run build:app",
     "frontendDist": "../dist"
   },
