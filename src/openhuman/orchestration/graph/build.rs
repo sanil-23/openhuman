@@ -209,18 +209,12 @@ pub fn build_orchestration_graph(
                     ));
                 }
 
-                // Pass 1: hand down to the reasoning core. For a local master cycle
-                // there is no A2A front-end triage — feed the core a direct
-                // human-facing directive instead of `frontend_instruct`.
+                // Pass 1: hand down to the core. For a local master cycle there is
+                // no A2A front-end triage — the `execute` node runs `master_agent`
+                // (its human-facing system prompt carries the framing + tool guide),
+                // so we only need a light directive here, not `frontend_instruct`.
                 let instructions = if is_local_master {
-                    "You are OpenHuman, talking directly to your human in the master chat. Answer \
-                     their latest message in the transcript below directly and concisely. Use your \
-                     tools as needed — `orchestration_list_contacts` (your agent contacts), \
-                     `orchestration_list_sessions` (pass `contactId` to scope to one contact) and \
-                     `orchestration_read_session` (read a saved transcript) to inspect what's \
-                     happening with other agents, and `orchestration_send_to_agent` to ask a \
-                     specific agent something on the human's behalf."
-                        .to_string()
+                    "Answer your human's latest message in the conversation below.".to_string()
                 } else {
                     runtime.frontend_instruct(&s).await.map_err(graph_err)?
                 };

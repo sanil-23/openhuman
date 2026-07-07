@@ -864,21 +864,38 @@ impl OrchestrationRuntime for ProductionRuntime {
 
     async fn execute(&self, state: &OrchestrationState) -> anyhow::Result<ExecuteOutcome> {
         let instructions = state.agent_instructions.as_deref().unwrap_or("(none)");
-        let prompt = format!(
-            "Macro-instructions from the front end:\n\n{instructions}\n\nSession transcript:\n\n{}\n\n\
-             Do the work (delegating to worker sub-agents where appropriate) and return the result.",
-            render_transcript(state),
-        );
-        // Scope the current steering directive so the reasoning agent's prompt
-        // builder weaves it into the system prompt (spec §3.2). Also scope the
-        // origin session id so `orchestration_send_to_agent` can correlate a peer's
-        // async reply back to this window (Master chat reply-threading, W7).
+        // A local Master cycle (human ↔ OpenHuman) runs the human-facing
+        // `master_agent` — no A2A front-end triaged it, so frame the turn as a
+        // direct conversation. A peer/A2A cycle runs the `reasoning_agent` with
+        // the split-brain "macro-instructions from the front end" framing.
+        let is_local_master = self.agent_id == LOCAL_MASTER_AGENT;
+        let agent_id = if is_local_master {
+            "master_agent"
+        } else {
+            "reasoning_agent"
+        };
+        let prompt = if is_local_master {
+            format!(
+                "{instructions}\n\nConversation with your human:\n\n{}\n\nRespond to their latest message.",
+                render_transcript(state),
+            )
+        } else {
+            format!(
+                "Macro-instructions from the front end:\n\n{instructions}\n\nSession transcript:\n\n{}\n\n\
+                 Do the work (delegating to worker sub-agents where appropriate) and return the result.",
+                render_transcript(state),
+            )
+        };
+        // Scope the current steering directive so the agent's prompt builder weaves
+        // it into the system prompt (spec §3.2). Also scope the origin session id so
+        // `orchestration_send_to_agent` can correlate a peer's async reply back to
+        // this window (Master chat reply-threading, W7).
         let steering = state.subconscious_steering.clone().unwrap_or_default();
         let reply = super::reasoning_agent::with_steering(
             steering,
             super::tools::with_origin_session(
                 self.session_id.clone(),
-                self.run_agent_turn("reasoning_agent", "hint:reasoning", "reasoning", prompt),
+                self.run_agent_turn(agent_id, "hint:reasoning", "reasoning", prompt),
             ),
         )
         .await?;

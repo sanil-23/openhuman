@@ -299,6 +299,15 @@ pub const BUILTINS: &[BuiltinAgent] = &[
         prompt_fn: crate::openhuman::orchestration::reasoning_agent::prompt::build,
         graph_fn: Some(crate::openhuman::orchestration::reasoning_agent::graph::graph),
     },
+    // OpenHuman talking directly to its human in the Master chat — same tier +
+    // tiny.place tool belt as the reasoning core, human-facing prompt. Runs in the
+    // `execute` node for a local Master cycle (see orchestration::ops).
+    BuiltinAgent {
+        id: "master_agent",
+        toml: include_str!("../../orchestration/master_agent/agent.toml"),
+        prompt_fn: crate::openhuman::orchestration::master_agent::prompt::build,
+        graph_fn: Some(crate::openhuman::orchestration::reasoning_agent::graph::graph),
+    },
     // Workflow-authoring specialist (Phase 5a): builds tinyflows automation
     // graphs from natural language and returns a validated PROPOSAL — it never
     // persists or enables a flow. Deliberately narrow propose-or-read tool belt.
@@ -2012,6 +2021,7 @@ mod tests {
                     | "subconscious"
                     | "frontend_agent"
                     | "reasoning_agent"
+                    | "master_agent"
                     | "flow_discovery"
             ) {
                 continue;
@@ -2019,7 +2029,7 @@ mod tests {
             assert_eq!(
                 def.agent_tier,
                 AgentTier::Worker,
-                "{} should default to worker tier (only orchestrator/planner/subconscious/frontend_agent/reasoning_agent/flow_discovery are non-worker today)",
+                "{} should default to worker tier (only orchestrator/planner/subconscious/frontend_agent/reasoning_agent/master_agent/flow_discovery are non-worker today)",
                 def.id
             );
         }
