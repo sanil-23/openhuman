@@ -701,8 +701,10 @@ impl Tool for SendToAgentTool {
         // arm). Fall back to the task-local for the best-effort A2A peer path.
         if let Some(origin) = current_master_origin().or_else(current_origin_session) {
             if origin != session_id && !origin.is_empty() {
+                // Key by (recipient, session) so a legacy session-id collision with a
+                // different peer can't consume this ask (matches the store scoping).
                 if let Err(e) = store::with_connection(&workspace, |conn| {
-                    store::set_pending_ask(conn, &session_id, &origin)
+                    store::set_pending_ask(conn, &recipient, &session_id, &origin)
                 }) {
                     log::warn!(target: "orchestration", "[orchestration] tool.send_to_agent correlate failed: {e}");
                 }

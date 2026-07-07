@@ -175,15 +175,17 @@ external agent is needed, SEND a DM under a session id (reuse the per-pair id if
 exists, else mint) → the external reply threads back (shared-session-id model) → update the
 Master-chat answer.**
 
-Wired-vs-missing summary of the 5 sub-flows:
+Wired-vs-missing summary of the 5 sub-flows. **The `State at scoping` column is the
+pre-PR baseline** (kept as historical context); the `Landed` column is what this PR
+delivers.
 
-| # | Sub-flow | State today |
-|---|----------|-------------|
-| 1 | human→OpenHuman question intake + routing into the graph | **Partial** — `send_master_message` + master wake exist, but they reply *outbound to a peer*, not *back to the human*. No "answer the asker" surface. |
-| 2 | graph loads + validates cross-agent session history as context | **Missing** — single-window seed only. |
-| 3 | decision + tool for OpenHuman to ask an external agent | **Missing** — reasoning core has no send/ask tool. |
-| 4 | choose new-vs-existing session id for the outbound ask | **Missing** — `sessions_create` mints; no reuse-lookup; no agent caller. |
-| 5 | thread external reply back into the Master-chat answer | **Missing** — reply wakes the *sub-session* graph and replies to the peer; never correlated back to the originating Master question. |
+| # | Sub-flow | State at scoping (pre-PR) | Landed in this PR |
+|---|----------|---------------------------|-------------------|
+| 1 | human→OpenHuman question intake + routing into the graph | **Partial** — `send_master_message` + master wake exist, but they reply *outbound to a peer*, not *back to the human*. No "answer the asker" surface. | ✅ W2 local-ask path + human-facing `master_agent`; answers land back in the Master window. |
+| 2 | graph loads + validates cross-agent session history as context | **Missing** — single-window seed only. | ✅ `orchestration_list_sessions` / `orchestration_read_session` browse tools. |
+| 3 | decision + tool for OpenHuman to ask an external agent | **Missing** — reasoning core has no send/ask tool. | ✅ `orchestration_send_to_agent` (linked-peers-only guardrail). |
+| 4 | choose new-vs-existing session id for the outbound ask | **Missing** — `sessions_create` mints; no reuse-lookup; no agent caller. | ✅ reuse `latest_session_for_agent`, else mint fresh. |
+| 5 | thread external reply back into the Master-chat answer | **Missing** — reply wakes the *sub-session* graph and replies to the peer; never correlated back to the originating Master question. | ✅ W7 correlation (process-global beacon) → reply surfaced as OpenHuman's own message. |
 
 Session-persistence-validity concerns to carry through: **dedupe** (already solid —
 `message_exists` before decrypt, `INSERT OR IGNORE`); **ordering/#4583** (cursor keyed on
@@ -244,22 +246,35 @@ with on-demand read tools the reasoning core calls, and reframes W5 as the send 
 
 **Shipped in this branch (reply-threading — W7, core-only):**
 
-- ✅ One-shot outbound-ask correlation. The `execute` node scopes the origin window
-  (`tools::with_origin_session`, task-local, mirrors `with_steering`/`with_decision_capture`);
-  `orchestration_send_to_agent` records `store::set_pending_ask(ask_session → origin)`. When the
-  peer's reply lands under that session, `invoke_with_runtime` threads the newest inbound message
-  into the origin window (`thread_reply_to_origin` → master/asking session) and **finishes the
-  cycle without running the reply graph** — no ping-pong reply to the peer. One-shot: consumed by
-  the first inbound reply (`store::{pending_ask_origin,clear_pending_ask}`). Additive — only
-  sessions OpenHuman itself initiated ever carry a pending marker; peer-initiated + master wakes
-  are unchanged.
-- Verified: `cargo test openhuman::orchestration` → 66/66 (incl. `outbound_ask_reply_threads_to_
-  origin_and_skips_the_reply_graph`, `pending_ask_correlation_is_one_shot`); lib clean; fmt clean.
+- ✅ One-shot outbound-ask correlation. For a local-master turn the `execute` node opens a
+  **process-global origin beacon** (`tools::begin_master_origin`/`end_master_origin`) around the
+  agent turn; `orchestration_send_to_agent` reads it and records
+  `store::set_pending_ask((peer_agent, ask_session) → origin)`. A process-global is used instead of
+  a task-local because the harness dispatches tool calls past an internal `tokio::spawn`, and
+  task-locals do **not** cross a spawn — the earlier `with_origin_session` task-local silently never
+  reached the tool, so the correlation never armed. The key is scoped by `(peer_agent, session)` so
+  a legacy shared `wrapper_session_id` across peers can't misroute a reply. When the peer's reply
+  lands, `invoke_with_runtime` correlates it and **finishes the cycle without running the reply
+  graph** — no ping-pong. One-shot: the pending marker is consumed **only after the reply is durably
+  surfaced** (`store::{pending_ask_origin,clear_pending_ask}`), so a transient store failure retries
+  on the next drain instead of dropping the answer.
+- ✅ Reply surfaced as **OpenHuman's own message**, not the peer's raw words. For a master-initiated
+  ask the reply is run through the **tool-free `master_reporter`** (`report_peer_reply_to_master`) —
+  the peer text is untrusted, so the reporter carries no tiny.place tools/sub-agents (no
+  prompt-injection surface) and emits an `assistant` message in the Master window. Peer/A2A origins
+  keep the deterministic raw `thread_reply_to_origin`.
+- ✅ Fire-and-forget: `orchestration_send_to_agent` returns an immediate ack and the `master_agent`
+  prompt forbids polling/`read_session` for the reply, so W7 is the sole async reporter (no
+  duplicate surfacing).
+- Verified: `cargo test openhuman::orchestration` green (incl. `outbound_ask_reply_threads_to_
+  origin_and_skips_the_reply_graph`, `pending_ask_correlation_is_one_shot`,
+  `master_origin_beacon_sets_and_clears`); full loop proven live on staging.
 - **Limitation (needs F3):** correlation is a pragmatic 1:1 request/response — it assumes the
   *next* inbound message on the ask session is the answer. Many-in-flight / interleaved replies
-  need an explicit envelope `inReplyTo`/`fromSession` (F3, cross-repo). Also: the threaded answer
-  is the peer's raw reply surfaced into the window (OpenHuman does not yet re-synthesize a final
-  answer to the human — that would re-wake the origin; deferred).
+  need an explicit envelope `inReplyTo`/`fromSession` (F3, cross-repo). The process-global beacon is
+  safe because local-master wakes are serialized; a concurrent A2A send during a master turn is the
+  one documented edge (single-user desktop, non-fatal). Peer-session (A2A) W7 still rides the
+  best-effort task-local.
 
 **Still to do here:** RPC/UI surface for the human-facing master ask/answer (W8–W12) and
 perf/robustness **F1/F2**; robust correlation **F3** (cross-repo).

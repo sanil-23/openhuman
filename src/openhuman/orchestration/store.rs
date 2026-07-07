@@ -805,27 +805,46 @@ pub fn kv_delete(conn: &Connection, key: &str) -> Result<()> {
 // correlation needs an explicit envelope `inReplyTo` (tracked as F3 / #4583's
 // follow-ups); until then this covers the common single-ask case.
 
-fn pending_ask_key(ask_session_id: &str) -> String {
-    format!("pending_ask:{ask_session_id}")
+/// Scope the pending-ask key by BOTH the answering peer and the session id.
+/// Sessions/checkpoints are keyed by `(agent, session)`, and legacy wrapper
+/// session ids can collide across peers (see the F2 checkpoint fix); keying by
+/// session id alone would let a *different* peer's inbound on a shared legacy
+/// session id consume the ask and misroute the reply.
+fn pending_ask_key(peer_agent_id: &str, ask_session_id: &str) -> String {
+    format!("pending_ask:{peer_agent_id}:{ask_session_id}")
 }
 
-/// Record a one-shot pending outbound ask: `ask_session_id` → `origin_session_id`.
+/// Record a one-shot pending outbound ask: `(peer_agent_id, ask_session_id)` →
+/// `origin_session_id`.
 pub fn set_pending_ask(
     conn: &Connection,
+    peer_agent_id: &str,
     ask_session_id: &str,
     origin_session_id: &str,
 ) -> Result<()> {
-    kv_set(conn, &pending_ask_key(ask_session_id), origin_session_id)
+    kv_set(
+        conn,
+        &pending_ask_key(peer_agent_id, ask_session_id),
+        origin_session_id,
+    )
 }
 
-/// The origin window for a pending ask on `ask_session_id`, if one is pending.
-pub fn pending_ask_origin(conn: &Connection, ask_session_id: &str) -> Result<Option<String>> {
-    kv_get(conn, &pending_ask_key(ask_session_id))
+/// The origin window for a pending ask on `(peer_agent_id, ask_session_id)`.
+pub fn pending_ask_origin(
+    conn: &Connection,
+    peer_agent_id: &str,
+    ask_session_id: &str,
+) -> Result<Option<String>> {
+    kv_get(conn, &pending_ask_key(peer_agent_id, ask_session_id))
 }
 
 /// Clear a pending ask once its answer has been threaded back (one-shot).
-pub fn clear_pending_ask(conn: &Connection, ask_session_id: &str) -> Result<()> {
-    kv_delete(conn, &pending_ask_key(ask_session_id))
+pub fn clear_pending_ask(
+    conn: &Connection,
+    peer_agent_id: &str,
+    ask_session_id: &str,
+) -> Result<()> {
+    kv_delete(conn, &pending_ask_key(peer_agent_id, ask_session_id))
 }
 
 #[cfg(test)]
@@ -1091,18 +1110,21 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         with_connection(tmp.path(), |conn| {
             // Nothing pending initially.
-            assert!(pending_ask_origin(conn, "s-ask")?.is_none());
-            // Record an ask on session `s-ask` originating from the master window.
-            set_pending_ask(conn, "s-ask", "master")?;
+            assert!(pending_ask_origin(conn, "peer-a", "s-ask")?.is_none());
+            // Record an ask to `peer-a` on session `s-ask` from the master window.
+            set_pending_ask(conn, "peer-a", "s-ask", "master")?;
             assert_eq!(
-                pending_ask_origin(conn, "s-ask")?.as_deref(),
+                pending_ask_origin(conn, "peer-a", "s-ask")?.as_deref(),
                 Some("master")
             );
-            // Scoped by session id — an unrelated session is unaffected.
-            assert!(pending_ask_origin(conn, "s-other")?.is_none());
+            // Scoped by (agent, session) — same session id under a DIFFERENT peer
+            // must not satisfy the ask (legacy session-id collision guard).
+            assert!(pending_ask_origin(conn, "peer-b", "s-ask")?.is_none());
+            // A different session under the same peer is also unaffected.
+            assert!(pending_ask_origin(conn, "peer-a", "s-other")?.is_none());
             // Clearing consumes it (one-shot).
-            clear_pending_ask(conn, "s-ask")?;
-            assert!(pending_ask_origin(conn, "s-ask")?.is_none());
+            clear_pending_ask(conn, "peer-a", "s-ask")?;
+            assert!(pending_ask_origin(conn, "peer-a", "s-ask")?.is_none());
             Ok(())
         })
         .unwrap();

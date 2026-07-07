@@ -308,6 +308,15 @@ pub const BUILTINS: &[BuiltinAgent] = &[
         prompt_fn: crate::openhuman::orchestration::master_agent::prompt::build,
         graph_fn: Some(crate::openhuman::orchestration::reasoning_agent::graph::graph),
     },
+    // Tool-free relay: reports an external agent's (untrusted) reply back into the
+    // Master chat as OpenHuman's own message. No tiny.place tools / sub-agents, so
+    // peer text can't prompt-inject OpenHuman into acting. Default single-turn graph.
+    BuiltinAgent {
+        id: "master_reporter",
+        toml: include_str!("../../orchestration/master_reporter/agent.toml"),
+        prompt_fn: crate::openhuman::orchestration::master_reporter::prompt::build,
+        graph_fn: None,
+    },
     // Workflow-authoring specialist (Phase 5a): builds tinyflows automation
     // graphs from natural language and returns a validated PROPOSAL — it never
     // persists or enables a flow. Deliberately narrow propose-or-read tool belt.
