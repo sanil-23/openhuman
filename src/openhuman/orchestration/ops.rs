@@ -168,7 +168,34 @@ pub async fn schedule_wake(agent_id: String, session_id: String, chat_kind: Stri
 /// remain readable by the Messaging UI.
 pub fn start_message_drain_supervisor() {
     tokio::spawn(async {
+        // Receiving DMs is impossible unless this agent has published its Signal
+        // keys (peers 404 on the prekey bundle otherwise) — the exact blocker
+        // that leaves the orchestration receive loop silently dead. Ensure we
+        // are discoverable before/while polling. This mirrors the manual
+        // Messaging UI actions but runs automatically for any orchestration-
+        // enabled instance. Retry each cycle until confirmed (the wallet may not
+        // be unlocked at boot), then stop probing.
+        let mut discoverable = false;
         loop {
+            if !discoverable {
+                match crate::openhuman::tinyplace::ensure_signal_keys_published().await {
+                    Ok(true) => {
+                        discoverable = true;
+                        log::info!(
+                            target: LOG,
+                            "[orchestration] discoverable: Signal keys published — peers can reply"
+                        );
+                    }
+                    Ok(false) => log::debug!(
+                        target: LOG,
+                        "[orchestration] ensure_signal_keys: publish attempted, not yet confirmed — will retry"
+                    ),
+                    Err(e) => log::debug!(
+                        target: LOG,
+                        "[orchestration] ensure_signal_keys deferred (wallet locked / no signer?): {e}"
+                    ),
+                }
+            }
             match Config::load_or_init().await {
                 Ok(config) => match super::ingest::drain_mailbox_once(&config).await {
                     Ok(n) if n > 0 => {
@@ -335,6 +362,93 @@ fn thread_reply_to_origin(
             log::warn!(target: LOG, "[orchestration] reply_thread.persist_failed origin={origin_session_id}: {e}");
         }
     }
+}
+
+/// Surface a peer's answer to a **master-initiated** ask as OpenHuman's OWN
+/// `assistant` message in the master chat — not the peer's raw words, and not a
+/// `user` turn. The human asked OpenHuman to do something, OpenHuman delegated it
+/// to an external agent, and this reports the outcome back in OpenHuman's voice
+/// (spec: master-chat reply-threading, human-facing framing).
+///
+/// Runs the `master_agent` on the `chat` tier with the peer's reply + the master
+/// transcript as context, then persists the report under the `master` window.
+/// Best-effort: on any failure we fall back to threading the raw reply so the
+/// answer is never silently dropped.
+async fn report_peer_reply_to_master(
+    config: &Config,
+    peer_agent_id: &str,
+    answer: &OrchestrationMessage,
+) -> Result<(), String> {
+    // Context: the human's question + OpenHuman's "I've asked them…" ack.
+    let transcript = seed_state(config, LOCAL_MASTER_AGENT, "master")?
+        .as_ref()
+        .map(render_transcript)
+        .unwrap_or_default();
+    let prompt = format!(
+        "You (OpenHuman) relayed your human's request to your tiny.place contact `{peer_agent_id}` \
+         on their behalf. The contact has now replied. Report their reply back to your human here \
+         in the master chat — in your own voice as OpenHuman, naturally and concisely.\n\n\
+         Master chat so far:\n{transcript}\n\n\
+         Your contact's reply:\n{}\n\n\
+         Write only your report to your human.",
+        answer.body,
+    );
+    let rt = ProductionRuntime {
+        config: Arc::new(config.clone()),
+        agent_id: LOCAL_MASTER_AGENT.to_string(),
+        session_id: "master".to_string(),
+    };
+    let report = rt
+        .run_agent_turn("master_agent", "hint:chat", "reasoning", prompt)
+        .await
+        .map_err(|e| format!("master report turn: {e}"))?;
+    let report = report.trim();
+    if report.is_empty() {
+        return Err("master report turn produced empty text".to_string());
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let msg_id = format!("master-report:{}", uuid::Uuid::new_v4());
+    store::with_connection(&config.workspace_dir, |conn| {
+        let seq = store::next_session_seq(conn, LOCAL_MASTER_AGENT, "master")?;
+        store::upsert_session(
+            conn,
+            &OrchestrationSession {
+                session_id: "master".to_string(),
+                agent_id: LOCAL_MASTER_AGENT.to_string(),
+                source: "master".to_string(),
+                label: None,
+                workspace: None,
+                last_seq: seq,
+                created_at: now.clone(),
+                last_message_at: now.clone(),
+            },
+        )?;
+        store::insert_message(
+            conn,
+            &OrchestrationMessage {
+                id: msg_id.clone(),
+                agent_id: LOCAL_MASTER_AGENT.to_string(),
+                session_id: "master".to_string(),
+                chat_kind: ChatKind::Master,
+                role: "assistant".to_string(),
+                body: report.to_string(),
+                timestamp: now.clone(),
+                seq,
+            },
+        )
+    })
+    .map_err(|e| format!("master report persist: {e}"))?;
+
+    // Fan to the renderer socket (NOT the wake bus) so the report appears without
+    // re-waking the master graph — avoids a self-triggered loop.
+    super::bus::notify_orchestration_message(
+        LOCAL_MASTER_AGENT,
+        "master",
+        ChatKind::Master.as_str(),
+    );
+    log::debug!(target: LOG, "[orchestration] master_report.surfaced id={msg_id} peer={peer_agent_id}");
+    Ok(())
 }
 
 // ── Stage 6: subconscious orchestration review ──────────────────────────────
@@ -635,12 +749,25 @@ pub async fn invoke_with_runtime(
     // the reply graph, so OpenHuman does not auto-reply to the peer's answer to its
     // own question (no ping-pong). One-shot: consumed by this first reply.
     if let Some(origin) = pending_ask_origin(config, session_id) {
-        if let Some(answer) = newest_inbound(&state) {
+        if let Some(answer) = newest_inbound(&state).cloned() {
             log::debug!(
                 target: LOG,
                 "[orchestration] wake.reply_threaded session={session_id} origin={origin}",
             );
-            thread_reply_to_origin(config, &origin, agent_id, answer);
+            if origin == "master" {
+                // Master-initiated ask: report the reply in OpenHuman's own voice
+                // as an assistant message. Fall back to raw threading if the report
+                // turn fails, so the answer is never dropped.
+                if let Err(e) = report_peer_reply_to_master(config, agent_id, &answer).await {
+                    log::warn!(
+                        target: LOG,
+                        "[orchestration] master_report.failed session={session_id}: {e} — threading raw",
+                    );
+                    thread_reply_to_origin(config, &origin, agent_id, &answer);
+                }
+            } else {
+                thread_reply_to_origin(config, &origin, agent_id, &answer);
+            }
             clear_pending_ask(config, session_id);
             advance_cursor(config, agent_id, session_id, latest);
             return Ok(());
@@ -893,6 +1020,16 @@ impl OrchestrationRuntime for ProductionRuntime {
         // it into the system prompt (spec §3.2). Also scope the origin session id so
         // `orchestration_send_to_agent` can correlate a peer's async reply back to
         // this window (Master chat reply-threading, W7).
+        //
+        // For the local-master turn, additionally open the process-global master
+        // origin beacon: the `with_origin_session` task-local does NOT survive the
+        // harness's internal `tokio::spawn` tool-dispatch boundary, so the beacon is
+        // what actually lets `orchestration_send_to_agent` arm `pending_ask`. Closed
+        // unconditionally after the turn so a later A2A wake can't read a stale
+        // master origin.
+        if is_local_master {
+            super::tools::begin_master_origin(self.session_id.clone());
+        }
         let steering = state.subconscious_steering.clone().unwrap_or_default();
         let reply = super::reasoning_agent::with_steering(
             steering,
@@ -901,7 +1038,11 @@ impl OrchestrationRuntime for ProductionRuntime {
                 self.run_agent_turn(agent_id, model_hint, "reasoning", prompt),
             ),
         )
-        .await?;
+        .await;
+        if is_local_master {
+            super::tools::end_master_origin();
+        }
+        let reply = reply?;
         // The trace the compression node condenses. `run_single` surfaces the
         // final assistant text; the richer per-tool/sub-agent trace lands when
         // the lower-level runner is wired (follow-up). Frame it with the

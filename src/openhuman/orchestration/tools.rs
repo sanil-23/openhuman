@@ -91,6 +91,46 @@ fn current_origin_session() -> Option<String> {
     ORIGIN_SESSION.try_with(|s| s.clone()).ok()
 }
 
+/// Process-global capture of the origin window a **local-master** turn is serving.
+///
+/// The [`ORIGIN_SESSION`] task-local above is set by the `execute` node around the
+/// agent's turn, but it does **not** reach `orchestration_send_to_agent`: the agent
+/// harness dispatches tool calls beyond one or more internal `tokio::spawn`
+/// boundaries, and task-locals do not cross a `spawn` (standard tokio semantics —
+/// the same reason `sandbox_context` re-scopes its mode right at `tool.execute`).
+/// So the earlier task-local correlation silently never armed `pending_ask`, and
+/// master-initiated asks never threaded their reply back. A process-global is
+/// immune to the spawn boundary, so the tool can read it reliably.
+///
+/// Safe for the master window because local-master wakes are **serialized** by the
+/// generation guard (one `master` session, deduped) — at most one master turn
+/// brackets this at a time. A concurrent A2A `send_to_agent` during that window
+/// would also read the master origin; in the single-user desktop model that
+/// overlap is rare and at worst mis-threads one peer reply into master. Documented,
+/// not ignored. Peer-session (A2A) W7 stays on the best-effort task-local for now.
+static MASTER_ORIGIN: Mutex<Option<String>> = Mutex::new(None);
+
+/// Open a master-origin capture window for the duration of a local-master turn.
+/// `origin` is the window a peer's async reply should thread back to (always
+/// `"master"`). Paired with [`end_master_origin`]; see [`super::ops`]'s `execute`.
+pub fn begin_master_origin(origin: String) {
+    if let Ok(mut slot) = MASTER_ORIGIN.lock() {
+        *slot = Some(origin);
+    }
+}
+
+/// Close the capture window opened by [`begin_master_origin`].
+pub fn end_master_origin() {
+    if let Ok(mut slot) = MASTER_ORIGIN.lock() {
+        *slot = None;
+    }
+}
+
+/// The origin window of the in-flight local-master turn, or `None` outside one.
+fn current_master_origin() -> Option<String> {
+    MASTER_ORIGIN.lock().ok().and_then(|slot| slot.clone())
+}
+
 /// `reply_to_channel` — the front end's pass-2 terminal decision.
 pub struct ReplyToChannelTool;
 
@@ -654,7 +694,12 @@ impl Tool for SendToAgentTool {
         // originating session) instead of auto-replying to the peer. One-shot:
         // consumed by the next inbound message on this session. Skipped when the
         // origin is unknown (tool invoked outside a wake) or is the same session.
-        if let Some(origin) = current_origin_session() {
+        //
+        // Resolve origin from the process-global master beacon FIRST — it survives
+        // the harness's `tokio::spawn` tool-dispatch boundary that drops the
+        // `ORIGIN_SESSION` task-local (which is why this correlation used to never
+        // arm). Fall back to the task-local for the best-effort A2A peer path.
+        if let Some(origin) = current_master_origin().or_else(current_origin_session) {
             if origin != session_id && !origin.is_empty() {
                 if let Err(e) = store::with_connection(&workspace, |conn| {
                     store::set_pending_ask(conn, &session_id, &origin)
@@ -671,7 +716,10 @@ impl Tool for SendToAgentTool {
         let body = serde_json::to_string(&json!({
             "ok": true,
             "sessionId": session_id,
-            "note": "Message sent. The reply will arrive asynchronously in this session.",
+            "note": "Message sent. Fire-and-forget: the reply arrives later and is \
+                     surfaced to this chat AUTOMATICALLY when it comes. Do NOT wait, \
+                     poll, or call read_session for it — just tell your human you've \
+                     asked and will report back, then end your turn.",
         }))
         .unwrap_or_else(|_| "{\"ok\":true}".to_string());
         Ok(ToolResult::success(body))
@@ -681,6 +729,23 @@ impl Tool for SendToAgentTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn master_origin_beacon_sets_and_clears() {
+        // The W7 arming fix: unlike the `ORIGIN_SESSION` task-local (which does not
+        // survive the harness's `tokio::spawn` tool-dispatch boundary), this
+        // process-global beacon is readable from `orchestration_send_to_agent`.
+        end_master_origin(); // normalize against any cross-test residue
+        assert_eq!(current_master_origin(), None);
+
+        // Inside a local-master turn: the tool can read the origin to arm pending_ask.
+        begin_master_origin("master".to_string());
+        assert_eq!(current_master_origin(), Some("master".to_string()));
+
+        // Closed after the turn: a later A2A wake cannot read a stale master origin.
+        end_master_origin();
+        assert_eq!(current_master_origin(), None);
+    }
 
     #[tokio::test]
     async fn reply_tool_echoes_text_and_rejects_empty() {
