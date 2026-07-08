@@ -21,7 +21,7 @@ use super::types::{
 
 const LOG: &str = "orchestration";
 
-/// True when the DM sender `from` is one of the linked (paired) agents.
+/// True when a tiny.place agent id `from` is one of the linked (paired) agents.
 ///
 /// tiny.place identifies the *same* Ed25519 key two ways: the orchestration
 /// pairing store keeps the **base58** Solana address (that's what the
@@ -32,7 +32,12 @@ const LOG: &str = "orchestration";
 /// so the message never lands in the orchestration view. Compare by the decoded
 /// 32-byte key so the two encodings unify. Fall back to the exact-string check
 /// first (cheap, and covers ids that aren't 32-byte keys, e.g. a handle).
-fn agent_id_in_linked_set(from: &str, linked: &HashSet<String>) -> bool {
+///
+/// Shared with the contact-request auto-accept gate
+/// (`agent_orchestration::pairing`): "is this id one of my linked agents?" is the
+/// same trust question for an inbound DM and an inbound contact request, so both
+/// resolve it through this single encoding-unifying matcher.
+pub(crate) fn agent_id_in_linked_set(from: &str, linked: &HashSet<String>) -> bool {
     if linked.contains(from) {
         return true;
     }
