@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 
 use crate::core::event_bus::{publish_global, DomainEvent};
 use crate::openhuman::config::Config;
-use crate::openhuman::orchestration::ingest::agent_id_in_linked_set;
+use crate::openhuman::orchestration::ingest::resolve_linked_id;
 use crate::openhuman::tinyplace::ops::{global_state as tinyplace_state, map_err};
 
 const LOG_TARGET: &str = "orchestration_pairing";
@@ -343,9 +343,18 @@ pub(crate) async fn linked_agent_ids(workspace_dir: &Path) -> std::collections::
 ///
 /// Why this is the delivery gate: tiny.place's relay DROPS any DM to a peer that
 /// has not accepted a contact request, so a wrapped agent that re-establishes
-/// contact (fresh daemon, reconnect, key rotation) is otherwise blocked behind a
-/// pending request — its session intro (`session_info`) and entire session stream
-/// never arrive. Auto-accepting linked agents opens that gate for them only.
+/// contact (a fresh daemon or reconnect that re-sends its one `contact_add`, or a
+/// relay-side contact reset) is otherwise blocked behind a pending request — its
+/// session intro (`session_info`) and entire session stream never arrive.
+/// Auto-accepting linked agents opens that gate for them only. (A *rotated* key is
+/// a different Ed25519 identity, so it is NOT in the linked set and its request is
+/// correctly left pending for the human.)
+///
+/// No per-cycle churn: accepting moves the relay edge from `pending` → `accepted`,
+/// and `/contacts/requests` only lists *pending* requests, so an accepted
+/// requester drops out of `incoming` and is not re-selected next pass. We also
+/// accept under the **canonical** linked id (see [`requesters_to_auto_accept`]),
+/// so a base64-form request can't slip past a base58 stored id and re-fire.
 ///
 /// Fail-closed: [`linked_agent_ids`] returns an **empty** set on any pairing-store
 /// read error, so a read failure auto-accepts NOTHING (every request is left
@@ -359,6 +368,9 @@ pub async fn auto_accept_linked_contact_requests(config: &Config) -> Result<usiz
         return Ok(0);
     }
     let client = tinyplace_state().client().await?;
+    // `limit=100` caps one scan (consistent with `list()`); a linked requester
+    // beyond the 100th *pending* request waits until earlier ones clear. Fine at
+    // expected volumes — a paired fleet is small — revisit with pagination if not.
     let requests: Value = client
         .http()
         .get_agent_auth::<Value>(
@@ -428,14 +440,16 @@ fn request_view_requester(view: &Value) -> Option<String> {
 
 /// Decide which incoming requesters to auto-accept: exactly those already in the
 /// linked-agent set. Requesters not linked are intentionally left for the human.
-/// Reuses the DM-ingest matcher so the base58 pairing-store form and a base64
-/// wire form of the same key unify. Pure — the trust gate is unit-testable
-/// without any network or store IO.
+///
+/// Returns each match's **canonical linked id** (via [`resolve_linked_id`]), NOT
+/// the raw wire id — so a request that carries the base64 form of a key stored as
+/// base58 is accepted/persisted under the existing base58 record rather than
+/// spawning a duplicate `Linked` record for the same identity. Pure — the trust
+/// gate is unit-testable without any network or store IO.
 fn requesters_to_auto_accept(incoming: &[String], linked: &HashSet<String>) -> Vec<String> {
     incoming
         .iter()
-        .filter(|id| agent_id_in_linked_set(id, linked))
-        .cloned()
+        .filter_map(|id| resolve_linked_id(id, linked))
         .collect()
 }
 
@@ -629,15 +643,19 @@ mod tests {
     }
 
     #[test]
-    fn auto_accept_gate_unifies_base58_and_base64_of_same_key() {
+    fn auto_accept_gate_unifies_and_canonicalizes_base58_and_base64() {
         // The pairing store keeps the base58 address; a contact request may carry
         // the base64 Ed25519 key. Both are the same identity, so the linked
-        // agent's request must still be accepted (the reused DM-ingest matcher
-        // unifies the two encodings) — otherwise the e2e intro gate stays shut.
+        // agent's request must still be accepted (the shared matcher unifies the
+        // two encodings) — otherwise the e2e intro gate stays shut. Crucially the
+        // gate returns the CANONICAL base58 stored id, not the raw base64 wire id,
+        // so accepting under it reuses the existing record instead of persisting a
+        // duplicate `Linked` row for the same identity.
         let linked: HashSet<String> = [LINKED_BASE58.to_string()].into_iter().collect();
         assert_eq!(
             requesters_to_auto_accept(&[LINKED_BASE64.to_string()], &linked),
-            vec![LINKED_BASE64.to_string()]
+            vec![LINKED_BASE58.to_string()],
+            "must canonicalize the base64 wire id to the stored base58 id"
         );
     }
 

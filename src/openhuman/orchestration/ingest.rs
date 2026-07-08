@@ -38,15 +38,28 @@ const LOG: &str = "orchestration";
 /// same trust question for an inbound DM and an inbound contact request, so both
 /// resolve it through this single encoding-unifying matcher.
 pub(crate) fn agent_id_in_linked_set(from: &str, linked: &HashSet<String>) -> bool {
-    if linked.contains(from) {
-        return true;
+    resolve_linked_id(from, linked).is_some()
+}
+
+/// Resolve `from` to the **canonical** linked-set id it matches — the exact
+/// stored string if present, otherwise the stored id whose decoded 32-byte key
+/// equals `from`'s (unifying the base58 pairing-store form and the base64 wire
+/// form of one Ed25519 key). Returns `None` when `from` is not a linked agent.
+///
+/// A caller that then accepts/persists against the match MUST use this canonical
+/// id, not the raw wire id: `PairingStore` dedupes records by exact-string
+/// `agent_id`, so accepting under a base64 `from` while the linked record is
+/// base58 would persist a *second* `Linked` record for the same identity — and
+/// unlinking one encoding would leave the other still authorizing the peer.
+pub(crate) fn resolve_linked_id(from: &str, linked: &HashSet<String>) -> Option<String> {
+    if let Some(exact) = linked.get(from) {
+        return Some(exact.clone());
     }
-    let Some(from_key) = decode_agent_key(from) else {
-        return false;
-    };
+    let from_key = decode_agent_key(from)?;
     linked
         .iter()
-        .any(|id| decode_agent_key(id) == Some(from_key))
+        .find(|id| decode_agent_key(id) == Some(from_key))
+        .cloned()
 }
 
 /// Decode a tiny.place agent identifier to its raw 32-byte Ed25519 public key,
@@ -659,6 +672,17 @@ mod tests {
         // An unrelated key is still rejected.
         let other = "De6RHrMj6eDqX1WBTXk11sks4WXHMaqEX9A6oQ3ZEmsg";
         assert!(!agent_id_in_linked_set(other, &linked));
+
+        // `resolve_linked_id` unifies encodings AND returns the CANONICAL stored
+        // id (base58), never the raw base64 wire form — so a caller accepting
+        // against the match reuses the one linked record instead of duplicating it.
+        assert_eq!(
+            resolve_linked_id(base64, &linked).as_deref(),
+            Some(base58),
+            "a base64 `from` must canonicalize to the stored base58 id"
+        );
+        assert_eq!(resolve_linked_id(base58, &linked).as_deref(), Some(base58));
+        assert_eq!(resolve_linked_id(other, &linked), None);
     }
 
     #[test]
