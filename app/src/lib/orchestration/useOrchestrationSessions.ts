@@ -11,6 +11,7 @@
  * Kept separate from `useOrchestrationChats` (which owns the pinned master /
  * subconscious chat surface) so a panel pulls in only what it needs.
  */
+import debugFactory from 'debug';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { socketService } from '../../services/socketService';
@@ -22,6 +23,8 @@ import {
   type SessionSummary,
 } from './orchestrationClient';
 import type { ChatMessage } from './useOrchestrationChats';
+
+const debug = debugFactory('orchestration:sessions');
 
 const TRANSCRIPT_LIMIT = 100;
 
@@ -57,28 +60,34 @@ export function useContactSessions(): UseContactSessionsResult {
   const mountedRef = useRef(true);
 
   const refresh = useCallback(async () => {
+    debug('[orchestration:sessions] contact-sessions refresh: entry');
     try {
       const { sessions: rows } = await orchestrationClient.sessionsList();
       if (!mountedRef.current) return;
-      setSessions(rows.filter(s => s.chatKind === 'session'));
+      const sessionRows = rows.filter(s => s.chatKind === 'session');
+      debug('[orchestration:sessions] contact-sessions refresh: ok count=%d', sessionRows.length);
+      setSessions(sessionRows);
       setState({ status: 'ok' });
     } catch (error) {
       if (!mountedRef.current) return;
       if (error instanceof PaymentRequiredError) {
+        debug('[orchestration:sessions] contact-sessions refresh: payment_required');
         setState({ status: 'payment_required' });
         return;
       }
-      setState({
-        status: 'error',
-        message: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
+      debug('[orchestration:sessions] contact-sessions refresh: error %s', message);
+      setState({ status: 'error', message });
     }
   }, []);
 
   useEffect(() => {
     mountedRef.current = true;
     const handle = window.setTimeout(() => void refresh(), 0);
-    const onMessage = (): void => void refresh();
+    const onMessage = (): void => {
+      debug('[orchestration:sessions] socket refresh (contact sessions)');
+      void refresh();
+    };
     socketService.on('orchestration:message', onMessage);
     socketService.on('orchestration_message', onMessage);
     return () => {
@@ -127,6 +136,12 @@ export function useSessionTranscript(sessionId: string | null): UseSessionTransc
   const [state, setState] = useState<TranscriptState>({ status: 'idle' });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const mountedRef = useRef(true);
+  // Monotonic request token: only the newest in-flight load may apply its
+  // result, so switching `sessionId` can never overwrite state with a slower
+  // response for the PREVIOUS session (the shared `mountedRef` alone can't
+  // guard this — the new effect re-sets it to true before the stale request
+  // resolves).
+  const reqRef = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!sessionId) {
@@ -134,21 +149,36 @@ export function useSessionTranscript(sessionId: string | null): UseSessionTransc
       setState({ status: 'idle' });
       return;
     }
+    const reqId = ++reqRef.current;
+    const target = sessionId;
+    debug('[orchestration:sessions] transcript load: entry session=%s req=%d', target, reqId);
     setState(prev => (prev.status === 'ok' ? prev : { status: 'loading' }));
     try {
       const { messages: rows } = await orchestrationClient.messagesList({
-        chat: sessionId,
+        chat: target,
         limit: TRANSCRIPT_LIMIT,
       });
-      if (!mountedRef.current) return;
+      // Drop a stale response (a newer load started, or we unmounted).
+      if (!mountedRef.current || reqRef.current !== reqId) {
+        debug(
+          '[orchestration:sessions] transcript load: dropped stale session=%s req=%d',
+          target,
+          reqId
+        );
+        return;
+      }
+      debug(
+        '[orchestration:sessions] transcript load: ok session=%s count=%d',
+        target,
+        rows.length
+      );
       setMessages(rows.map(mapTranscriptMessage));
       setState({ status: 'ok' });
     } catch (error) {
-      if (!mountedRef.current) return;
-      setState({
-        status: 'error',
-        message: error instanceof Error ? error.message : String(error),
-      });
+      if (!mountedRef.current || reqRef.current !== reqId) return;
+      const message = error instanceof Error ? error.message : String(error);
+      debug('[orchestration:sessions] transcript load: error session=%s %s', target, message);
+      setState({ status: 'error', message });
     }
   }, [sessionId]);
 
@@ -158,7 +188,10 @@ export function useSessionTranscript(sessionId: string | null): UseSessionTransc
     const onMessage = (payload: unknown): void => {
       const event = payload as OrchestrationMessageEvent | null;
       const affected = event && event.chatKind === 'session' ? event.sessionId : null;
-      if (affected && affected === sessionId) void refresh();
+      if (affected && affected === sessionId) {
+        debug('[orchestration:sessions] socket refresh (transcript) session=%s', sessionId);
+        void refresh();
+      }
     };
     socketService.on('orchestration:message', onMessage);
     socketService.on('orchestration_message', onMessage);

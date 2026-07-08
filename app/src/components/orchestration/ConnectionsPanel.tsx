@@ -10,6 +10,7 @@
  *
  * Renders inside the same single `max-w-3xl` column OrchestrationPage gives it.
  */
+import debugFactory from 'debug';
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { apiClient } from '../../agentworld/AgentWorldShell';
@@ -28,6 +29,8 @@ import { contactAddress, extractHandle } from '../intelligence/orchestrationTabH
 import Button from '../ui/Button';
 import { SectionCard, StatTile } from './primitives';
 import SessionTranscript from './SessionTranscript';
+
+const debug = debugFactory('orchestration:connections');
 
 type Translate = (key: string, fallback?: string) => string;
 
@@ -92,6 +95,7 @@ function SessionView({
   const { state, messages, refresh } = useSessionTranscript(session.sessionId);
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const label = session.label?.trim() || session.sessionId;
   const meta = statusMeta(session.status, t);
 
@@ -101,11 +105,22 @@ function SessionView({
       const trimmed = body.trim();
       if (!trimmed || sending) return;
       setSending(true);
+      setSendError(null);
+      debug('[orchestration:connections] session reply: send session=%s', session.sessionId);
       void orchestrationClient
         .sendMasterMessage({ body: trimmed, recipient: contactAddr, sessionId: session.sessionId })
         .then(() => {
           setBody('');
           void refresh();
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          debug(
+            '[orchestration:connections] session reply: failed session=%s %s',
+            session.sessionId,
+            message
+          );
+          setSendError(message);
         })
         .finally(() => setSending(false));
     },
@@ -150,6 +165,13 @@ function SessionView({
         ) : (
           <SessionTranscript messages={messages} />
         )}
+        {sendError ? (
+          <p
+            data-testid="orch-session-reply-error"
+            className="mt-3 rounded-md bg-coral-50 px-2 py-1 text-xs text-coral-700 dark:bg-coral-500/10 dark:text-coral-300">
+            {t('tinyplaceOrchestration.composer.sendFailed')}: {sendError}
+          </p>
+        ) : null}
         <form className="mt-3 flex gap-2 border-t border-line pt-3" onSubmit={submit}>
           <input
             value={body}
@@ -368,9 +390,14 @@ export default function ConnectionsPanel({ onDiscover }: { onDiscover?: () => vo
   }
 
   if (open) {
+    // Prefer the live session row (socket-refreshed) so the header's
+    // status / message count / label stay current; fall back to the captured
+    // snapshot for a just-created session not yet in the list.
+    const liveSession =
+      sessions.sessions.find(s => s.sessionId === open.session.sessionId) ?? open.session;
     return (
       <SessionView
-        session={open.session}
+        session={liveSession}
         contactAddr={open.address}
         handle={handles[open.address] ?? null}
         onBack={() => setOpen(null)}

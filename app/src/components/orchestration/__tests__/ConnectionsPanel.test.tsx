@@ -151,6 +151,19 @@ describe('ConnectionsPanel', () => {
     expect(screen.getByTestId('orch-connections-panel')).toBeInTheDocument();
   });
 
+  it('surfaces a reply send failure instead of swallowing it', async () => {
+    const contact = { agentId: ADDR, status: 'accepted', direction: 'outgoing' };
+    sessionsHook.byContact.set(ADDR, [session({})]);
+    sendMasterMessage.mockRejectedValueOnce(new Error('relay down'));
+    pairing.current = { ...pairing.current, state: okState([contact]) as never };
+    render(<ConnectionsPanel />);
+    fireEvent.click(screen.getByTestId(`orch-connection-${ADDR}`).querySelector('button')!);
+    fireEvent.click(await screen.findByTestId('orch-session-s1'));
+    fireEvent.change(screen.getByTestId('orch-session-reply-input'), { target: { value: 'hi' } });
+    fireEvent.click(screen.getByTestId('orch-session-reply-send'));
+    expect(await screen.findByTestId('orch-session-reply-error')).toHaveTextContent('relay down');
+  });
+
   it('creates a new session under a contact', async () => {
     const contact = { agentId: ADDR, status: 'accepted', direction: 'outgoing' };
     sessionsCreate.mockResolvedValue({ session: session({ sessionId: 's-new' }) });

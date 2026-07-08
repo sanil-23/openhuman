@@ -44,6 +44,7 @@ function SessionDrawer({ session, onClose }: { session: SessionSummary; onClose:
   const { state, messages, refresh } = useSessionTranscript(session.sessionId);
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   const submit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
@@ -51,6 +52,8 @@ function SessionDrawer({ session, onClose }: { session: SessionSummary; onClose:
       const trimmed = body.trim();
       if (!trimmed || sending) return;
       setSending(true);
+      setSendError(null);
+      debug('[orchestration:agent-chat] session reply: send session=%s', session.sessionId);
       void orchestrationClient
         .sendMasterMessage({
           body: trimmed,
@@ -60,6 +63,15 @@ function SessionDrawer({ session, onClose }: { session: SessionSummary; onClose:
         .then(() => {
           setBody('');
           void refresh();
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          debug(
+            '[orchestration:agent-chat] session reply: failed session=%s %s',
+            session.sessionId,
+            message
+          );
+          setSendError(message);
         })
         .finally(() => setSending(false));
     },
@@ -93,6 +105,10 @@ function SessionDrawer({ session, onClose }: { session: SessionSummary; onClose:
           <p className="py-6 text-center text-sm text-content-muted">
             {t('tinyplaceOrchestration.loading')}
           </p>
+        ) : state.status === 'error' ? (
+          <p className="py-6 text-center text-sm text-coral-600 dark:text-coral-300">
+            {t('tinyplaceOrchestration.failedToLoad')}: {state.message}
+          </p>
         ) : messages.length === 0 ? (
           <p className="py-6 text-center text-sm text-content-faint">
             {t('tinyplaceOrchestration.noMessages')}
@@ -102,6 +118,13 @@ function SessionDrawer({ session, onClose }: { session: SessionSummary; onClose:
         )}
       </div>
       <form className="border-t border-line p-3" onSubmit={submit}>
+        {sendError ? (
+          <p
+            data-testid="orch-agent-drawer-reply-error"
+            className="mb-2 rounded-md bg-coral-50 px-2 py-1 text-xs text-coral-700 dark:bg-coral-500/10 dark:text-coral-300">
+            {t('tinyplaceOrchestration.composer.sendFailed')}: {sendError}
+          </p>
+        ) : null}
         <div className="flex gap-2">
           <input
             value={body}
@@ -274,10 +297,15 @@ export default function AgentChatPanel() {
           <div className="flex flex-1 items-center justify-center text-sm text-content-muted">
             {t('tinyplaceOrchestration.loading')}
           </div>
-        ) : sessionsState.status === 'error' ? (
+        ) : sessionsState.status === 'error' || messagesState.status === 'error' ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-coral-600 dark:text-coral-300">
             <p>
-              {t('tinyplaceOrchestration.failedToLoad')}: {sessionsState.message}
+              {t('tinyplaceOrchestration.failedToLoad')}:{' '}
+              {sessionsState.status === 'error'
+                ? sessionsState.message
+                : messagesState.status === 'error'
+                  ? messagesState.message
+                  : ''}
             </p>
             <Button variant="secondary" size="sm" onClick={() => void refresh()}>
               {t('common.retry')}
@@ -356,7 +384,13 @@ export default function AgentChatPanel() {
 
       {/* Session side-tab (opens on demand from a View-session card). */}
       {openSession ? (
-        <SessionDrawer session={openSession} onClose={() => setOpenSessionId(null)} />
+        // `key` resets the drawer's local composer/sending state when switching
+        // to a different session, so a draft reply never leaks across sessions.
+        <SessionDrawer
+          key={openSession.sessionId}
+          session={openSession}
+          onClose={() => setOpenSessionId(null)}
+        />
       ) : null}
     </div>
   );

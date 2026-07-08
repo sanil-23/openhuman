@@ -136,4 +136,25 @@ describe('AgentChatPanel', () => {
     fireEvent.click(screen.getByTestId('orch-agent-drawer-close'));
     expect(screen.queryByTestId('orch-agent-session-drawer')).not.toBeInTheDocument();
   });
+
+  it('surfaces a drawer reply failure', async () => {
+    contactSessions.current = [pinged];
+    sendMasterMessage.mockRejectedValueOnce(new Error('boom'));
+    render(<AgentChatPanel />);
+    fireEvent.click(screen.getByTestId('orch-agent-view-session-s-auth'));
+    fireEvent.change(screen.getByTestId('orch-agent-drawer-reply'), { target: { value: 'hi' } });
+    fireEvent.click(
+      screen.getByTestId('orch-agent-session-drawer').querySelector('button[type="submit"]')!
+    );
+    expect(await screen.findByTestId('orch-agent-drawer-reply-error')).toHaveTextContent('boom');
+  });
+
+  it('shows an error state when the transcript fails to load', () => {
+    chatsApi.current = {
+      ...chatsApi.current,
+      messagesState: { status: 'error', message: 'load failed' } as never,
+    };
+    render(<AgentChatPanel />);
+    expect(screen.getByText(/load failed/)).toBeInTheDocument();
+  });
 });
