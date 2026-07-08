@@ -14,7 +14,13 @@ const chatsApi = vi.hoisted(() => ({
     messagesState: { status: 'ok' as const },
     chats: [
       { id: 'master', title: 'Master', subtitle: 'you', unread: 0, messages: [] as unknown[] },
-      { id: 'subconscious', title: 'Subconscious', subtitle: 'loop', unread: 0, messages: [] as unknown[] },
+      {
+        id: 'subconscious',
+        title: 'Subconscious',
+        subtitle: 'loop',
+        unread: 0,
+        messages: [] as unknown[],
+      },
     ],
     selectedId: 'master',
     selected: { id: 'master', title: 'Master', messages: [] as unknown[] },
@@ -120,7 +126,11 @@ describe('AgentChatPanel', () => {
       screen.getByTestId('orch-agent-session-drawer').querySelector('button[type="submit"]')!
     );
     await waitFor(() =>
-      expect(sendMasterMessage).toHaveBeenCalledWith({ body: 'hi', recipient: '@peer', sessionId: 's-auth' })
+      expect(sendMasterMessage).toHaveBeenCalledWith({
+        body: 'hi',
+        recipient: '@peer',
+        sessionId: 's-auth',
+      })
     );
 
     fireEvent.click(screen.getByTestId('orch-agent-drawer-close'));
