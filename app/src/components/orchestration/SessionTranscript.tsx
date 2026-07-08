@@ -24,6 +24,15 @@ export interface SessionTranscriptProps {
   onDecide?: (message: ChatMessage, decision: ApprovalDecision) => void;
 }
 
+/**
+ * Whether a row's `from` marks it as owner/user-authored (right-side bubble).
+ * The composer's own reply is mirrored back with role `"owner"`; the master
+ * optimistic append uses the localized "you". Both belong on the right.
+ */
+function isOwnerAuthored(from: string): boolean {
+  return from === 'you' || from === 'owner' || from === 'user';
+}
+
 /** Lightweight `**bold**` rendering without pulling in a markdown lib. */
 function renderInline(text: string): (string | ReactElement)[] {
   return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
@@ -197,8 +206,10 @@ export default function SessionTranscript({
           case 'approval_request':
             return <ApprovalRow key={message.id} message={message} onDecide={onDecide} />;
           default:
-            // agent_message + legacy v1 rows (from user/agent) → bubble by sender.
-            return message.from === 'you' ? (
+            // agent_message + legacy v1 rows → bubble by sender. Owner/user-
+            // authored rows (incl. a reply mirrored back with role "owner") sit
+            // on the right; everything else is an agent bubble on the left.
+            return isOwnerAuthored(message.from) ? (
               <UserBubble key={message.id} message={message} />
             ) : (
               <AgentBubble key={`${message.id}-${i}`} message={message} />

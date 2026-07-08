@@ -33,6 +33,13 @@ describe('SessionTranscript', () => {
     ).toBeInTheDocument();
   });
 
+  it('renders an owner-authored reply (role "owner") as a user bubble', () => {
+    // A composer reply is mirrored back with role "owner" and no eventKind;
+    // it must sit on the right (primary bubble), not as a left agent bubble.
+    render(<SessionTranscript messages={[msg({ id: 'o', from: 'owner', body: 'my reply' })]} />);
+    expect(screen.getByText('my reply').closest('.bg-primary-500')).toBeInTheDocument();
+  });
+
   it('merges a tool_call+result and marks failure', () => {
     render(
       <SessionTranscript
