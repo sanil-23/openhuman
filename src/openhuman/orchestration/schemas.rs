@@ -205,6 +205,9 @@ struct SessionSummary {
     chat_kind: String,
     last_message_at: String,
     unread: i64,
+    /// Total persisted messages in the session (all kinds), for the roster's
+    /// per-session count. `0` for the pinned windows / a freshly created session.
+    message_count: i64,
     active: bool,
     pinned: bool,
 }
@@ -333,6 +336,7 @@ fn summarize(
     unread: i64,
     pinned: bool,
     current_task: Option<String>,
+    message_count: i64,
 ) -> SessionSummary {
     let chat_kind = chat_kind_for_session(&session.session_id);
     let active = pinned || is_active(&session.last_message_at);
@@ -342,6 +346,7 @@ fn summarize(
         chat_kind: chat_kind.as_str().to_string(),
         active,
         unread,
+        message_count,
         pinned,
         harness_type,
         status,
@@ -394,7 +399,15 @@ fn handle_sessions_list(_params: Map<String, Value>) -> ControllerFuture {
                         .map(|body| task_preview(&body)),
                     }
                 };
-                out.push(summarize(session, unread, pinned, current_task));
+                let message_count =
+                    store::count_messages(conn, &session.agent_id, &session.session_id)?;
+                out.push(summarize(
+                    session,
+                    unread,
+                    pinned,
+                    current_task,
+                    message_count,
+                ));
             }
             // Ensure the pinned windows always exist even before any traffic.
             if !have_master {
@@ -442,7 +455,7 @@ fn handle_sessions_create(params: Map<String, Value>) -> ControllerFuture {
         })
         .map_err(|e| format!("sessions_create: {e}"))?;
         super::bus::notify_orchestration_message(&agent_id, &session_id, "session");
-        to_json(serde_json::json!({ "session": summarize(session, 0, false, None) }))
+        to_json(serde_json::json!({ "session": summarize(session, 0, false, None, 0) }))
     })
 }
 
@@ -459,6 +472,7 @@ fn pinned_placeholder(session_id: &str) -> SessionSummary {
         chat_kind: chat_kind_for_session(session_id).as_str().to_string(),
         last_message_at: String::new(),
         unread: 0,
+        message_count: 0,
         active: true,
         pinned: true,
     }
@@ -1170,9 +1184,10 @@ mod tests {
             ..Default::default()
         };
         // current_task is threaded from the handler (status.detail preferred there).
-        let summary = summarize(session, 0, false, Some("approve rm -rf".to_string()));
+        let summary = summarize(session, 0, false, Some("approve rm -rf".to_string()), 7);
         assert_eq!(summary.status, "waiting-approval");
         assert_eq!(summary.current_task.as_deref(), Some("approve rm -rf"));
+        assert_eq!(summary.message_count, 7);
     }
 
     #[test]
@@ -1200,10 +1215,11 @@ mod tests {
             last_message_at: "2020-01-01T00:00:00Z".to_string(),
             ..Default::default()
         };
-        let summary = summarize(session, 2, false, Some("drafting cards".to_string()));
+        let summary = summarize(session, 2, false, Some("drafting cards".to_string()), 12);
         assert_eq!(summary.harness_type.as_deref(), Some("claude"));
         assert_eq!(summary.status, "stopped");
         assert_eq!(summary.current_task.as_deref(), Some("drafting cards"));
+        assert_eq!(summary.message_count, 12);
         assert!(!summary.active);
 
         // A pinned window is always active → idle, and carries no harness/task.

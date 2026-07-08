@@ -47,7 +47,10 @@ const SCHEMA_DDL: &str = "
         seq        INTEGER NOT NULL DEFAULT 0,
         event_kind TEXT,
         tool_name  TEXT,
-        call_id    TEXT
+        call_id    TEXT,
+        ok         INTEGER,
+        is_error   INTEGER,
+        exit_code  INTEGER
     );
 
     CREATE INDEX IF NOT EXISTS idx_messages_session
@@ -228,6 +231,10 @@ fn migrate(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "messages", "event_kind", "TEXT")?;
     add_column_if_missing(conn, "messages", "tool_name", "TEXT")?;
     add_column_if_missing(conn, "messages", "call_id", "TEXT")?;
+    // v2 tool_result outcome — additive, existing rows default NULL.
+    add_column_if_missing(conn, "messages", "ok", "INTEGER")?;
+    add_column_if_missing(conn, "messages", "is_error", "INTEGER")?;
+    add_column_if_missing(conn, "messages", "exit_code", "INTEGER")?;
     Ok(())
 }
 
@@ -312,8 +319,8 @@ pub fn insert_message(conn: &Connection, m: &OrchestrationMessage) -> Result<boo
     let changed = conn.execute(
         "INSERT OR IGNORE INTO messages
            (id, agent_id, session_id, chat_kind, role, body, timestamp, seq,
-            event_kind, tool_name, call_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            event_kind, tool_name, call_id, ok, is_error, exit_code)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             m.id,
             m.agent_id,
@@ -326,6 +333,9 @@ pub fn insert_message(conn: &Connection, m: &OrchestrationMessage) -> Result<boo
             m.event_kind,
             m.tool_name,
             m.call_id,
+            m.ok,
+            m.is_error,
+            m.exit_code,
         ],
     )?;
     Ok(changed > 0)
@@ -420,7 +430,7 @@ pub fn list_messages_by_session(
         Some(before) => {
             let mut stmt = conn.prepare(
                 "SELECT id, agent_id, session_id, chat_kind, role, body, timestamp, seq,
-                        event_kind, tool_name, call_id
+                        event_kind, tool_name, call_id, ok, is_error, exit_code
                    FROM messages WHERE session_id = ?1 AND timestamp < ?2
                      AND (event_kind IS NULL
                           OR event_kind NOT IN ('status', 'lifecycle', 'unknown'))
@@ -434,7 +444,7 @@ pub fn list_messages_by_session(
         None => {
             let mut stmt = conn.prepare(
                 "SELECT id, agent_id, session_id, chat_kind, role, body, timestamp, seq,
-                        event_kind, tool_name, call_id
+                        event_kind, tool_name, call_id, ok, is_error, exit_code
                    FROM messages WHERE session_id = ?1
                      AND (event_kind IS NULL
                           OR event_kind NOT IN ('status', 'lifecycle', 'unknown'))
@@ -466,6 +476,9 @@ fn map_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OrchestrationMes
         event_kind: row.get(8)?,
         tool_name: row.get(9)?,
         call_id: row.get(10)?,
+        ok: row.get(11)?,
+        is_error: row.get(12)?,
+        exit_code: row.get(13)?,
     })
 }
 
@@ -617,7 +630,7 @@ pub fn list_recent_messages(
 ) -> Result<Vec<OrchestrationMessage>> {
     let mut stmt = conn.prepare(
         "SELECT id, agent_id, session_id, chat_kind, role, body, timestamp, seq,
-                event_kind, tool_name, call_id
+                event_kind, tool_name, call_id, ok, is_error, exit_code
            FROM messages WHERE agent_id = ?1 AND session_id = ?2
            ORDER BY timestamp DESC, seq DESC LIMIT ?3",
     )?;
@@ -986,6 +999,38 @@ mod tests {
             assert!(!insert_message(conn, &msg("m1", "@a", "h1", 1))?);
             assert!(message_exists(conn, "m1")?);
             assert_eq!(count_messages(conn, "@a", "h1")?, 1);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn persists_and_reads_back_tool_result_outcome() {
+        let tmp = tempfile::tempdir().unwrap();
+        with_connection(tmp.path(), |conn| {
+            upsert_session(conn, &session("@a", "h1", 1))?;
+            let failed = OrchestrationMessage {
+                event_kind: Some("tool_result".into()),
+                tool_name: Some("Bash".into()),
+                call_id: Some("c1".into()),
+                ok: Some(false),
+                is_error: Some(true),
+                exit_code: Some(1),
+                ..msg("m1", "@a", "h1", 1)
+            };
+            assert!(insert_message(conn, &failed)?);
+            let back = list_recent_messages(conn, "@a", "h1", 10)?;
+            assert_eq!(back.len(), 1);
+            assert_eq!(back[0].ok, Some(false));
+            assert_eq!(back[0].is_error, Some(true));
+            assert_eq!(back[0].exit_code, Some(1));
+            // A plain message leaves the outcome columns NULL → None on read.
+            assert!(insert_message(conn, &msg("m2", "@a", "h1", 2))?);
+            let plain = list_recent_messages(conn, "@a", "h1", 10)?;
+            let m2 = plain.iter().find(|m| m.id == "m2").unwrap();
+            assert_eq!(m2.ok, None);
+            assert_eq!(m2.is_error, None);
+            assert_eq!(m2.exit_code, None);
             Ok(())
         })
         .unwrap();

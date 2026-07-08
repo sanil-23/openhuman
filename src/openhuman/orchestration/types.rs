@@ -458,6 +458,17 @@ pub struct OrchestrationMessage {
     /// v2 correlation id linking a `tool_result` back to its `tool_call`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,
+    /// v2 `tool_result.ok` — whether the tool call succeeded. `None` on every row
+    /// that is not a `tool_result` (so the renderer can distinguish a failed run
+    /// from a successful one instead of both reading as plain output).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
+    /// v2 `tool_result.is_error` — the harness flagged the result as an error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
+    /// v2 `tool_result.exit_code` — process exit code when the tool was a command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i64>,
 }
 
 #[cfg(test)]
