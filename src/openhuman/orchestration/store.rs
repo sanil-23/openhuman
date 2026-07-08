@@ -1549,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    fn migrates_pre_v2_schema_by_adding_status_and_event_columns() {
+    fn migrates_pre_v2_schema_by_adding_session_and_message_columns() {
         // A store created before the harness-session-v2 receiver: the sessions and
         // messages tables lack the new run-state / event columns. Opening through
         // `with_connection` must add them additively (existing rows read NULL) and
@@ -1595,9 +1595,18 @@ mod tests {
                 ("sessions", "status_state"),
                 ("sessions", "current_detail"),
                 ("sessions", "active_call_id"),
+                ("sessions", "title"),
+                ("sessions", "model"),
+                ("sessions", "handle"),
+                ("sessions", "repo"),
+                ("sessions", "branch"),
+                ("sessions", "capabilities"),
                 ("messages", "event_kind"),
                 ("messages", "tool_name"),
                 ("messages", "call_id"),
+                ("messages", "ok"),
+                ("messages", "is_error"),
+                ("messages", "exit_code"),
             ] {
                 assert!(
                     column_exists(conn, table, column)?,
@@ -1614,6 +1623,9 @@ mod tests {
             assert_eq!(msgs.len(), 1);
             assert_eq!(msgs[0].body, "legacy body");
             assert_eq!(msgs[0].event_kind, None);
+            assert_eq!(msgs[0].ok, None);
+            assert_eq!(msgs[0].is_error, None);
+            assert_eq!(msgs[0].exit_code, None);
 
             // And the upgraded schema accepts writes that populate the new fields.
             upsert_session(
@@ -1629,6 +1641,24 @@ mod tests {
             assert_eq!(updated.status_state.as_deref(), Some("running"));
             assert_eq!(updated.current_detail.as_deref(), Some("compiling"));
             assert_eq!(updated.active_call_id.as_deref(), Some("call-1"));
+            let tool_result = OrchestrationMessage {
+                event_kind: Some("tool_result".into()),
+                tool_name: Some("Bash".into()),
+                call_id: Some("call-1".into()),
+                ok: Some(false),
+                is_error: Some(true),
+                exit_code: Some(1),
+                ..msg("m-new", "@a", "h-old", 2)
+            };
+            assert!(insert_message(conn, &tool_result)?);
+            let upgraded_messages = list_recent_messages(conn, "@a", "h-old", 10)?;
+            let saved = upgraded_messages
+                .iter()
+                .find(|m| m.id == "m-new")
+                .expect("upgraded schema stores outcome fields");
+            assert_eq!(saved.ok, Some(false));
+            assert_eq!(saved.is_error, Some(true));
+            assert_eq!(saved.exit_code, Some(1));
             Ok(())
         })
         .unwrap();

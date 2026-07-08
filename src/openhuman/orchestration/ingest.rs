@@ -104,7 +104,7 @@ struct ClassifiedMessage {
     tool_name: Option<String>,
     /// v2 `call_id` correlating `tool_result` → `tool_call`.
     call_id: Option<String>,
-    /// v2 `tool_result` outcome (all `None` off a `tool_result` row).
+    /// v2 `tool_result` outcome (`None` for rows that are not `tool_result`).
     ok: Option<bool>,
     is_error: Option<bool>,
     exit_code: Option<i64>,
