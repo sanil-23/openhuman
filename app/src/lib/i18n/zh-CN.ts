@@ -168,6 +168,7 @@ const messages: TranslationMap = {
   'orchPage.agent.mainTab': '主智能体',
   'orchPage.agent.subconsciousTab': '潜意识',
   'orchPage.agent.description': '与主智能体聊天并观察其潜意识',
+  'orchPage.agent.viewSession': '查看会话',
   'orchPage.connections.nav': '连接',
   'orchPage.connections.title': '已关联智能体',
   'orchPage.connections.description': '你的智能体协作的伙伴 — 展开其中一个即可查看你与它的会话',

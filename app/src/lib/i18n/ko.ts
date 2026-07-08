@@ -182,6 +182,7 @@ const messages: TranslationMap = {
   'orchPage.agent.mainTab': '메인 에이전트',
   'orchPage.agent.subconsciousTab': '잠재의식',
   'orchPage.agent.description': '메인 에이전트와 대화하고 잠재의식을 지켜보세요',
+  'orchPage.agent.viewSession': '세션 보기',
   'orchPage.connections.nav': '연결',
   'orchPage.connections.title': '연결된 에이전트',
   'orchPage.connections.description':

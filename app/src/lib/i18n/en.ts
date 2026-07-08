@@ -37,6 +37,7 @@ const en: TranslationMap = {
   'orchPage.agent.mainTab': 'Main agent',
   'orchPage.agent.subconsciousTab': 'Subconscious',
   'orchPage.agent.description': 'Chat with the main agent and watch its subconscious',
+  'orchPage.agent.viewSession': 'View session',
   'orchPage.connections.nav': 'Connections',
   'orchPage.connections.title': 'Linked agents',
   'orchPage.connections.description':

@@ -188,6 +188,7 @@ const messages: TranslationMap = {
   'orchPage.agent.mainTab': 'Agent principal',
   'orchPage.agent.subconsciousTab': 'Subconscient',
   'orchPage.agent.description': "Discutez avec l'agent principal et observez son subconscient",
+  'orchPage.agent.viewSession': 'Voir la session',
   'orchPage.connections.nav': 'Connexions',
   'orchPage.connections.title': 'Agents liés',
   'orchPage.connections.description':

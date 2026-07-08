@@ -180,6 +180,7 @@ const messages: TranslationMap = {
   'orchPage.agent.mainTab': 'الوكيل الرئيسي',
   'orchPage.agent.subconsciousTab': 'اللاوعي',
   'orchPage.agent.description': 'تحدّث مع الوكيل الرئيسي وراقب لاوعيه',
+  'orchPage.agent.viewSession': 'عرض الجلسة',
   'orchPage.connections.nav': 'الاتصالات',
   'orchPage.connections.title': 'الوكلاء المرتبطون',
   'orchPage.connections.description': 'الأقران الذين ينسّق معهم وكيلك — وسّع أحدهم لعرض جلساتك معه',

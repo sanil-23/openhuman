@@ -185,6 +185,7 @@ const messages: TranslationMap = {
   'orchPage.agent.mainTab': 'मुख्य एजेंट',
   'orchPage.agent.subconsciousTab': 'अवचेतन',
   'orchPage.agent.description': 'मुख्य एजेंट से चैट करें और उसका अवचेतन देखें',
+  'orchPage.agent.viewSession': 'सत्र देखें',
   'orchPage.connections.nav': 'कनेक्शन',
   'orchPage.connections.title': 'लिंक किए गए एजेंट',
   'orchPage.connections.description':

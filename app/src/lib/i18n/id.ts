@@ -186,6 +186,7 @@ const messages: TranslationMap = {
   'orchPage.agent.mainTab': 'Agen utama',
   'orchPage.agent.subconsciousTab': 'Bawah sadar',
   'orchPage.agent.description': 'Mengobrol dengan agen utama dan amati bawah sadarnya',
+  'orchPage.agent.viewSession': 'Lihat sesi',
   'orchPage.connections.nav': 'Koneksi',
   'orchPage.connections.title': 'Agen tertaut',
   'orchPage.connections.description':

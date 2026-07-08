@@ -190,6 +190,7 @@ const messages: TranslationMap = {
   'orchPage.agent.mainTab': 'Główny agent',
   'orchPage.agent.subconsciousTab': 'Podświadomość',
   'orchPage.agent.description': 'Rozmawiaj z głównym agentem i obserwuj jego podświadomość',
+  'orchPage.agent.viewSession': 'Zobacz sesję',
   'orchPage.connections.nav': 'Połączenia',
   'orchPage.connections.title': 'Połączeni agenci',
   'orchPage.connections.description':
