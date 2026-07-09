@@ -909,5 +909,8 @@ impl Provider for ReliableProvider {
 }
 
 #[cfg(test)]
+pub(crate) use super::traits::StreamError;
+
+#[cfg(test)]
 #[path = "reliable_tests.rs"]
 mod tests;

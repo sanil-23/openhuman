@@ -10,5 +10,8 @@ mod util;
 pub(crate) use util::test_ollama_connection;
 
 #[cfg(test)]
+pub(crate) use util::interrupted_pull_settle_window_secs;
+
+#[cfg(test)]
 #[path = "../ollama_admin_tests.rs"]
 mod tests;

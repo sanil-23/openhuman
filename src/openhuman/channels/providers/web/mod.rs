@@ -109,7 +109,22 @@ pub mod test_support {
 }
 
 #[cfg(test)]
+pub(crate) use schemas::{
+    json_output, optional_bool, optional_f64, optional_string, optional_u64, required_string,
+};
+#[cfg(test)]
+pub(crate) use session::{
+    compose_system_prompt_suffix, locale_reply_directive, normalize_model_override,
+    provider_role_for_model_override,
+};
+#[cfg(test)]
 pub(crate) use types::SessionCacheFingerprint;
+#[cfg(test)]
+pub(crate) use types::WebChatParams;
+#[cfg(test)]
+pub(crate) use web_errors::{
+    inference_budget_exceeded_user_message, is_inference_budget_exceeded_error,
+};
 
 #[cfg(test)]
 #[path = "../web_tests.rs"]

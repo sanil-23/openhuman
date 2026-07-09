@@ -32,5 +32,8 @@ pub use serde_json::{json, Value};
 pub use types::{DEFAULT_LIMIT, MAX_LIMIT, TREE_TAG_MAX_TAGS, TREE_TAG_MAX_TAG_LENGTH};
 
 #[cfg(test)]
+pub(crate) use specs::list_tools_result_for_config;
+
+#[cfg(test)]
 #[path = "../tools_tests.rs"]
 mod tests;

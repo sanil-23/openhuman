@@ -30,5 +30,9 @@ use helpers::{
 use serde_json::{Map, Value};
 
 #[cfg(test)]
+#[cfg(test)]
+pub(crate) use schema_defs::schemas;
+
+#[cfg(test)]
 #[path = "../schemas_tests.rs"]
 mod tests;
