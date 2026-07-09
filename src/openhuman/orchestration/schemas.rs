@@ -399,8 +399,11 @@ fn handle_sessions_list(_params: Map<String, Value>) -> ControllerFuture {
                         .map(|body| task_preview(&body)),
                     }
                 };
-                let message_count =
-                    store::count_visible_messages(conn, &session.agent_id, &session.session_id)?;
+                let message_count = if pinned {
+                    store::count_visible_messages_by_session(conn, &session.session_id)?
+                } else {
+                    store::count_visible_messages(conn, &session.agent_id, &session.session_id)?
+                };
                 out.push(summarize(
                     session,
                     unread,

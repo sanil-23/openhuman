@@ -424,6 +424,18 @@ pub fn count_visible_messages(conn: &Connection, agent_id: &str, session_id: &st
     )?)
 }
 
+/// Count transcript-visible messages for a pinned chat, whose transcript is
+/// scoped only by `session_id` and can include rows from multiple peers.
+pub fn count_visible_messages_by_session(conn: &Connection, session_id: &str) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ?1
+             AND (event_kind IS NULL
+                  OR event_kind NOT IN ('status', 'lifecycle', 'unknown', 'session_info'))",
+        params![session_id],
+        |row| row.get(0),
+    )?)
+}
+
 /// The next monotonic per-session ingest ordinal: `MAX(seq) + 1` over the
 /// session's messages (`1` for the first message). Stamped at persist time so
 /// the wake idempotence cursor rides a strictly-increasing value instead of the
@@ -1235,6 +1247,12 @@ mod tests {
             // all persisted relay-dedupe rows.
             assert_eq!(count_visible_messages(conn, "@a", "h1")?, 2);
             assert_eq!(count_messages(conn, "@a", "h1")?, 6);
+
+            let mut other_peer = msg("other-peer", "@b", "h1", 7);
+            other_peer.timestamp = "2026-07-02T00:00:07Z".into();
+            insert_message(conn, &other_peer)?;
+            assert_eq!(count_visible_messages(conn, "@a", "h1")?, 2);
+            assert_eq!(count_visible_messages_by_session(conn, "h1")?, 3);
 
             // Roster preview skips the hidden rows → newest visible is the call.
             assert_eq!(
