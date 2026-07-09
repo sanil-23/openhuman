@@ -400,7 +400,7 @@ fn handle_sessions_list(_params: Map<String, Value>) -> ControllerFuture {
                     }
                 };
                 let message_count =
-                    store::count_messages(conn, &session.agent_id, &session.session_id)?;
+                    store::count_visible_messages(conn, &session.agent_id, &session.session_id)?;
                 out.push(summarize(
                     session,
                     unread,

@@ -314,7 +314,7 @@ fn classify_v2(env: SessionEnvelopeV2, fallback_timestamp: &str) -> ClassifiedMe
             b.body = p.output;
             b.call_id = non_empty(p.call_id);
             // Carry the outcome so the renderer can distinguish a failed run.
-            b.ok = Some(p.ok);
+            b.ok = p.ok;
             b.is_error = Some(p.is_error);
             b.exit_code = p.exit_code;
         }
@@ -917,6 +917,21 @@ mod tests {
         assert_eq!(tr_err.ok, Some(false));
         assert_eq!(tr_err.is_error, Some(true));
         assert_eq!(tr_err.exit_code, Some(1));
+
+        // Older/partial payloads may omit `ok`; keep it unknown instead of
+        // defaulting to failure.
+        let tr_unknown = classify_message(
+            v2_env(
+                "tool_result",
+                r#"{ "call_id": "c1", "is_error": false, "output": "done" }"#,
+                "w2",
+                "agent",
+            ),
+            "2026-07-05T09:00:00Z",
+        );
+        assert_eq!(tr_unknown.ok, None);
+        assert_eq!(tr_unknown.is_error, Some(false));
+        assert_eq!(tr_unknown.exit_code, None);
 
         // Non-tool_result rows leave the outcome fields unset.
         assert_eq!(tc.ok, None);

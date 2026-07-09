@@ -43,8 +43,9 @@ const SCHEMA_DDL: &str = "
     );
 
     -- `event_kind`/`tool_name`/`call_id` carry the v2 per-message event shape
-    -- (`event.kind` + tool identity/correlation). Nullable and additive; v1 and
-    -- pinned master/subconscious rows leave them NULL.
+    -- (`event.kind` + tool identity/correlation). `ok`/`is_error`/`exit_code`
+    -- carry the `tool_result` outcome. Nullable and additive; v1 and pinned
+    -- master/subconscious rows leave them NULL.
     CREATE TABLE IF NOT EXISTS messages (
         id         TEXT PRIMARY KEY,
         agent_id   TEXT NOT NULL,
@@ -406,6 +407,18 @@ pub fn insert_message(conn: &Connection, m: &OrchestrationMessage) -> Result<boo
 pub fn count_messages(conn: &Connection, agent_id: &str, session_id: &str) -> Result<i64> {
     Ok(conn.query_row(
         "SELECT COUNT(*) FROM messages WHERE agent_id = ?1 AND session_id = ?2",
+        params![agent_id, session_id],
+        |row| row.get(0),
+    )?)
+}
+
+/// Count transcript-visible messages for a session, using the same visibility
+/// predicate as message reads, unread counts, and roster previews.
+pub fn count_visible_messages(conn: &Connection, agent_id: &str, session_id: &str) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE agent_id = ?1 AND session_id = ?2
+             AND (event_kind IS NULL
+                  OR event_kind NOT IN ('status', 'lifecycle', 'unknown', 'session_info'))",
         params![agent_id, session_id],
         |row| row.get(0),
     )?)
@@ -1217,6 +1230,11 @@ mod tests {
 
             // Unread (cursor at 0) counts the two visible rows, not the 4 hidden.
             assert_eq!(unread_count(conn, "h1")?, 2);
+            // UI session summaries use the same visibility predicate as unread and
+            // transcript reads, while the raw observability count still includes
+            // all persisted relay-dedupe rows.
+            assert_eq!(count_visible_messages(conn, "@a", "h1")?, 2);
+            assert_eq!(count_messages(conn, "@a", "h1")?, 6);
 
             // Roster preview skips the hidden rows → newest visible is the call.
             assert_eq!(

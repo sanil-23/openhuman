@@ -272,8 +272,8 @@ pub struct ToolCallPayload {
 pub struct ToolResultPayload {
     #[serde(default)]
     pub call_id: String,
-    #[serde(default)]
-    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i64>,
     #[serde(default)]
@@ -676,13 +676,23 @@ mod tests {
             tr.event.decoded(),
             ToolResult(ToolResultPayload {
                 call_id: "c1".into(),
-                ok: true,
+                ok: Some(true),
                 exit_code: Some(0),
                 is_error: false,
                 output: "done".into(),
                 output_bytes: 4,
             })
         );
+
+        let tr_unknown = SessionEnvelopeV2::parse(&v2_wire(
+            "tool_result",
+            r#"{ "call_id": "c1", "is_error": false, "output": "done" }"#,
+        ))
+        .unwrap();
+        match tr_unknown.event.decoded() {
+            ToolResult(p) => assert_eq!(p.ok, None),
+            other => panic!("expected tool_result, got {other:?}"),
+        }
 
         let ar = SessionEnvelopeV2::parse(&v2_wire(
             "approval_request",
