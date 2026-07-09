@@ -5,6 +5,7 @@
 //! `is_workspace_internal_path`). Follows the subconscious/cron `with_connection`
 //! pattern.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -434,6 +435,43 @@ pub fn count_visible_messages_by_session(conn: &Connection, session_id: &str) ->
         params![session_id],
         |row| row.get(0),
     )?)
+}
+
+/// Transcript-visible message counts keyed by `(agent_id, session_id)`.
+pub fn visible_message_counts(conn: &Connection) -> Result<HashMap<(String, String), i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT agent_id, session_id, COUNT(*)
+           FROM messages
+          WHERE event_kind IS NULL
+             OR event_kind NOT IN ('status', 'lifecycle', 'unknown', 'session_info')
+          GROUP BY agent_id, session_id",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<std::result::Result<HashMap<_, _>, _>>()?;
+    Ok(rows)
+}
+
+/// Transcript-visible message counts keyed by `session_id` for pinned chats.
+pub fn visible_message_counts_by_session(conn: &Connection) -> Result<HashMap<String, i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT session_id, COUNT(*)
+           FROM messages
+          WHERE event_kind IS NULL
+             OR event_kind NOT IN ('status', 'lifecycle', 'unknown', 'session_info')
+          GROUP BY session_id",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<std::result::Result<HashMap<_, _>, _>>()?;
+    Ok(rows)
 }
 
 /// The next monotonic per-session ingest ordinal: `MAX(seq) + 1` over the
@@ -1253,6 +1291,17 @@ mod tests {
             insert_message(conn, &other_peer)?;
             assert_eq!(count_visible_messages(conn, "@a", "h1")?, 2);
             assert_eq!(count_visible_messages_by_session(conn, "h1")?, 3);
+            let by_agent_session = visible_message_counts(conn)?;
+            assert_eq!(
+                by_agent_session.get(&("@a".to_string(), "h1".to_string())),
+                Some(&2)
+            );
+            assert_eq!(
+                by_agent_session.get(&("@b".to_string(), "h1".to_string())),
+                Some(&1)
+            );
+            let by_session = visible_message_counts_by_session(conn)?;
+            assert_eq!(by_session.get("h1"), Some(&3));
 
             // Roster preview skips the hidden rows → newest visible is the call.
             assert_eq!(

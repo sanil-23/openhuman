@@ -367,6 +367,8 @@ fn handle_sessions_list(_params: Map<String, Value>) -> ControllerFuture {
         let config = load_config("sessions_list").await?;
         let sessions = store::with_connection(&config.workspace_dir, |conn| {
             let rows = store::list_sessions(conn)?;
+            let visible_counts = store::visible_message_counts(conn)?;
+            let pinned_visible_counts = store::visible_message_counts_by_session(conn)?;
             let mut out: Vec<SessionSummary> = Vec::with_capacity(rows.len() + 2);
             let mut have_master = false;
             let mut have_subconscious = false;
@@ -400,9 +402,15 @@ fn handle_sessions_list(_params: Map<String, Value>) -> ControllerFuture {
                     }
                 };
                 let message_count = if pinned {
-                    store::count_visible_messages_by_session(conn, &session.session_id)?
+                    pinned_visible_counts
+                        .get(&session.session_id)
+                        .copied()
+                        .unwrap_or(0)
                 } else {
-                    store::count_visible_messages(conn, &session.agent_id, &session.session_id)?
+                    visible_counts
+                        .get(&(session.agent_id.clone(), session.session_id.clone()))
+                        .copied()
+                        .unwrap_or(0)
                 };
                 out.push(summarize(
                     session,
