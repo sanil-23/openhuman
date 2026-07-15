@@ -101,6 +101,7 @@ fn super_context_skip_reason(
 
     let local_action_candidate = strip_local_folder_action_lead_in(&normalized);
     let starts_like_local_folder_action = [
+        // English
         "create a folder ",
         "create folder ",
         "make a folder ",
@@ -110,6 +111,20 @@ fn super_context_skip_reason(
         "make a directory ",
         "make directory ",
         "mkdir ",
+        // Italian (#4361 repro: "Crea una cartella sul Desktop e chiamala
+        // PROVA"). Gemma-class local models mis-route the Italian phrasing into
+        // Calendar/Connections exactly as they do the English one, so the same
+        // folder-op suppression must be language-aware for the reported locale.
+        "crea una cartella ",
+        "crea la cartella ",
+        "crea cartella ",
+        "creare una cartella ",
+        "creare cartella ",
+        "crea una directory ",
+        "crea directory ",
+        "fai una cartella ",
+        "fammi una cartella ",
+        "nuova cartella ",
     ]
     .iter()
     .any(|prefix| local_action_candidate.starts_with(prefix));
@@ -128,6 +143,13 @@ fn super_context_skip_reason(
             "notion",
             "github",
             "drive",
+            // Italian cues, mirroring the Italian folder-op detection above so a
+            // folder request that *does* reference prior context or an
+            // integration still earns a scout (#4361).
+            "discusso",
+            "parlato",
+            "calendario",
+            "precedente",
         ];
         if !context_hints.iter().any(|hint| normalized.contains(hint)) {
             return Some("simple_local_filesystem_action");
@@ -157,7 +179,7 @@ fn super_context_skip_reason(
 /// `normalized` must already be whitespace-collapsed, punctuation-trimmed, and
 /// lowercased by `super_context_skip_reason`.
 fn mentions_context_or_integration(normalized: &str) -> bool {
-    const INTENT_HINTS: [&str; 30] = [
+    const INTENT_HINTS: [&str; 37] = [
         // prior-conversation / memory cues
         "discussed",
         "mentioned",
@@ -193,6 +215,17 @@ fn mentions_context_or_integration(normalized: &str) -> bool {
         "linkedin",
         "whatsapp",
         "telegram",
+        // Italian cues (#4361) — keep super context ON for an explicit
+        // context/integration ask in the reported locale. "calendario"/"email"/
+        // "gmail" already match via substring, so only the non-overlapping stems
+        // are listed here. Additive only: these can never *cause* a skip.
+        "connessione",  // connection
+        "connessioni",  // connections
+        "integrazione", // integration
+        "riunione",     // meeting
+        "promemoria",   // reminder
+        "ricordami",    // remind me
+        "agenda",       // agenda / calendar
     ];
     INTENT_HINTS.iter().any(|hint| normalized.contains(hint))
 }
@@ -202,6 +235,7 @@ fn strip_local_folder_action_lead_in(message: &str) -> &str {
     for _ in 0..3 {
         let trimmed = candidate.trim_start();
         let next = [
+            // English
             "can you please ",
             "could you please ",
             "would you please ",
@@ -212,6 +246,16 @@ fn strip_local_folder_action_lead_in(message: &str) -> &str {
             "hey ",
             "hello ",
             "hi ",
+            // Italian (#4361)
+            "puoi per favore ",
+            "potresti per favore ",
+            "puoi per piacere ",
+            "puoi ",
+            "potresti ",
+            "per favore ",
+            "per piacere ",
+            "ciao ",
+            "ehi ",
         ]
         .iter()
         .find_map(|lead_in| trimmed.strip_prefix(lead_in));
@@ -1802,6 +1846,72 @@ mod super_context_gate_tests {
         ));
     }
 
+    #[test]
+    fn skips_italian_local_folder_creation() {
+        // #4361 exact repro: the Italian folder op must be recognized as a
+        // simple local filesystem action and NOT trigger a Calendar/Connections
+        // scout — on any provider. This is the string from the issue report.
+        for native in [NATIVE, LOCAL] {
+            assert!(
+                !should_run_super_context(
+                    true,
+                    true,
+                    false,
+                    true,
+                    native,
+                    "Crea una cartella sul Desktop e chiamala PROVA"
+                ),
+                "expected skip for Italian folder creation (native={native})"
+            );
+            // The reason must be the language-agnostic filesystem classification,
+            // not the provider fallback — so it holds even for native providers.
+            assert_eq!(
+                super_context_skip_reason("Crea una cartella sul Desktop e chiamala PROVA", NATIVE),
+                Some("simple_local_filesystem_action")
+            );
+        }
+    }
+
+    #[test]
+    fn skips_italian_local_folder_creation_variants_and_polite_lead_ins() {
+        for message in [
+            "Crea una cartella chiamata PROVA",
+            "Crea cartella screenshots",
+            "Creare una cartella sul desktop",
+            "Fai una cartella per le fatture",
+            "Nuova cartella documenti",
+            "Puoi creare una cartella chiamata PROVA",
+            "Per favore crea una cartella sul Desktop",
+            "Ciao puoi creare una cartella chiamata test",
+        ] {
+            assert_eq!(
+                super_context_skip_reason(message, NATIVE),
+                Some("simple_local_filesystem_action"),
+                "expected filesystem skip for {message:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn keeps_super_context_for_italian_local_action_with_context_hint() {
+        // An Italian folder op that references prior context / an integration
+        // should still earn a scout — the filesystem shortcut must not swallow
+        // it. Verified on a native provider (local providers add the separate
+        // provider gate, exercised elsewhere).
+        assert!(should_run_super_context(
+            true,
+            true,
+            false,
+            true,
+            NATIVE,
+            "Crea una cartella per il progetto di cui abbiamo parlato"
+        ));
+        assert_eq!(
+            super_context_skip_reason("Crea una cartella per la riunione in calendario", NATIVE),
+            None
+        );
+    }
+
     // ── Provider-aware guardrail (#4361) ────────────────────────────────────
     // On providers without native tool calling (Ollama / LM Studio / MLX /
     // llama.cpp) the whole tool + integration catalog is injected as prose, so
@@ -1861,6 +1971,37 @@ mod super_context_gate_tests {
     }
 
     #[test]
+    fn local_provider_keeps_super_context_for_explicit_italian_integration_intent() {
+        // Fix B, locale-aware: an explicit Italian integration ask must keep the
+        // scout ON even on a local (non-native-tool-calling) provider — the
+        // provider gate only suppresses *context-free* first turns. A generic
+        // Italian prompt with no cue is still suppressed on local providers.
+        for msg in [
+            "mostra le mie connessioni",    // show my connections
+            "fissa una riunione domani",    // schedule a meeting tomorrow
+            "aggiungilo al mio calendario", // add it to my calendar
+            "controlla la mia email",       // check my email
+        ] {
+            assert!(
+                should_run_super_context(true, true, false, true, LOCAL, msg),
+                "expected local provider to keep super context for {msg:?}"
+            );
+            assert_eq!(super_context_skip_reason(msg, LOCAL), None);
+        }
+
+        // A generic Italian ask (a poem) carries no integration cue → the local
+        // provider still suppresses it, while a native provider scouts.
+        let generic = "scrivimi una breve poesia sul mare";
+        assert!(should_run_super_context(
+            true, true, false, true, NATIVE, generic
+        ));
+        assert_eq!(
+            super_context_skip_reason(generic, LOCAL),
+            Some("non_native_provider_no_explicit_intent")
+        );
+    }
+
+    #[test]
     fn mentions_context_or_integration_matches_expected_cues() {
         for hit in [
             "show my connections",
@@ -1869,6 +2010,12 @@ mod super_context_gate_tests {
             "what did we discuss earlier",
             "add it to my calendar",
             "post this to slack",
+            // Italian cues (#4361)
+            "mostra le mie connessioni",
+            "fissa una riunione domani",
+            "aggiungilo al mio calendario",
+            "impostami un promemoria",
+            "controlla la mia email",
         ] {
             assert!(
                 mentions_context_or_integration(hit),
@@ -1879,6 +2026,7 @@ mod super_context_gate_tests {
             "write me a short poem about the sea",
             "what is 2 plus 2",
             "translate hola to english",
+            "scrivimi una breve poesia sul mare",
         ] {
             assert!(
                 !mentions_context_or_integration(miss),
