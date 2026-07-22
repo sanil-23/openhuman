@@ -148,6 +148,7 @@ import { formatTimelineEntry } from '../../utils/toolTimelineFormatting';
 import { ShareMessageButton } from '../share/ShareMessageButton';
 import { ThreadList } from './threadList/ThreadList';
 import { buildThreadTimeline } from './timeline/selectors';
+import { supersededInterimIndexes } from './utils/interimNarration';
 
 const CHAT_MODEL_HINT = 'hint:chat';
 /** Maximum trailing characters rendered in the live-streaming assistant
@@ -1799,7 +1800,28 @@ const Conversations = ({
   const pendingWorkflowProposal = selectedThreadId
     ? (pendingWorkflowProposalsByThread[selectedThreadId] ?? null)
     : null;
-  const visibleMessages = messages.filter(msg => !msg.extraMetadata?.hidden);
+  // Interim narration bubbles ("Let me get the data for both.", "The HTML is
+  // hard to parse. Let me search for a clean table.") explain what the agent is
+  // doing WHILE it works. They are live progress, not content: once the turn
+  // delivers its real answer they are superseded, and because they were never
+  // filtered here they piled up permanently — a 5-tool turn left five stale
+  // "Let me…" bubbles wedged between the question and the answer.
+  //
+  // Scoped per TURN (a user message opens a new one) and gated on that turn
+  // having actually produced a final, non-interim agent message. So:
+  //   • turn in flight  → no final message yet → narration stays visible
+  //   • turn answered   → narration hidden, the answer speaks for it
+  //   • turn died first → narration kept; it is the only record of what ran
+  // Deriving it from the answer's existence (rather than `isSending`) is what
+  // makes the last case work, and needs no turn-lifecycle plumbing here.
+  //
+  // Nothing is deleted — these stay persisted and remain reachable through
+  // "View full agent process Source". The Flows copilot drops them outright
+  // (`useWorkflowBuilderChat`); the main chat keeps them while they're useful.
+  const supersededInterim = useMemo(() => supersededInterimIndexes(messages), [messages]);
+  const visibleMessages = messages.filter(
+    (msg, index) => !msg.extraMetadata?.hidden && !supersededInterim.has(index)
+  );
   const hasVisibleMessages = visibleMessages.length > 0;
   const latestVisibleMessage = visibleMessages[visibleMessages.length - 1] ?? null;
   const latestVisibleAgentMessage = [...visibleMessages]
@@ -1998,6 +2020,11 @@ const Conversations = ({
             // retry. `isSending` already excludes it (only `'started'` /
             // `'streaming'`, same as this component's own live-turn checks).
             turnActive={isSending}
+            // Interleaved narration + thinking + tool steps in stream order.
+            // Renders through the same `ProcessingTranscriptView` the Agent
+            // Process Source panel uses, so the rail IS a windowed view of the
+            // panel rather than a second, divergent rendering of the same turn.
+            transcript={selectedThreadProcessing}
           />
         ) : (
           // Transcript-only turn: reasoning/narration was streamed but no tool
@@ -2631,36 +2658,33 @@ const Conversations = ({
                   in-flight response. Rendered as plain text (not Markdown) to
                   avoid jitter from partially-parsed fences. The final bubble
                   replaces this via addInferenceResponse on chat_done. */}
-            {selectedStreamingAssistant &&
-              (selectedStreamingAssistant.thinking.length > 0 ||
-                selectedStreamingAssistant.content.length > 0) && (
-                <div className="flex justify-start">
-                  <div className="relative w-fit max-w-[75%]">
-                    {selectedStreamingAssistant.thinking.length > 0 && (
-                      <details className="mb-1.5 bg-surface-subtle rounded-lg px-3 py-1.5 text-xs text-content-secondary open:bg-stone-100 dark:bg-surface-muted dark:open:bg-neutral-800">
-                        <summary className="cursor-pointer select-none flex items-center gap-1.5">
-                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary-400 animate-pulse" />
-                          <span>{t('chat.thinking')}</span>
-                        </summary>
-                        <pre className="whitespace-pre-wrap break-words mt-1.5 font-sans text-[11px] text-content-muted">
-                          {selectedStreamingAssistant.thinking.slice(-STREAMING_PREVIEW_CHARS)}
-                        </pre>
-                      </details>
-                    )}
-                    {selectedStreamingAssistant.content.length > 0 && (
-                      <div className="rounded-2xl rounded-bl-md px-3 py-1.5 bg-surface-strong/80 dark:bg-surface-muted text-content">
-                        <p className="text-xs text-content-secondary font-mono whitespace-pre-wrap break-words leading-snug">
-                          {selectedStreamingAssistant.content.length > STREAMING_PREVIEW_CHARS && (
-                            <span className="text-content-faint">…</span>
-                          )}
-                          {selectedStreamingAssistant.content.slice(-STREAMING_PREVIEW_CHARS)}
-                          <span className="inline-block w-1 h-3 ml-0.5 align-middle bg-primary-400 animate-pulse" />
-                        </p>
-                      </div>
-                    )}
-                  </div>
+            {/* Reasoning is NOT rendered here any more. It used to get its own
+                collapsed bubble showing a rolling `slice(-120)` tail; the rail
+                above now renders the same reasoning through
+                `ProcessingTranscriptView` as per-round collapsible blocks,
+                interleaved with the narration and tool steps it happened
+                between. Keeping both would show the same text twice, in two
+                places, with two different lifetimes — the duplication class
+                this whole surface was cleaned up to remove. The in-flight
+                ANSWER preview below stays: that is the terminal response
+                streaming in, not progress. */}
+            {selectedStreamingAssistant && selectedStreamingAssistant.content.length > 0 && (
+              <div className="flex justify-start">
+                <div className="relative w-fit max-w-[75%]">
+                  {selectedStreamingAssistant.content.length > 0 && (
+                    <div className="rounded-2xl rounded-bl-md px-3 py-1.5 bg-surface-strong/80 dark:bg-surface-muted text-content">
+                      <p className="text-xs text-content-secondary font-mono whitespace-pre-wrap break-words leading-snug">
+                        {selectedStreamingAssistant.content.length > STREAMING_PREVIEW_CHARS && (
+                          <span className="text-content-faint">…</span>
+                        )}
+                        {selectedStreamingAssistant.content.slice(-STREAMING_PREVIEW_CHARS)}
+                        <span className="inline-block w-1 h-3 ml-0.5 align-middle bg-primary-400 animate-pulse" />
+                      </p>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
+            )}
             {/* Parallel (forked) branch streams — concurrent turns on this
                   thread, each its own labeled bubble so they don't collide with
                   the primary stream above. */}
