@@ -25,6 +25,7 @@ import { splitAgentMessageIntoBubbles } from '../../../utils/agentMessageBubbles
 import { formatTimelineEntry } from '../../../utils/toolTimelineFormatting';
 import { ShareMessageButton } from '../../share/ShareMessageButton';
 import { buildThreadTimeline } from '../timeline/selectors';
+import { supersededInterimIndexes } from '../utils/interimNarration';
 import { type AgentBubblePosition, formatRelativeTime } from '../utils/format';
 import { AgentMessageBubble, AgentMessageText, BubbleMarkdown } from './AgentMessageBubble';
 import { AgentProcessSourcePanel } from './AgentProcessSourcePanel';
@@ -265,7 +266,13 @@ export const ChatThreadView = forwardRef<ChatThreadViewHandle, ChatThreadViewPro
     const openSubagentEntry = openSubagentTaskId
       ? selectedThreadToolTimeline.find(entry => entry.subagent?.taskId === openSubagentTaskId)
       : undefined;
-    const visibleMessages = messages.filter(msg => !msg.extraMetadata?.hidden);
+    // Backward-compat: hide old interim narration messages once their turn has a
+    // final answer.  New turns no longer persist narration as messages (see
+    // ChatRuntimeProvider), so this only affects threads from before the switch.
+    const supersededInterim = useMemo(() => supersededInterimIndexes(messages), [messages]);
+    const visibleMessages = messages.filter(
+      (msg, index) => !msg.extraMetadata?.hidden && !supersededInterim.has(index)
+    );
     const hasVisibleMessages = visibleMessages.length > 0;
     const latestVisibleMessage = visibleMessages[visibleMessages.length - 1] ?? null;
     const latestVisibleAgentMessage = [...visibleMessages]

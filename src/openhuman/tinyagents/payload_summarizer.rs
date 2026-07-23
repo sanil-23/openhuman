@@ -634,4 +634,41 @@ mod tests {
         summarizer.record_failure();
         assert!(!summarizer.breaker_tripped());
     }
+
+    /// When a payload lands in the summarization window ([threshold, cap]) and
+    /// no parent context is available, the dispatcher must fall through to the
+    /// raw payload rather than panicking.  This exercises the code path through
+    /// `summarize_in_parent → invoke_tinyagents_summarizer_in_parent →
+    /// current_parent() → Err` and verifies the error-handling contract:
+    /// `handle_summarizer_result` records a failure and returns `Ok(None)`.
+    ///
+    /// In a real run `current_parent()` is set by the agent harness, so the
+    /// `invoke_with_events` → `run_child(.., streaming = false)` unary path is
+    /// exercised end-to-end.  The event contract (no `TextDelta`/`ThinkingDelta`
+    /// on the parent sink, child lifecycle events still emitted) is pinned by
+    /// `invoke_with_events_emits_lifecycle_on_shared_sink` in the tinyagents
+    /// crate's `subagent::test` module.
+    #[tokio::test]
+    async fn maybe_summarize_falls_through_when_no_parent_context() {
+        let summarizer = SubagentPayloadSummarizer::new(
+            dummy_definition(),
+            1,                // threshold of 1 token — anything passes
+            TEST_MAX_TOKENS,
+        );
+        // 8 chars → ~2 tokens, inside the [1, 2M] window.
+        let raw = "abcd1234";
+        let outcome = summarizer
+            .maybe_summarize_in_parent(&dummy_parent_ctx(), "test_tool", None, raw)
+            .await
+            .expect("fall-through should not error");
+        assert!(
+            outcome.is_none(),
+            "no parent context available — must fall through to raw payload"
+        );
+        // The failure was recorded (one tick toward the circuit breaker).
+        assert!(
+            !summarizer.breaker_tripped(),
+            "single failure must not trip the breaker"
+        );
+    }
 }
