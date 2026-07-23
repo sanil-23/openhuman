@@ -514,6 +514,18 @@ const messages: TranslationMap = {
   'agentWorld.directory.profile.loadError': 'पूरा प्रोफ़ाइल लोड नहीं हो सका।',
   'agentWorld.identities': 'पहचान',
   'agentWorld.profiles': 'प्रोफ़ाइल',
+  'agentWorld.transferHandle.action': 'स्थानांतरित करें',
+  'agentWorld.transferHandle.title': 'हैंडल स्थानांतरित करें',
+  'agentWorld.transferHandle.warning':
+    'हैंडल स्थानांतरण स्थायी है और इसे पूर्ववत नहीं किया जा सकता। प्राप्तकर्ता इसका एकमात्र स्वामी बन जाता है।',
+  'agentWorld.transferHandle.recipientPlaceholder': 'प्राप्तकर्ता का @handle',
+  'agentWorld.transferHandle.confirm': 'हैंडल स्थानांतरित करें',
+  'agentWorld.transferHandle.submitting': 'स्थानांतरित किया जा रहा है…',
+  'agentWorld.transferHandle.recipientRequired': 'प्राप्तकर्ता का हैंडल दर्ज करें।',
+  'agentWorld.transferHandle.confirmLabel': 'पुष्टि के लिए हैंडल टाइप करें',
+  'agentWorld.transferHandle.confirmMismatch': 'टाइप किया गया हैंडल मेल नहीं खाता।',
+  'agentWorld.transferHandle.primaryLocked':
+    'प्राथमिक हैंडल स्थानांतरित नहीं किया जा सकता। पहले कोई अन्य हैंडल सक्रिय करें।',
   'agentWorld.profile.edit': 'प्रोफ़ाइल संपादित करें',
   'agentWorld.profile.displayName': 'प्रदर्शित नाम',
   'agentWorld.profile.bio': 'परिचय',
@@ -570,7 +582,7 @@ const messages: TranslationMap = {
   'brain.goals.actionError': 'कुछ गलत हो गया। कृपया पुनः प्रयास करें।',
   'brain.tabs.sources': 'स्रोत',
   'brain.tabs.sync': 'सिंक',
-  'brain.tabs.tinyplaceOrchestration': 'TinyPlace',
+  'brain.tabs.orchestration': 'ऑर्केस्ट्रेशन',
   'tinyplaceOrchestration.title': 'TinyPlace रिले',
   'tinyplaceOrchestration.subtitle': 'पिन किए गए एजेंट चैनल और ऐप-सत्र चैट',
   'tinyplaceOrchestration.refresh': 'रीफ़्रेश',
@@ -1583,6 +1595,10 @@ const messages: TranslationMap = {
   'settings.about.releases': 'रिलीज़',
   'settings.about.releasesDesc': 'GitHub पर रिलीज़ नोट्स और पुराने बिल्ड देखें।',
   'settings.about.openReleases': 'GitHub रिलीज़ खोलें',
+  'settings.about.starCta.title': 'OpenHuman पसंद आ रहा है?',
+  'settings.about.starCta.body': 'GitHub पर हमें स्टार दें। इससे और लोग हमें खोज पाते हैं।',
+  'settings.about.starCta.star': 'GitHub पर स्टार करें',
+  'settings.about.starCta.dismiss': 'अभी नहीं',
   'settings.about.connection': 'कनेक्शन',
   'settings.about.connectionMode': 'मोड',
   'settings.about.connectionModeLocal': 'स्थानीय',
@@ -1736,6 +1752,7 @@ const messages: TranslationMap = {
     'अपने OpenHuman सत्र को रीफ़्रेश करने के लिए फिर से साइन इन करें, या स्थानीय/अपनी-कुंजी वाले एम्बेडिंग प्रदाता पर स्विच करें।',
   'settings.embeddings.signInAgain': 'फिर से साइन इन करें',
   'settings.embeddings.apiKeyLabel': '{provider} API कुंजी',
+  'settings.embeddings.apiKeyLabelGeneric': 'API कुंजी',
   'settings.embeddings.placeholderStored': '•••••••• (संग्रहीत)',
   'settings.embeddings.placeholderKey': 'अपनी API कुंजी पेस्ट करें…',
   'settings.embeddings.keyStoredEncrypted':
@@ -1837,6 +1854,12 @@ const messages: TranslationMap = {
   'mcp.catalog.searchAria': 'स्मिथेरी कैटलॉग खोजें',
   'mcp.catalog.searchPlaceholder': 'स्मिथरी कैटलॉग खोजें...',
   'mcp.catalog.loadFailed': 'कैटलॉग लोड करने में विफल',
+  'mcp.registry.error.notFound':
+    'रजिस्ट्री में सर्वर नहीं मिला। सर्वर का नाम जांचकर फिर कोशिश करें, उपलब्ध MCP सर्वर ब्राउज करें, या URL से सर्वर को मैन्युअल रूप से जोड़ें।',
+  'mcp.registry.error.network':
+    'MCP रजिस्ट्री तक नहीं पहुंचा जा सका। अपना कनेक्शन जांचकर फिर कोशिश करें, या URL से सर्वर को मैन्युअल रूप से जोड़ें।',
+  'mcp.registry.error.unavailable':
+    'MCP रजिस्ट्री अभी उपलब्ध नहीं है। बाद में फिर कोशिश करें, उपलब्ध MCP सर्वर ब्राउज करें, या URL से सर्वर को मैन्युअल रूप से जोड़ें।',
   'mcp.catalog.noResults': 'कोई सर्वर नहीं मिला.',
   'mcp.catalog.noResultsFor': '"{query}" के लिए कोई सर्वर नहीं मिला।',
   'mcp.catalog.loadMore': 'और अधिक लोड करें',
@@ -3493,6 +3516,19 @@ const messages: TranslationMap = {
   'chat.flowProposal.error': 'वर्कफ़्लो सहेजा नहीं जा सका। कृपया फिर से प्रयास करें।',
   'chat.flowProposal.enableError':
     'वर्कफ़्लो सहेजा गया, लेकिन सक्षम नहीं किया जा सका। फिर से प्रयास करें, या Workflows पेज से इसे सक्षम करें।',
+  'chat.flowProposal.savedConfirmation': 'सहेजा गया',
+  'chat.flowProposal.viewWorkflow': 'वर्कफ़्लो देखें',
+  'chat.flowProposal.stepKind.agent': 'एजेंट',
+  'chat.flowProposal.stepKind.toolCall': 'कार्रवाई',
+  'chat.flowProposal.stepKind.httpRequest': 'वेब अनुरोध',
+  'chat.flowProposal.stepKind.code': 'कोड चलाएं',
+  'chat.flowProposal.stepKind.condition': 'शर्त',
+  'chat.flowProposal.stepKind.switch': 'स्विच',
+  'chat.flowProposal.stepKind.merge': 'मर्ज करें',
+  'chat.flowProposal.stepKind.splitOut': 'विभाजित करें',
+  'chat.flowProposal.stepKind.transform': 'रूपांतरित करें',
+  'chat.flowProposal.stepKind.outputParser': 'आउटपुट पार्स करें',
+  'chat.flowProposal.stepKind.subWorkflow': 'सब-वर्कफ़्लो',
   'channels.authMode.managed_dm': 'OpenHuman से लॉगिन करें',
   'channels.authMode.oauth': 'OAuth साइन-इन करें',
   'channels.authMode.bot_token': 'अपने स्वयं के बॉट टोकन का उपयोग करें',
@@ -4185,7 +4221,11 @@ const messages: TranslationMap = {
   'flows.copilot.noChanges': 'यह प्रस्ताव किसी नोड को नहीं बदलता।',
   'flows.copilot.accept': 'ड्राफ़्ट पर लागू करें',
   'flows.copilot.acceptAndSave': 'स्वीकार करें और सहेजें',
+  'flows.copilot.saveAndEnable': 'सहेजें और सक्रिय करें',
   'flows.copilot.saving': 'सहेजा जा रहा है…',
+  'flows.copilot.enabling': 'सक्रिय किया जा रहा है…',
+  'flows.copilot.enableError':
+    'सहेज लिया गया है, लेकिन वर्कफ़्लो सक्रिय नहीं हो सका। सूची से इसे चालू करने का प्रयास करें।',
   'flows.copilot.reject': 'रद्द करें',
   'flows.copilot.previewHint':
     'एक प्रस्तावित ड्राफ़्ट की समीक्षा हो रही है: अभी कुछ सहेजा नहीं गया।',
@@ -5531,6 +5571,9 @@ const messages: TranslationMap = {
   'settings.agentAccess.requireTaskPlanApproval.label': 'कार्य योजना अनुमोदन की आवश्यकता',
   'settings.agentAccess.requireTaskPlanApproval.desc':
     'एक निर्धारित एजेंट से पहले रोकें एक एजेंट-लेखित कार्य संक्षिप्त निष्पादित करता है।',
+  'settings.agentAccess.autoApproveAll.label': 'सभी कार्रवाइयों को स्वतः स्वीकृत करें',
+  'settings.agentAccess.autoApproveAll.desc':
+    'सक्षम होने पर, एजेंट आपकी अनुमति मांगे बिना सभी कार्रवाइयां निष्पादित करेगा। इसमें फ़ाइल लेखन, शेल कमांड, नेटवर्क अनुरोध और अन्य कोई भी दुष्प्रभाव शामिल हैं। कठोर सुरक्षा अवरोध (क्रेडेंशियल डायरेक्टरी, वर्कस्पेस-आंतरिक पथ) अब भी लागू रहते हैं।',
   'settings.agentAccess.tinyplaceAutopilot.title': 'स्वायत्त tiny.place एजेंट',
   'settings.agentAccess.tinyplaceAutopilot.desc':
     'OpenHuman को tiny.place पर स्वयं कार्य करने दें। यह निर्धारित समय पर सार्थक काम ढूँढता है (पहले खुली बाउंटी), अपनी क्षमताओं के अनुरूप काम करता है और आपकी पहचान से कार्य करता है। यह बिना निगरानी के चलता है और खर्च कर सकता है, इसलिए परीक्षण के दौरान इसे devnet पर रखें। डिफ़ॉल्ट रूप से बंद।',
@@ -7369,17 +7412,17 @@ const messages: TranslationMap = {
   'flows.canvas.sidePanelToggle': 'साइड पैनल',
   'flows.canvas.legendTab': 'मैनुअल',
 
-  // Emergency stop (#4255)
-  'safety.emergencyStop': 'आपातकालीन रोक',
-  'safety.stopFailed': 'स्वचालन रोका नहीं जा सका। पुनः प्रयास करें।',
-  'safety.resume': 'स्वचालन पुनः प्रारंभ करें',
-  'safety.resumeFailed': 'पुनः प्रारंभ नहीं हो सका। स्वचालन अभी भी रुका हुआ है। पुनः प्रयास करें।',
-  'safety.haltedTitle': 'स्वचालन रोका गया',
-  'safety.haltedBody': 'सभी डेस्कटॉप स्वचालन रोक दिया गया है। तैयार होने पर पुनः प्रारंभ करें।',
   // Privacy status pill + per-action egress disclosure (#4437 / S3)
   'privacy.status.ariaLabel': 'गोपनीयता स्थिति',
   'privacy.status.external': 'डिवाइस के बाहर',
   'privacy.status.local': 'डिवाइस पर',
+  // Data Sync layered pipeline status (GH-4690)
+  'sync.pipeline.ingestedOnly': 'केवल अंतर्ग्रहीत',
+  'sync.pipeline.storedWithoutVectors': 'वेक्टर के बिना संग्रहीत। सिमेंटिक खोज अनुपलब्ध।',
+  'sync.pipeline.signInToEnable': 'सक्षम करने के लिए साइन इन करें',
+  'sync.pipeline.extractionFailed': 'मेमोरी संरचना निष्कर्षण विफल रहा। विकी अपूर्ण हो सकता है।',
+  'sync.pipeline.treeDegraded': 'मेमोरी ट्री अवक्रमित। पुनर्प्राप्ति पुराने परिणाम दे सकती है।',
+  'sync.pipeline.viewHealth': 'मेमोरी स्वास्थ्य देखें',
 };
 
 export default messages;

@@ -19,13 +19,13 @@ import chatRuntimeReducer from '../store/chatRuntimeSlice';
 import companionReducer from '../store/companionSlice';
 import connectivityReducer from '../store/connectivitySlice';
 import coreModeReducer from '../store/coreModeSlice';
+import githubStarReducer from '../store/githubStarSlice';
 import layoutReducer from '../store/layoutSlice';
 import localeReducer from '../store/localeSlice';
 import mascotReducer from '../store/mascotSlice';
 import notificationReducer from '../store/notificationSlice';
 import personaReducer from '../store/personaSlice';
 import { pttReducer } from '../store/pttSlice';
-import safetyReducer from '../store/safetySlice';
 import socketReducer from '../store/socketSlice';
 import themeReducer from '../store/themeSlice';
 import threadReducer from '../store/threadSlice';
@@ -49,13 +49,13 @@ const testRootReducer = combineReducers({
   companion: companionReducer,
   connectivity: connectivityReducer,
   coreMode: coreModeReducer,
+  githubStar: githubStarReducer,
   layout: layoutReducer,
   locale: localeReducer,
   mascot: mascotReducer,
   notifications: notificationReducer,
   persona: personaReducer,
   ptt: pttReducer,
-  safety: safetyReducer,
   socket: socketReducer,
   theme: themeReducer,
   thread: threadReducer,

@@ -1228,90 +1228,6 @@ async fn json_rpc_config_update_browser_settings_persists_backend() {
     rpc_join.abort();
 }
 
-/// Emergency-stop kill switch over JSON-RPC: status(not halted) → stop →
-/// status(halted) → resume → status(not halted). Asserts `engaged` flips
-/// across the full round-trip (#4255).
-#[tokio::test]
-async fn json_rpc_emergency_stop_roundtrip_over_rpc() {
-    let _env_lock = json_rpc_e2e_env_lock();
-
-    // Panic-safe cleanup: the switch is a process-global, so guarantee it is
-    // cleared even if an assertion below panics before the resume call — a
-    // leaked engaged state would fail-close unrelated tests in this binary.
-    struct ResumeOnDrop;
-    impl Drop for ResumeOnDrop {
-        fn drop(&mut self) {
-            if let Some(stop) =
-                openhuman_core::openhuman::emergency_stop::EmergencyStop::try_global()
-            {
-                stop.clear();
-            }
-        }
-    }
-    let _reset = ResumeOnDrop;
-
-    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
-    let rpc_base = format!("http://{rpc_addr}");
-
-    // status: not halted (no logs → bare HaltState).
-    let s0 = post_json_rpc(&rpc_base, 4255_1, "openhuman.emergency_status", json!({})).await;
-    let s0_result = assert_no_jsonrpc_error(&s0, "emergency_status initial");
-    let s0_state = peel_logs_envelope(s0_result);
-    assert_eq!(
-        s0_state.get("engaged").and_then(Value::as_bool),
-        Some(false),
-        "switch must start not engaged: {s0_state}"
-    );
-
-    // stop: engage the switch.
-    let stopped = post_json_rpc(
-        &rpc_base,
-        4255_2,
-        "openhuman.emergency_stop",
-        json!({ "reason": "e2e" }),
-    )
-    .await;
-    let stopped_result = assert_no_jsonrpc_error(&stopped, "emergency_stop");
-    let stopped_state = peel_logs_envelope(stopped_result);
-    assert_eq!(
-        stopped_state.get("engaged").and_then(Value::as_bool),
-        Some(true),
-        "stop response must report engaged: {stopped_state}"
-    );
-
-    // status: halted.
-    let s1 = post_json_rpc(&rpc_base, 4255_3, "openhuman.emergency_status", json!({})).await;
-    let s1_result = assert_no_jsonrpc_error(&s1, "emergency_status halted");
-    let s1_state = peel_logs_envelope(s1_result);
-    assert_eq!(
-        s1_state.get("engaged").and_then(Value::as_bool),
-        Some(true),
-        "status must report engaged after stop: {s1_state}"
-    );
-
-    // resume: clear the switch.
-    let resumed = post_json_rpc(&rpc_base, 4255_4, "openhuman.emergency_resume", json!({})).await;
-    let resumed_result = assert_no_jsonrpc_error(&resumed, "emergency_resume");
-    let resumed_state = peel_logs_envelope(resumed_result);
-    assert_eq!(
-        resumed_state.get("engaged").and_then(Value::as_bool),
-        Some(false),
-        "resume response must report not engaged: {resumed_state}"
-    );
-
-    // status: not halted again.
-    let s2 = post_json_rpc(&rpc_base, 4255_5, "openhuman.emergency_status", json!({})).await;
-    let s2_result = assert_no_jsonrpc_error(&s2, "emergency_status resumed");
-    let s2_state = peel_logs_envelope(s2_result);
-    assert_eq!(
-        s2_state.get("engaged").and_then(Value::as_bool),
-        Some(false),
-        "status must report not engaged after resume: {s2_state}"
-    );
-
-    rpc_join.abort();
-}
-
 #[tokio::test]
 async fn json_rpc_tokenjuice_detect_and_cache_stats() {
     let _env_lock = json_rpc_e2e_env_lock();
@@ -6157,6 +6073,34 @@ async fn json_rpc_app_state_snapshot_returns_runtime_shape() {
     assert!(
         runtime.get("service").and_then(Value::as_object).is_some(),
         "expected runtime.service object: {runtime}"
+    );
+
+    // Component health is folded into this snapshot so the frontend hydrates the
+    // daemon-health store from the same poll (no separate health_snapshot poll).
+    // Its fields stay snake_case (the core HealthSnapshot type has no camelCase
+    // rename), matching the frontend health parser.
+    let health = body.get("health").expect("expected health object");
+    assert!(
+        health.get("pid").and_then(Value::as_u64).is_some(),
+        "expected health.pid: {health}"
+    );
+    assert!(
+        health.get("updated_at").and_then(Value::as_str).is_some(),
+        "expected health.updated_at (snake_case): {health}"
+    );
+    assert!(
+        health
+            .get("uptime_seconds")
+            .and_then(Value::as_u64)
+            .is_some(),
+        "expected health.uptime_seconds (snake_case): {health}"
+    );
+    assert!(
+        health
+            .get("components")
+            .and_then(Value::as_object)
+            .is_some(),
+        "expected health.components object: {health}"
     );
 
     mock_join.abort();
@@ -11886,6 +11830,49 @@ async fn json_rpc_config_autonomy_settings_roundtrip() {
         "auto_approve allowlist should round-trip, got envelope: {after_allow_outer}"
     );
 
+    // `auto_approve_all` (the blanket bypass) round-trips through the same
+    // update/get path, and defaults to `false`.
+    let initial_auto_all = initial_outer
+        .get("result")
+        .and_then(|r| r.get("auto_approve_all"))
+        .and_then(Value::as_bool);
+    assert_eq!(
+        initial_auto_all,
+        Some(false),
+        "auto_approve_all should default to false, got envelope: {initial_outer}"
+    );
+
+    let update_auto_all = post_json_rpc(
+        &rpc_base,
+        7007,
+        "openhuman.config_update_autonomy_settings",
+        json!({ "auto_approve_all": true }),
+    )
+    .await;
+    assert_no_jsonrpc_error(
+        &update_auto_all,
+        "update_autonomy_settings auto_approve_all",
+    );
+
+    let after_auto_all = post_json_rpc(
+        &rpc_base,
+        7008,
+        "openhuman.config_get_autonomy_settings",
+        json!({}),
+    )
+    .await;
+    let after_auto_all_outer =
+        assert_no_jsonrpc_error(&after_auto_all, "get_autonomy_settings auto_approve_all");
+    let auto_all_value = after_auto_all_outer
+        .get("result")
+        .and_then(|r| r.get("auto_approve_all"))
+        .and_then(Value::as_bool);
+    assert_eq!(
+        auto_all_value,
+        Some(true),
+        "auto_approve_all should round-trip to true, got envelope: {after_auto_all_outer}"
+    );
+
     mock_join.abort();
     rpc_join.abort();
 }
@@ -15014,6 +15001,16 @@ async fn json_rpc_agent_team_live_member_run_roundtrip_inner() {
         poll_team_task_status(&rpc_base, &team_id, &task_b_id, "done").await,
         "Task B must reach done"
     );
+    assert!(
+        poll_team_members_status(
+            &rpc_base,
+            &team_id,
+            &[alice_id.as_str(), bob_id.as_str()],
+            "idle",
+        )
+        .await,
+        "team members must return to idle"
+    );
 
     // Final state: both tasks done with evidence, both members idle, and the
     // lead message is in the team timeline.
@@ -15109,6 +15106,45 @@ async fn poll_team_task_status(rpc_base: &str, team_id: &str, task_id: &str, wan
                     return true;
                 }
             }
+        }
+    }
+    false
+}
+
+/// Poll `agent_team_get` until every team member reaches `want` (or time out).
+/// Task completion and the worker's transition back to idle are separate
+/// durable operations, so observing a done task does not yet imply idle.
+async fn poll_team_members_status(
+    rpc_base: &str,
+    team_id: &str,
+    expected_member_ids: &[&str],
+    want: &str,
+) -> bool {
+    for attempt in 0..160 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let got = post_json_rpc(
+            rpc_base,
+            38_200_000 + attempt,
+            "openhuman.agent_team_get",
+            json!({ "teamId": team_id }),
+        )
+        .await;
+        let members = assert_no_jsonrpc_error(&got, "agent_team_get member poll")
+            .get("team")
+            .and_then(|tv| tv.get("members"))
+            .and_then(Value::as_array);
+        if members.is_some_and(|members| {
+            members.len() == expected_member_ids.len()
+                && expected_member_ids.iter().all(|expected_id| {
+                    members.iter().any(|member| {
+                        member.get("id").and_then(Value::as_str) == Some(*expected_id)
+                    })
+                })
+                && members
+                    .iter()
+                    .all(|member| member.get("memberStatus").and_then(Value::as_str) == Some(want))
+        }) {
+            return true;
         }
     }
     false
@@ -15451,6 +15487,224 @@ async fn json_rpc_agent_meetings_generate_summary_rejects_empty_meeting_id() {
         message.contains("meeting_id must not be empty"),
         "expected generate_summary validation error, got: {err}"
     );
+
+    rpc_join.abort();
+}
+
+/// Seed a raw append-only session transcript at
+/// `{workspace}/session_raw/{stem}.jsonl` (meta header + body lines).
+fn seed_raw_transcript(workspace: &Path, stem: &str, thread_id: &str, body: &[&str]) {
+    let raw_dir = workspace.join("session_raw");
+    std::fs::create_dir_all(&raw_dir).expect("create session_raw");
+    let meta = format!(
+        r#"{{"_meta":{{"version":1,"agent":"orchestrator","dispatcher":"native","created":"2026-07-21T00:00:00Z","updated":"2026-07-21T00:00:10Z","turn_count":1,"input_tokens":30,"output_tokens":13,"cached_input_tokens":0,"charged_amount_usd":0.003,"thread_id":"{thread_id}"}}}}"#
+    );
+    let mut buf = meta;
+    buf.push('\n');
+    for line in body {
+        buf.push_str(line);
+        buf.push('\n');
+    }
+    std::fs::write(raw_dir.join(format!("{stem}.jsonl")), buf).expect("write transcript");
+}
+
+#[tokio::test]
+async fn json_rpc_threads_transcript_get_projects_and_paginates() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    // Config resolves the runtime workspace to `OPENHUMAN_WORKSPACE/workspace`
+    // (see resolve_config_dir_for_workspace), so seed transcripts there.
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let workspace = workspace.as_path();
+
+    let _workspace_guard = EnvVarGuard::set_to_path("OPENHUMAN_WORKSPACE", tmp.path());
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_url_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+    let _api_url_guard = EnvVarGuard::unset("OPENHUMAN_API_URL");
+
+    let thread_id = "thr_transcript_e2e";
+    let root_stem = "1000_orchestrator";
+    // A full turn: system scaffolding (dropped), user with injected datetime
+    // prefix, assistant tool-calling step (reasoning + tool_calls), tool result,
+    // final assistant answer.
+    seed_raw_transcript(
+        workspace,
+        root_stem,
+        thread_id,
+        &[
+            r#"{"role":"system","content":"[tool-policy preamble] ..."}"#,
+            r#"{"role":"user","content":"Current Date & Time: 2026-07-21 09:00:00 UTC\n\nWeather in NYC?","request_id":"req-1"}"#,
+            r#"{"role":"assistant","content":"Checking.","provider":"anthropic","model":"claude-x","usage":{"input":10,"output":5,"cached_input":0,"cost_usd":0.001},"ts":"2026-07-21T09:00:01Z","reasoning_content":"call the tool","tool_calls":[{"id":"call-1","name":"get_weather","arguments":"{\"city\":\"NYC\"}"},{"id":"call-2","name":"get_traffic","arguments":"{\"city\":\"NYC\"}"}],"iteration":1,"request_id":"req-1"}"#,
+            r#"{"role":"tool","content":"72F sunny","id":"call-1","request_id":"req-1"}"#,
+            r#"{"role":"tool","content":"error: traffic service unavailable","id":"call-2","request_id":"req-1","failure":true,"failure_detail":"traffic service unavailable"}"#,
+            r#"{"role":"assistant","content":"72F and sunny.","provider":"anthropic","model":"claude-x","usage":{"input":20,"output":8,"cached_input":0,"cost_usd":0.002},"ts":"2026-07-21T09:00:02Z","iteration":2,"request_id":"req-1"}"#,
+        ],
+    );
+    // A sub-agent sibling sharing the root stem.
+    seed_raw_transcript(
+        workspace,
+        &format!("{root_stem}__50_coder"),
+        thread_id,
+        &[
+            r#"{"role":"assistant","content":"sub work done","provider":"anthropic","model":"claude-x","usage":{"input":5,"output":3,"cached_input":0,"cost_usd":0.0},"ts":"2026-07-21T09:10:00Z","iteration":1}"#,
+        ],
+    );
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{rpc_addr}");
+
+    // Full projection (default limit).
+    let full = post_json_rpc(
+        &rpc_base,
+        41_001,
+        "openhuman.threads_transcript_get",
+        json!({ "thread_id": thread_id }),
+    )
+    .await;
+    let full_result = assert_no_jsonrpc_error(&full, "threads_transcript_get");
+    let data = full_result.get("data").expect("data envelope");
+    assert_eq!(
+        data.get("threadId").and_then(Value::as_str),
+        Some(thread_id)
+    );
+    assert_eq!(
+        data.get("hasTranscript").and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let items = data
+        .get("items")
+        .and_then(Value::as_array)
+        .expect("items array");
+    // 7 top-level from the root turn (turnBoundary, userMessage, reasoning,
+    // interim assistant, 2 toolCalls, final assistant) + 1 subagent = 8.
+    assert_eq!(
+        data.get("total").and_then(Value::as_u64),
+        Some(8),
+        "items: {items:#?}"
+    );
+
+    let kinds: Vec<&str> = items
+        .iter()
+        .filter_map(|i| i.get("kind").and_then(Value::as_str))
+        .collect();
+    assert!(kinds.contains(&"turnBoundary"));
+    assert!(kinds.contains(&"userMessage"));
+    assert!(kinds.contains(&"reasoning"));
+    assert!(kinds.contains(&"toolCall"));
+    assert!(kinds.contains(&"subagent"));
+
+    // Sanitization: the user message keeps raw content but exposes a stripped
+    // displayContent.
+    let user = items
+        .iter()
+        .find(|i| i.get("kind").and_then(Value::as_str) == Some("userMessage"))
+        .expect("userMessage present");
+    assert_eq!(
+        user.get("displayContent").and_then(Value::as_str),
+        Some("Weather in NYC?")
+    );
+
+    // Tool call paired with its result.
+    let tool = items
+        .iter()
+        .find(|i| i.get("callId").and_then(Value::as_str) == Some("call-1"))
+        .expect("toolCall call-1 present");
+    assert_eq!(
+        tool.get("result").and_then(Value::as_str),
+        Some("72F sunny")
+    );
+    assert_eq!(tool.get("status").and_then(Value::as_str), Some("success"));
+    assert!(
+        tool.get("failure").is_none(),
+        "successful tool has no failure"
+    );
+
+    // A failed tool result projects an error status + failure payload rather
+    // than a false success (Gap 1).
+    let failed_tool = items
+        .iter()
+        .find(|i| i.get("callId").and_then(Value::as_str) == Some("call-2"))
+        .expect("toolCall call-2 present");
+    assert_eq!(
+        failed_tool.get("status").and_then(Value::as_str),
+        Some("error")
+    );
+    assert_eq!(
+        failed_tool
+            .get("failure")
+            .and_then(|f| f.get("detail"))
+            .and_then(Value::as_str),
+        Some("traffic service unavailable")
+    );
+
+    // Pagination: newest-first, limit 2 → 2 items + a cursor.
+    let page1 = post_json_rpc(
+        &rpc_base,
+        41_002,
+        "openhuman.threads_transcript_get",
+        json!({ "thread_id": thread_id, "limit": 2 }),
+    )
+    .await;
+    let page1_data = assert_no_jsonrpc_error(&page1, "transcript_get page1")
+        .get("data")
+        .cloned()
+        .expect("data");
+    assert_eq!(
+        page1_data
+            .get("items")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(
+        page1_data.get("hasMore").and_then(Value::as_bool),
+        Some(true)
+    );
+    let cursor = page1_data
+        .get("nextCursor")
+        .and_then(Value::as_str)
+        .expect("nextCursor present")
+        .to_string();
+
+    let page2 = post_json_rpc(
+        &rpc_base,
+        41_003,
+        "openhuman.threads_transcript_get",
+        json!({ "thread_id": thread_id, "limit": 2, "cursor": cursor }),
+    )
+    .await;
+    let page2_data = assert_no_jsonrpc_error(&page2, "transcript_get page2")
+        .get("data")
+        .cloned()
+        .expect("data");
+    assert_eq!(
+        page2_data
+            .get("items")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(2),
+        "second page returns the next two items"
+    );
+
+    // Missing thread → empty page, not an error.
+    let missing = post_json_rpc(
+        &rpc_base,
+        41_004,
+        "openhuman.threads_transcript_get",
+        json!({ "thread_id": "no_such_thread" }),
+    )
+    .await;
+    let missing_data = assert_no_jsonrpc_error(&missing, "transcript_get missing")
+        .get("data")
+        .cloned()
+        .expect("data");
+    assert_eq!(
+        missing_data.get("hasTranscript").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(missing_data.get("total").and_then(Value::as_u64), Some(0));
 
     rpc_join.abort();
 }

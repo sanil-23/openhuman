@@ -527,6 +527,18 @@ const messages: TranslationMap = {
   'agentWorld.directory.profile.loadError': 'Nie udało się załadować pełnego profilu.',
   'agentWorld.identities': 'Tożsamości',
   'agentWorld.profiles': 'Profile',
+  'agentWorld.transferHandle.action': 'Przekaż',
+  'agentWorld.transferHandle.title': 'Przekaż handle',
+  'agentWorld.transferHandle.warning':
+    "Przekazanie handle'a jest trwałe i nie można go cofnąć. Odbiorca staje się jego jedynym właścicielem.",
+  'agentWorld.transferHandle.recipientPlaceholder': '@handle odbiorcy',
+  'agentWorld.transferHandle.confirm': 'Przekaż handle',
+  'agentWorld.transferHandle.submitting': 'Przekazywanie…',
+  'agentWorld.transferHandle.recipientRequired': 'Podaj handle odbiorcy.',
+  'agentWorld.transferHandle.confirmLabel': 'Wpisz handle, aby potwierdzić',
+  'agentWorld.transferHandle.confirmMismatch': 'Wpisany handle nie pasuje.',
+  'agentWorld.transferHandle.primaryLocked':
+    "Podstawowego handle'a nie można przekazać. Najpierw ustaw inny handle jako aktywny.",
   'agentWorld.profile.edit': 'Edytuj profil',
   'agentWorld.profile.displayName': 'Wyświetlana nazwa',
   'agentWorld.profile.bio': 'Bio',
@@ -583,7 +595,7 @@ const messages: TranslationMap = {
   'brain.goals.actionError': 'Coś poszło nie tak. Spróbuj ponownie.',
   'brain.tabs.sources': 'Źródła',
   'brain.tabs.sync': 'Synchronizacja',
-  'brain.tabs.tinyplaceOrchestration': 'TinyPlace',
+  'brain.tabs.orchestration': 'Orkiestracja',
   'tinyplaceOrchestration.title': 'Przekaźnik TinyPlace',
   'tinyplaceOrchestration.subtitle': 'Przypięte kanały agentów i czaty sesji aplikacji',
   'tinyplaceOrchestration.refresh': 'Odśwież',
@@ -1614,6 +1626,11 @@ const messages: TranslationMap = {
   'settings.about.releasesDesc':
     'Przeglądaj notatki o wydaniach i wcześniejsze buildy na GitHubie.',
   'settings.about.openReleases': 'Otwórz wydania na GitHubie',
+  'settings.about.starCta.title': 'Podoba Ci się OpenHuman?',
+  'settings.about.starCta.body':
+    'Daj nam gwiazdkę na GitHubie. Dzięki temu więcej osób nas znajdzie.',
+  'settings.about.starCta.star': 'Oznacz gwiazdką na GitHub',
+  'settings.about.starCta.dismiss': 'Nie teraz',
   'settings.about.connection': 'Połączenie',
   'settings.about.connectionMode': 'Tryb',
   'settings.about.connectionModeLocal': 'Lokalny',
@@ -1769,6 +1786,7 @@ const messages: TranslationMap = {
     'Zaloguj się ponownie, aby odświeżyć sesję OpenHuman, albo przełącz się na lokalnego dostawcę osadzań lub dostawcę z własnym kluczem.',
   'settings.embeddings.signInAgain': 'Zaloguj się ponownie',
   'settings.embeddings.apiKeyLabel': 'Klucz API {provider}',
+  'settings.embeddings.apiKeyLabelGeneric': 'Klucz API',
   'settings.embeddings.placeholderStored': '•••••••• (zapisane)',
   'settings.embeddings.placeholderKey': 'Wklej swój klucz API…',
   'settings.embeddings.keyStoredEncrypted': 'Twój klucz API jest zaszyfrowany na tym urządzeniu.',
@@ -1870,6 +1888,12 @@ const messages: TranslationMap = {
   'mcp.catalog.searchAria': 'Szukaj serwerów MCP',
   'mcp.catalog.searchPlaceholder': 'Szukaj serwerów MCP...',
   'mcp.catalog.loadFailed': 'Nie udało się załadować katalogu',
+  'mcp.registry.error.notFound':
+    'Nie znaleziono serwera w rejestrze. Sprawdź nazwę serwera i spróbuj ponownie, przeglądaj dostępne serwery MCP albo dodaj serwer ręcznie przez URL.',
+  'mcp.registry.error.network':
+    'Nie można połączyć się z rejestrem MCP. Sprawdź połączenie i spróbuj ponownie albo dodaj serwer ręcznie przez URL.',
+  'mcp.registry.error.unavailable':
+    'Rejestr MCP jest teraz niedostępny. Spróbuj później, przeglądaj dostępne serwery MCP albo dodaj serwer ręcznie przez URL.',
   'mcp.catalog.noResults': 'Nie znaleziono serwerów.',
   'mcp.catalog.noResultsFor': 'Nie znaleziono serwerów dla „{query}”.',
   'mcp.catalog.loadMore': 'Załaduj więcej',
@@ -3538,6 +3562,19 @@ const messages: TranslationMap = {
   'chat.flowProposal.error': 'Nie udało się zapisać przepływu pracy. Spróbuj ponownie.',
   'chat.flowProposal.enableError':
     'Przepływ pracy zapisany, ale nie udało się go włączyć. Spróbuj ponownie lub włącz go na stronie Workflows.',
+  'chat.flowProposal.savedConfirmation': 'Zapisano',
+  'chat.flowProposal.viewWorkflow': 'Zobacz przepływ pracy',
+  'chat.flowProposal.stepKind.agent': 'Agent',
+  'chat.flowProposal.stepKind.toolCall': 'Akcja',
+  'chat.flowProposal.stepKind.httpRequest': 'Żądanie sieciowe',
+  'chat.flowProposal.stepKind.code': 'Uruchom kod',
+  'chat.flowProposal.stepKind.condition': 'Warunek',
+  'chat.flowProposal.stepKind.switch': 'Przełącznik',
+  'chat.flowProposal.stepKind.merge': 'Scal',
+  'chat.flowProposal.stepKind.splitOut': 'Podziel',
+  'chat.flowProposal.stepKind.transform': 'Przekształć',
+  'chat.flowProposal.stepKind.outputParser': 'Przetwórz wynik',
+  'chat.flowProposal.stepKind.subWorkflow': 'Podprzepływ pracy',
   'channels.authMode.managed_dm': 'Zaloguj się z OpenHuman',
   'channels.authMode.oauth': 'Logowanie OAuth',
   'channels.authMode.bot_token': 'Użyj własnego tokena bota',
@@ -4241,7 +4278,11 @@ const messages: TranslationMap = {
   'flows.copilot.noChanges': 'Ta propozycja nie zmienia żadnego węzła.',
   'flows.copilot.accept': 'Zastosuj do wersji roboczej',
   'flows.copilot.acceptAndSave': 'Zaakceptuj i zapisz',
+  'flows.copilot.saveAndEnable': 'Zapisz i włącz',
   'flows.copilot.saving': 'Zapisywanie…',
+  'flows.copilot.enabling': 'Włączanie…',
+  'flows.copilot.enableError':
+    'Zapisano, ale nie udało się włączyć przepływu pracy. Spróbuj włączyć go z listy.',
   'flows.copilot.reject': 'Odrzuć',
   'flows.copilot.previewHint':
     'Przeglądasz proponowaną wersję roboczą: nic nie zostało jeszcze zapisane.',
@@ -5619,6 +5660,9 @@ const messages: TranslationMap = {
   'settings.agentAccess.requireTaskPlanApproval.label': 'Wymagaj zatwierdzenia planu zadania',
   'settings.agentAccess.requireTaskPlanApproval.desc':
     'Wstrzymaj, zanim przypisany agent wykona opis zadania utworzony przez agenta.',
+  'settings.agentAccess.autoApproveAll.label': 'Automatycznie zatwierdzaj wszystkie działania',
+  'settings.agentAccess.autoApproveAll.desc':
+    'Po włączeniu agent będzie wykonywać wszystkie działania bez wcześniejszego proszenia o Twoją zgodę. Obejmuje to zapis plików, polecenia powłoki, żądania sieciowe i wszelkie inne efekty uboczne. Twarde blokady bezpieczeństwa (katalogi poświadczeń, wewnętrzne ścieżki przestrzeni roboczej) nadal obowiązują.',
   'settings.agentAccess.tinyplaceAutopilot.title': 'Autonomiczny agent tiny.place',
   'settings.agentAccess.tinyplaceAutopilot.desc':
     'Pozwól OpenHuman działać samodzielnie na tiny.place. Zgodnie z harmonogramem szuka wartościowej pracy (najpierw otwartych nagród), wykonuje zadania pasujące do jego umiejętności i działa z użyciem Twojej tożsamości. Działa bez nadzoru i może wydawać środki, więc podczas testów używaj devnet. Domyślnie wyłączone.',
@@ -7485,17 +7529,20 @@ const messages: TranslationMap = {
   'flows.canvas.sidePanelToggle': 'Panel boczny',
   'flows.canvas.legendTab': 'Ręczny',
 
-  // Emergency stop (#4255)
-  'safety.emergencyStop': 'Awaryjne zatrzymanie',
-  'safety.stopFailed': 'Nie udało się zatrzymać automatyzacji. Spróbuj ponownie.',
-  'safety.resume': 'Wznów automatyzację',
-  'safety.resumeFailed': 'Nie udało się wznowić. Automatyzacja nadal wstrzymana. Spróbuj ponownie.',
-  'safety.haltedTitle': 'Automatyzacja wstrzymana',
-  'safety.haltedBody': 'Cała automatyzacja pulpitu jest zatrzymana. Wznów, gdy będziesz gotowy.',
   // Privacy status pill + per-action egress disclosure (#4437 / S3)
   'privacy.status.ariaLabel': 'Stan prywatności',
   'privacy.status.external': 'Poza urządzeniem',
   'privacy.status.local': 'Na urządzeniu',
+  // Data Sync layered pipeline status (GH-4690)
+  'sync.pipeline.ingestedOnly': 'Tylko pobrano',
+  'sync.pipeline.storedWithoutVectors':
+    'Zapisano bez wektorów. Wyszukiwanie semantyczne niedostępne.',
+  'sync.pipeline.signInToEnable': 'Zaloguj się, aby włączyć',
+  'sync.pipeline.extractionFailed':
+    'Ekstrakcja struktury pamięci nie powiodła się. Wiki może być niekompletne.',
+  'sync.pipeline.treeDegraded':
+    'Drzewo pamięci osłabione. Wyszukiwanie może zwracać nieaktualne wyniki.',
+  'sync.pipeline.viewHealth': 'Zobacz kondycję pamięci',
 };
 
 export default messages;
