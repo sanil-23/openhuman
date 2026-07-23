@@ -151,28 +151,33 @@ function ToolRow({
 }) {
   const { title, detail } = formatTimelineEntry(entry);
   return (
-    <li className="flex items-start gap-1.5" data-testid="processing-tool-row">
-      <span className="mt-0.5 shrink-0 text-content-faint">
-        <CategoryIcon category={categorizeTool(entry.name)} />
-      </span>
-      <span className="min-w-0 text-[12px] text-content-secondary">
-        {title}
-        {detail ? (
-          <span className="ml-1 rounded bg-surface-subtle px-1 py-px font-mono text-[10px] text-content-muted">
-            {detail}
-          </span>
-        ) : null}
-        {entry.status === 'error' && entry.failure ? (
-          <ToolFailureLines failure={entry.failure} />
-        ) : null}
-        {/* A delegated sub-agent's own tool calls hang off the parent entry, so
-            without this the whole child run collapsed into this single line. */}
-        {entry.subagent && renderSubagent ? (
-          <span className="mt-1 block" data-testid="processing-subagent">
-            {renderSubagent(entry.subagent)}
-          </span>
-        ) : null}
-      </span>
+    <li className="flex flex-col gap-1" data-testid="processing-tool-row">
+      <div className="flex items-start gap-1.5">
+        <span className="mt-0.5 shrink-0 text-content-faint">
+          <CategoryIcon category={categorizeTool(entry.name)} />
+        </span>
+        <span className="min-w-0 text-[12px] text-content-secondary">
+          {title}
+          {detail ? (
+            <span className="ml-1 rounded bg-surface-subtle px-1 py-px font-mono text-[10px] text-content-muted">
+              {detail}
+            </span>
+          ) : null}
+          {entry.status === 'error' && entry.failure ? (
+            <ToolFailureLines failure={entry.failure} />
+          ) : null}
+        </span>
+      </div>
+      {/* A delegated sub-agent's own tool calls hang off the parent entry, so
+          without this the whole child run collapsed into this single line.
+          Rendered as a `<div>` SIBLING under the `<li>` (indented past the
+          icon), not nested inside the label `<span>` — SubagentActivityBlock
+          renders a `<div>`, and `<div>`-inside-`<span>` is invalid nesting. */}
+      {entry.subagent && renderSubagent ? (
+        <div className="ml-5" data-testid="processing-subagent">
+          {renderSubagent(entry.subagent)}
+        </div>
+      ) : null}
     </li>
   );
 }
