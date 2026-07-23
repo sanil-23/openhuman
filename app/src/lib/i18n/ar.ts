@@ -498,6 +498,18 @@ const messages: TranslationMap = {
   'agentWorld.directory.profile.loadError': 'تعذّر تحميل الملف الشخصي الكامل.',
   'agentWorld.identities': 'الهويات',
   'agentWorld.profiles': 'الملفات الشخصية',
+  'agentWorld.transferHandle.action': 'نقل',
+  'agentWorld.transferHandle.title': 'نقل المعرّف',
+  'agentWorld.transferHandle.warning':
+    'نقل المعرّف نهائي ولا يمكن التراجع عنه. يصبح المستلم مالكه الوحيد.',
+  'agentWorld.transferHandle.recipientPlaceholder': 'معرّف@ المستلم',
+  'agentWorld.transferHandle.confirm': 'نقل المعرّف',
+  'agentWorld.transferHandle.submitting': 'جارٍ النقل…',
+  'agentWorld.transferHandle.recipientRequired': 'أدخل معرّف المستلم.',
+  'agentWorld.transferHandle.confirmLabel': 'اكتب المعرّف للتأكيد',
+  'agentWorld.transferHandle.confirmMismatch': 'المعرّف المكتوب غير مطابق.',
+  'agentWorld.transferHandle.primaryLocked':
+    'لا يمكن نقل المعرّف الأساسي. اجعل معرّفًا آخر نشطًا أولًا.',
   'agentWorld.profile.edit': 'تعديل الملف الشخصي',
   'agentWorld.profile.displayName': 'الاسم المعروض',
   'agentWorld.profile.bio': 'نبذة',
@@ -552,7 +564,7 @@ const messages: TranslationMap = {
   'brain.goals.actionError': 'حدث خطأ ما. يرجى المحاولة مرة أخرى.',
   'brain.tabs.sources': 'المصادر',
   'brain.tabs.sync': 'المزامنة',
-  'brain.tabs.tinyplaceOrchestration': 'TinyPlace',
+  'brain.tabs.orchestration': 'التنسيق',
   'tinyplaceOrchestration.title': 'مرحّل TinyPlace',
   'tinyplaceOrchestration.subtitle': 'قنوات الوكلاء المثبتة ودردشات جلسات التطبيق',
   'tinyplaceOrchestration.refresh': 'تحديث',
@@ -1551,6 +1563,11 @@ const messages: TranslationMap = {
   'settings.about.releases': 'الإصدارات',
   'settings.about.releasesDesc': 'تصفح ملاحظات الإصدار والإصدارات السابقة على GitHub.',
   'settings.about.openReleases': 'فتح إصدارات GitHub',
+  'settings.about.starCta.title': 'هل يعجبك OpenHuman؟',
+  'settings.about.starCta.body':
+    'امنحنا نجمة على GitHub. هذا يساعد المزيد من الأشخاص على العثور علينا.',
+  'settings.about.starCta.star': 'ضع نجمة على GitHub',
+  'settings.about.starCta.dismiss': 'ليس الآن',
   'settings.about.connection': 'اتصال',
   'settings.about.connectionMode': 'الوضع',
   'settings.about.connectionModeLocal': 'محلي',
@@ -1702,6 +1719,7 @@ const messages: TranslationMap = {
     'سجّل الدخول مرة أخرى لتحديث جلسة OpenHuman، أو انتقل إلى مزوّد تضمينات محلي أو بمفتاحك الخاص.',
   'settings.embeddings.signInAgain': 'تسجيل الدخول مرة أخرى',
   'settings.embeddings.apiKeyLabel': 'مفتاح API لـ {provider}',
+  'settings.embeddings.apiKeyLabelGeneric': 'مفتاح API',
   'settings.embeddings.placeholderStored': '•••••••• (مخزن)',
   'settings.embeddings.placeholderKey': 'الصق مفتاح API الخاص بك…',
   'settings.embeddings.keyStoredEncrypted': 'يتم تخزين مفتاح API الخاص بك مشفرًا على هذا الجهاز.',
@@ -1802,6 +1820,12 @@ const messages: TranslationMap = {
   'mcp.catalog.searchAria': 'البحث في كتالوج الحدادة',
   'mcp.catalog.searchPlaceholder': 'البحث في كتالوج الحدادة...',
   'mcp.catalog.loadFailed': 'فشل تحميل الكتالوج',
+  'mcp.registry.error.notFound':
+    'لم يتم العثور على الخادم في السجل. تحقق من اسم الخادم وحاول مرة أخرى، أو تصفح خوادم MCP المتاحة، أو أضف الخادم يدويا عبر URL.',
+  'mcp.registry.error.network':
+    'تعذر الوصول إلى سجل MCP. تحقق من اتصالك وحاول مرة أخرى، أو أضف الخادم يدويا عبر URL.',
+  'mcp.registry.error.unavailable':
+    'سجل MCP غير متاح حاليا. حاول لاحقا، أو تصفح خوادم MCP المتاحة، أو أضف الخادم يدويا عبر URL.',
   'mcp.catalog.noResults': 'لم يتم العثور على خوادم.',
   'mcp.catalog.noResultsFor': 'لم يتم العثور على خوادم لـ "{query}".',
   'mcp.catalog.loadMore': 'تحميل المزيد',
@@ -3415,6 +3439,19 @@ const messages: TranslationMap = {
   'chat.flowProposal.error': 'تعذّر حفظ سير العمل. حاول مرة أخرى.',
   'chat.flowProposal.enableError':
     'تم حفظ سير العمل، لكن تعذّر تفعيله. حاول مرة أخرى، أو فعّله من صفحة سير العمل.',
+  'chat.flowProposal.savedConfirmation': 'تم الحفظ',
+  'chat.flowProposal.viewWorkflow': 'عرض سير العمل',
+  'chat.flowProposal.stepKind.agent': 'وكيل',
+  'chat.flowProposal.stepKind.toolCall': 'إجراء',
+  'chat.flowProposal.stepKind.httpRequest': 'طلب ويب',
+  'chat.flowProposal.stepKind.code': 'تشغيل الكود',
+  'chat.flowProposal.stepKind.condition': 'شرط',
+  'chat.flowProposal.stepKind.switch': 'تبديل',
+  'chat.flowProposal.stepKind.merge': 'دمج',
+  'chat.flowProposal.stepKind.splitOut': 'تقسيم',
+  'chat.flowProposal.stepKind.transform': 'تحويل',
+  'chat.flowProposal.stepKind.outputParser': 'تحليل الإخراج',
+  'chat.flowProposal.stepKind.subWorkflow': 'مسار عمل فرعي',
   'channels.authMode.managed_dm': 'قم بتسجيل الدخول باستخدام OpenHuman',
   'channels.authMode.oauth': 'OAuth تسجيل الدخول',
   'channels.authMode.bot_token': 'استخدم رمز الروبوت الخاص بك',
@@ -4087,7 +4124,10 @@ const messages: TranslationMap = {
   'flows.copilot.noChanges': 'هذا الاقتراح لا يغيّر أي عقدة.',
   'flows.copilot.accept': 'تطبيق على المسودة',
   'flows.copilot.acceptAndSave': 'قبول وحفظ',
+  'flows.copilot.saveAndEnable': 'حفظ وتفعيل',
   'flows.copilot.saving': 'جارٍ الحفظ…',
+  'flows.copilot.enabling': 'جارٍ التفعيل…',
+  'flows.copilot.enableError': 'تم الحفظ، لكن تعذّر تفعيل سير العمل. حاول تفعيله من القائمة.',
   'flows.copilot.reject': 'تجاهل',
   'flows.copilot.previewHint': 'جارٍ مراجعة مسودة مقترحة: لم يُحفظ شيء بعد.',
   'flows.copilot.repairDisplay': 'فشل تشغيل؛ راجعه واقترح إصلاحًا.',
@@ -5405,6 +5445,9 @@ const messages: TranslationMap = {
   'settings.agentAccess.requireTaskPlanApproval.label': 'الموافقة على خطة العمل المطلوبة',
   'settings.agentAccess.requireTaskPlanApproval.desc':
     'وقف أمام عميل معين يقوم بتنفيذ موجز عمل مشرف على عميل',
+  'settings.agentAccess.autoApproveAll.label': 'الموافقة التلقائية على جميع الإجراءات',
+  'settings.agentAccess.autoApproveAll.desc':
+    'عند التفعيل، سينفذ الوكيل جميع الإجراءات المؤهلة دون طلب موافقتك أولاً. يشمل ذلك كتابة الملفات وتنفيذ أوامر الطرفية وطلبات الشبكة وأي تأثيرات جانبية أخرى. تظل الحواجز الأمنية الصارمة، مثل أدلة بيانات الاعتماد والأدلة النظامية، سارية المفعول، ولا تتم الموافقة التلقائية أبداً على الإجراءات ذات المصدر غير الموثوق أو غير المعروف.',
   'settings.agentAccess.tinyplaceAutopilot.title': 'وكيل tiny.place المستقل',
   'settings.agentAccess.tinyplaceAutopilot.desc':
     'دع OpenHuman يتصرف على tiny.place بمفرده. وفق جدول زمني، يبحث عن عمل مجدٍ (المكافآت المفتوحة أولًا)، وينجز ما يناسب مهاراته ويتصرف من هويتك. يعمل دون إشراف ويمكنه الإنفاق، لذا أبقِه على devnet أثناء الاختبار. معطّل افتراضيًا.',
@@ -7204,17 +7247,17 @@ const messages: TranslationMap = {
   'flows.canvas.sidePanelToggle': 'اللوحة الجانبية',
   'flows.canvas.legendTab': 'يدوي',
 
-  // Emergency stop (#4255)
-  'safety.emergencyStop': 'إيقاف الطوارئ',
-  'safety.stopFailed': 'تعذّر إيقاف الأتمتة. أعد المحاولة.',
-  'safety.resume': 'استئناف الأتمتة',
-  'safety.resumeFailed': 'تعذّر الاستئناف. لا تزال الأتمتة متوقفة. أعد المحاولة.',
-  'safety.haltedTitle': 'الأتمتة متوقفة',
-  'safety.haltedBody': 'تم إيقاف جميع أتمتة سطح المكتب. استأنف عندما تكون مستعدًا.',
   // Privacy status pill + per-action egress disclosure (#4437 / S3)
   'privacy.status.ariaLabel': 'حالة الخصوصية',
   'privacy.status.external': 'خارج الجهاز',
   'privacy.status.local': 'على الجهاز',
+  // Data Sync layered pipeline status (GH-4690)
+  'sync.pipeline.ingestedOnly': 'تم الاستيعاب فقط',
+  'sync.pipeline.storedWithoutVectors': 'مخزَّن بدون متجهات. البحث الدلالي غير متاح.',
+  'sync.pipeline.signInToEnable': 'سجّل الدخول للتفعيل',
+  'sync.pipeline.extractionFailed': 'فشل استخراج بنية الذاكرة. قد يكون الويكي غير مكتمل.',
+  'sync.pipeline.treeDegraded': 'شجرة الذاكرة متدهورة. قد يُرجع الاسترجاع نتائج قديمة.',
+  'sync.pipeline.viewHealth': 'عرض حالة الذاكرة',
 };
 
 export default messages;

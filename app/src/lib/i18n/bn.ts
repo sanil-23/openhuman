@@ -487,7 +487,7 @@ const messages: TranslationMap = {
   'agentWorld.profileViewer.notFoundTitle': 'প্রোফাইল পাওয়া যায়নি',
   'agentWorld.profileViewer.notFoundBody': 'এই হ্যান্ডেলের জন্য এখনও কোনো প্রকাশিত প্রোফাইল নেই।',
   'agentWorld.profileViewer.errorTitle': 'প্রোফাইল লোড করা যায়নি',
-  'agentWorld.profileViewer.follow': 'অনুসরণ',
+  'agentWorld.profileViewer.follow': 'অনুসরণ করুন',
   'agentWorld.profileViewer.following': 'অনুসরণ করছেন',
   'agentWorld.profileViewer.copyLink': 'লিঙ্ক কপি করুন',
   'agentWorld.profileViewer.linkCopied': 'লিঙ্ক কপি হয়েছে',
@@ -514,6 +514,18 @@ const messages: TranslationMap = {
   'agentWorld.directory.profile.loadError': 'সম্পূর্ণ প্রোফাইল লোড করা যায়নি।',
   'agentWorld.identities': 'পরিচয়',
   'agentWorld.profiles': 'প্রোফাইল',
+  'agentWorld.transferHandle.action': 'স্থানান্তর',
+  'agentWorld.transferHandle.title': 'হ্যান্ডেল স্থানান্তর',
+  'agentWorld.transferHandle.warning':
+    'হ্যান্ডেল স্থানান্তর স্থায়ী এবং এটি ফেরানো যায় না। প্রাপক একমাত্র মালিক হয়ে যাবেন।',
+  'agentWorld.transferHandle.recipientPlaceholder': 'প্রাপকের @handle',
+  'agentWorld.transferHandle.confirm': 'হ্যান্ডেল স্থানান্তর',
+  'agentWorld.transferHandle.submitting': 'স্থানান্তর করা হচ্ছে…',
+  'agentWorld.transferHandle.recipientRequired': 'প্রাপকের হ্যান্ডেল লিখুন।',
+  'agentWorld.transferHandle.confirmLabel': 'নিশ্চিত করতে হ্যান্ডেলটি টাইপ করুন',
+  'agentWorld.transferHandle.confirmMismatch': 'টাইপ করা হ্যান্ডেল মিলছে না।',
+  'agentWorld.transferHandle.primaryLocked':
+    'প্রাথমিক হ্যান্ডেল স্থানান্তর করা যায় না। প্রথমে অন্য একটি হ্যান্ডেল সক্রিয় করুন।',
   'agentWorld.profile.edit': 'প্রোফাইল সম্পাদনা',
   'agentWorld.profile.displayName': 'প্রদর্শন নাম',
   'agentWorld.profile.bio': 'পরিচিতি',
@@ -570,7 +582,7 @@ const messages: TranslationMap = {
   'brain.goals.actionError': 'কিছু ভুল হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।',
   'brain.tabs.sources': 'উৎস',
   'brain.tabs.sync': 'সিঙ্ক',
-  'brain.tabs.tinyplaceOrchestration': 'TinyPlace',
+  'brain.tabs.orchestration': 'অর্কেস্ট্রেশন',
   'tinyplaceOrchestration.title': 'TinyPlace রিলে',
   'tinyplaceOrchestration.subtitle': 'পিন করা এজেন্ট চ্যানেল এবং অ্যাপ সেশন চ্যাট',
   'tinyplaceOrchestration.refresh': 'রিফ্রেশ',
@@ -1586,6 +1598,11 @@ const messages: TranslationMap = {
   'settings.about.releases': 'রিলিজ',
   'settings.about.releasesDesc': 'GitHub-এ রিলিজ নোট ও আগের বিল্ড দেখুন।',
   'settings.about.openReleases': 'GitHub রিলিজ খুলুন',
+  'settings.about.starCta.title': 'OpenHuman ভালো লাগছে?',
+  'settings.about.starCta.body':
+    'GitHub-এ আমাদের একটি স্টার দিন। এতে আরও বেশি মানুষ আমাদের খুঁজে পান।',
+  'settings.about.starCta.star': 'GitHub-এ স্টার দিন',
+  'settings.about.starCta.dismiss': 'এখন নয়',
   'settings.about.connection': 'সংযোগ',
   'settings.about.connectionMode': 'মোড',
   'settings.about.connectionModeLocal': 'স্থানীয়',
@@ -1738,6 +1755,7 @@ const messages: TranslationMap = {
     'OpenHuman সেশন রিফ্রেশ করতে আবার সাইন ইন করুন, অথবা স্থানীয়/নিজস্ব-কী এমবেডিং প্রোভাইডারে যান।',
   'settings.embeddings.signInAgain': 'আবার সাইন ইন করুন',
   'settings.embeddings.apiKeyLabel': '{provider} API কী',
+  'settings.embeddings.apiKeyLabelGeneric': 'API কী',
   'settings.embeddings.placeholderStored': '•••••••• (সঞ্চিত)',
   'settings.embeddings.placeholderKey': 'আপনার API কী পেস্ট করুন…',
   'settings.embeddings.keyStoredEncrypted': 'আপনার API কী এই ডিভাইসে এনক্রিপ্ট করে সংরক্ষিত আছে।',
@@ -1839,6 +1857,12 @@ const messages: TranslationMap = {
   'mcp.catalog.searchAria': 'MCP সার্ভার ক্যাটালগ অনুসন্ধান',
   'mcp.catalog.searchPlaceholder': 'MCP সার্ভার অনুসন্ধান করুন...',
   'mcp.catalog.loadFailed': 'ক্যাটালগ করতে ব্যর্থ হয়েছে',
+  'mcp.registry.error.notFound':
+    'রেজিস্ট্রিতে সার্ভারটি পাওয়া যায়নি। সার্ভারের নাম পরীক্ষা করে আবার চেষ্টা করুন, উপলব্ধ MCP সার্ভার ব্রাউজ করুন, অথবা URL দিয়ে সার্ভারটি ম্যানুয়ালি যোগ করুন।',
+  'mcp.registry.error.network':
+    'MCP রেজিস্ট্রিতে পৌঁছানো যায়নি। আপনার সংযোগ পরীক্ষা করে আবার চেষ্টা করুন, অথবা URL দিয়ে সার্ভারটি ম্যানুয়ালি যোগ করুন।',
+  'mcp.registry.error.unavailable':
+    'MCP রেজিস্ট্রি এখন উপলব্ধ নয়। পরে আবার চেষ্টা করুন, উপলব্ধ MCP সার্ভার ব্রাউজ করুন, অথবা URL দিয়ে সার্ভারটি ম্যানুয়ালি যোগ করুন।',
   'mcp.catalog.noResults': 'কোনো সার্ভার পাওয়া যায়নি।',
   'mcp.catalog.noResultsFor': '"{query}" এর জন্য কোনো সার্ভার পাওয়া যায়নি।',
   'mcp.catalog.loadMore': 'আরও লোড করুন',
@@ -3494,6 +3518,19 @@ const messages: TranslationMap = {
   'chat.flowProposal.error': 'ওয়ার্কফ্লো সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।',
   'chat.flowProposal.enableError':
     'ওয়ার্কফ্লো সংরক্ষিত হয়েছে, কিন্তু সক্ষম করা যায়নি। আবার চেষ্টা করুন, বা Workflows পৃষ্ঠা থেকে সক্ষম করুন।',
+  'chat.flowProposal.savedConfirmation': 'সংরক্ষিত হয়েছে',
+  'chat.flowProposal.viewWorkflow': 'ওয়ার্কফ্লো দেখুন',
+  'chat.flowProposal.stepKind.agent': 'এজেন্ট',
+  'chat.flowProposal.stepKind.toolCall': 'কার্যক্রম',
+  'chat.flowProposal.stepKind.httpRequest': 'ওয়েব অনুরোধ',
+  'chat.flowProposal.stepKind.code': 'কোড চালান',
+  'chat.flowProposal.stepKind.condition': 'শর্ত',
+  'chat.flowProposal.stepKind.switch': 'সুইচ',
+  'chat.flowProposal.stepKind.merge': 'একত্রিত করুন',
+  'chat.flowProposal.stepKind.splitOut': 'বিভক্ত করুন',
+  'chat.flowProposal.stepKind.transform': 'রূপান্তর করুন',
+  'chat.flowProposal.stepKind.outputParser': 'আউটপুট পার্স করুন',
+  'chat.flowProposal.stepKind.subWorkflow': 'সাব-ওয়ার্কফ্লো',
   'channels.authMode.managed_dm': 'OpenHuman দিয়ে লগইন করুন',
   'channels.authMode.oauth': 'OAuth সাইন-ইন করুন',
   'channels.authMode.bot_token': 'আপনার নিজের বট টোকেন ব্যবহার করুন',
@@ -4187,7 +4224,11 @@ const messages: TranslationMap = {
   'flows.copilot.noChanges': 'এই প্রস্তাব কোনো নোড পরিবর্তন করে না।',
   'flows.copilot.accept': 'খসড়ায় প্রয়োগ করুন',
   'flows.copilot.acceptAndSave': 'গ্রহণ ও সংরক্ষণ করুন',
+  'flows.copilot.saveAndEnable': 'সংরক্ষণ ও সক্রিয় করুন',
   'flows.copilot.saving': 'সংরক্ষণ করা হচ্ছে…',
+  'flows.copilot.enabling': 'সক্রিয় করা হচ্ছে…',
+  'flows.copilot.enableError':
+    'সংরক্ষিত হয়েছে, কিন্তু ওয়ার্কফ্লো সক্রিয় করা যায়নি। তালিকা থেকে এটি চালু করার চেষ্টা করুন।',
   'flows.copilot.reject': 'বাতিল করুন',
   'flows.copilot.previewHint':
     'একটি প্রস্তাবিত খসড়া পর্যালোচনা হচ্ছে: এখনও কিছু সংরক্ষণ করা হয়নি।',
@@ -5532,6 +5573,9 @@ const messages: TranslationMap = {
   'settings.agentAccess.requireTaskPlanApproval.label': 'কাজের পরিকল্পনা অনুমোদন প্রয়োজন',
   'settings.agentAccess.requireTaskPlanApproval.desc':
     'নির্ধারিত কর্মের পূর্বে একটি author-ed কর্মের সঞ্চালনার পূর্বে কর্ম স্থগিত করা হবে।',
+  'settings.agentAccess.autoApproveAll.label': 'সব কাজ স্বয়ংক্রিয়ভাবে অনুমোদন করুন',
+  'settings.agentAccess.autoApproveAll.desc':
+    'সক্রিয় করা হলে, এজেন্ট আপনার অনুমতি না নিয়েই সব কাজ সম্পাদন করবে। এর মধ্যে রয়েছে ফাইল লেখা, শেল কমান্ড, নেটওয়ার্ক অনুরোধ এবং অন্যান্য যেকোনো পার্শ্বপ্রতিক্রিয়া। কঠোর নিরাপত্তা বাধা (ক্রেডেনশিয়াল ডিরেক্টরি, ওয়ার্কস্পেসের অভ্যন্তরীণ পাথ) তবুও কার্যকর থাকবে।',
   'settings.agentAccess.tinyplaceAutopilot.title': 'স্বয়ংক্রিয় tiny.place এজেন্ট',
   'settings.agentAccess.tinyplaceAutopilot.desc':
     'OpenHuman-কে tiny.place-এ নিজে কাজ করতে দিন। এটি নির্ধারিত সময় অনুযায়ী মূল্যবান কাজ খোঁজে (প্রথমে খোলা বাউন্টি), নিজের দক্ষতার সাথে মানানসই কাজ করে এবং আপনার পরিচয় থেকে কাজ করে। এটি তত্ত্বাবধান ছাড়াই চলে এবং অর্থ ব্যয় করতে পারে, তাই পরীক্ষার সময় এটি devnet-এ রাখুন। ডিফল্টভাবে বন্ধ।',
@@ -7372,17 +7416,17 @@ const messages: TranslationMap = {
   'flows.canvas.sidePanelToggle': 'সাইড প্যানেল',
   'flows.canvas.legendTab': 'ম্যানুয়াল',
 
-  // Emergency stop (#4255)
-  'safety.emergencyStop': 'জরুরি বন্ধ',
-  'safety.stopFailed': 'অটোমেশন থামানো যায়নি। আবার চেষ্টা করুন।',
-  'safety.resume': 'অটোমেশন পুনরায় শুরু করুন',
-  'safety.resumeFailed': 'পুনরায় শুরু করা যায়নি। অটোমেশন এখনও বন্ধ। আবার চেষ্টা করুন।',
-  'safety.haltedTitle': 'অটোমেশন বন্ধ',
-  'safety.haltedBody': 'সমস্ত ডেস্কটপ অটোমেশন বন্ধ করা হয়েছে। প্রস্তুত হলে পুনরায় শুরু করুন।',
   // Privacy status pill + per-action egress disclosure (#4437 / S3)
   'privacy.status.ariaLabel': 'গোপনীয়তা স্থিতি',
   'privacy.status.external': 'ডিভাইসের বাইরে',
   'privacy.status.local': 'ডিভাইসে',
+  // Data Sync layered pipeline status (GH-4690)
+  'sync.pipeline.ingestedOnly': 'শুধু গৃহীত',
+  'sync.pipeline.storedWithoutVectors': 'ভেক্টর ছাড়াই সংরক্ষিত। শব্দার্থিক অনুসন্ধান অনুপলব্ধ।',
+  'sync.pipeline.signInToEnable': 'সক্রিয় করতে সাইন ইন করুন',
+  'sync.pipeline.extractionFailed': 'মেমরি কাঠামো নিষ্কাশন ব্যর্থ হয়েছে। উইকি অসম্পূর্ণ হতে পারে।',
+  'sync.pipeline.treeDegraded': 'মেমরি ট্রি অবনমিত। পুনরুদ্ধার পুরনো ফলাফল দিতে পারে।',
+  'sync.pipeline.viewHealth': 'মেমরির স্বাস্থ্য দেখুন',
 };
 
 export default messages;

@@ -46,9 +46,7 @@ mod tests {
     use crate::openhuman::agent::prompts::types::{
         LearnedContextData, PromptContext, ToolCallFormat,
     };
-    use crate::openhuman::memory_tools::types::{
-        ToolMemoryPriority, ToolMemoryRule, ToolMemorySource,
-    };
+    use crate::openhuman::memory_tools::{ToolMemoryPriority, ToolMemoryRule, ToolMemorySource};
 
     fn rule(tool: &str, body: &str, priority: ToolMemoryPriority) -> ToolMemoryRule {
         ToolMemoryRule {
@@ -99,6 +97,8 @@ mod tests {
             personality_soul_md: None,
             personality_memory_md: None,
             personality_roster: vec![],
+            agents_md_global: None,
+            agents_md_local: None,
         };
         let built = section.build(&ctx).unwrap();
         assert!(built.contains("never email Sarah"));

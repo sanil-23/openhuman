@@ -13,6 +13,17 @@ import {
 } from '../../../utils/toolTimelineFormatting';
 import { ToolFailureLines } from './ToolFailureLines';
 
+/** Normalise a tool result/args body string: skip empty, whitespace-only, and
+ *  trivial JSON literals. Mirrors the identically-named helper in
+ *  `ToolTimelineBlock` so the two paths never disagree on the display threshold. */
+function normalizeToolBody(value?: string): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+  if (trimmed === '{}' || trimmed === '[]' || trimmed === 'null') return undefined;
+  return value;
+}
+
 /**
  * The Hermes-style "View processing" body: the agent's narration and hidden
  * reasoning flow inline as prose, while runs of consecutive tool calls
@@ -150,12 +161,13 @@ function ToolRow({
   renderSubagent?: (subagent: NonNullable<ToolTimelineEntry['subagent']>) => React.ReactNode;
 }) {
   const { title, detail } = formatTimelineEntry(entry);
+  const resultContent = normalizeToolBody(entry.result);
   return (
     <li className="flex items-start gap-1.5" data-testid="processing-tool-row">
       <span className="mt-0.5 shrink-0 text-content-faint">
         <CategoryIcon category={categorizeTool(entry.name)} />
       </span>
-      <span className="min-w-0 text-[12px] text-content-secondary">
+      <div className="min-w-0 text-[12px] text-content-secondary">
         {title}
         {detail ? (
           <span className="ml-1 rounded bg-surface-subtle px-1 py-px font-mono text-[10px] text-content-muted">
@@ -165,14 +177,25 @@ function ToolRow({
         {entry.status === 'error' && entry.failure ? (
           <ToolFailureLines failure={entry.failure} />
         ) : null}
+        {/* A failure is the case where the answer is least trustworthy (or may
+            not mention the failure at all), so the raw tool output earns its
+            space in the transcript. Successful output is kept in the process
+            source panel. */}
+        {resultContent && entry.status === 'error' ? (
+          <pre
+            data-testid="tool-result-output"
+            className="mt-1 max-h-40 overflow-y-auto rounded px-2 py-1 font-mono text-[12px] whitespace-pre-wrap break-all text-content-secondary bg-surface-muted">
+            {resultContent}
+          </pre>
+        ) : null}
         {/* A delegated sub-agent's own tool calls hang off the parent entry, so
             without this the whole child run collapsed into this single line. */}
         {entry.subagent && renderSubagent ? (
-          <span className="mt-1 block" data-testid="processing-subagent">
+          <div className="mt-1" data-testid="processing-subagent">
             {renderSubagent(entry.subagent)}
-          </span>
+          </div>
         ) : null}
-      </span>
+      </div>
     </li>
   );
 }

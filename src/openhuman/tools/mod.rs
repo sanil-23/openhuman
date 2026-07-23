@@ -47,6 +47,7 @@ pub use crate::openhuman::people::tools::*;
 pub use crate::openhuman::referral::tools::*;
 #[cfg(feature = "flows")]
 pub use crate::openhuman::rhai_workflows::tools::*;
+#[cfg(feature = "desktop-automation")]
 pub use crate::openhuman::screen_intelligence::tools::*;
 pub use crate::openhuman::search::tools::*;
 pub use crate::openhuman::security::tools::*;
@@ -64,6 +65,7 @@ pub use crate::openhuman::tinyplace::tools::*;
 pub use crate::openhuman::todos::tools::*;
 #[cfg(feature = "web3")]
 pub use crate::openhuman::wallet::tools::*;
+#[cfg(feature = "channels")]
 pub use crate::openhuman::whatsapp_data::tools::*;
 pub use crate::openhuman::workspace::tools::*;
 pub use implementations::*;

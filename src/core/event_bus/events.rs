@@ -463,6 +463,36 @@ pub enum DomainEvent {
         status: String,
     },
 
+    /// A `flows_run` (or `flows_resume`) invocation just persisted its
+    /// `flow_runs` row, before execution begins (issue B35, runs-rail live
+    /// refresh). Published from `flows::ops::flows_run` right after
+    /// `start_flow_run_row` returns, so the UI can show "Running" immediately
+    /// instead of waiting for the blocking RPC to resolve or the first
+    /// `FlowRunProgress` step. Covers every run source (Rpc/Schedule/AppEvent/
+    /// Resume, incl. copilot live-run) since they all funnel through
+    /// `start_flow_run_row`.
+    FlowRunStarted {
+        /// The affected flow's id.
+        flow_id: String,
+        /// The run's stable identifier (== the tinyflows checkpointer thread id).
+        run_id: String,
+    },
+
+    /// The terminal companion to [`FlowRunStarted`] (issue B35 follow-up, runs
+    /// rail live finish). Published from `flows::ops::finish_flow_run_row`
+    /// right after `store::finish_flow_run` persists the terminal
+    /// `flow_runs` row, so the UI can flip a run to Completed/Failed live
+    /// instead of relying on a poll to notice the settled row.
+    FlowRunFinished {
+        /// The affected flow's id.
+        flow_id: String,
+        /// The run's stable identifier (== the tinyflows checkpointer thread id).
+        run_id: String,
+        /// Terminal status: `"completed"` | `"failed"` |
+        /// `"completed_with_warnings"` | `"cancelled"`.
+        status: String,
+    },
+
     /// A saved flow's definition changed (created / updated / deleted /
     /// enable-toggled). Bridged to a `flow:changed` socket event so an open
     /// Workflows list or canvas refetches instead of silently showing stale
@@ -1127,22 +1157,6 @@ pub enum DomainEvent {
         overall: String,
         failed_required: bool,
     },
-    /// Emergency stop engaged — all desktop automation is halted and every
-    /// external-effect / accessibility action is refused until resumed.
-    /// Published by `emergency_stop::ops::emergency_stop`; bridged to the
-    /// `automation_halt` web-channel socket event.
-    AutomationHalted {
-        /// Optional human-readable reason (redacted of PII by the caller).
-        reason: Option<String>,
-        /// Who engaged it: `"user"`, `"hotkey"`, or `"system"`.
-        source: String,
-    },
-    /// Emergency stop cleared — automation may resume. Published by
-    /// `emergency_stop::ops::emergency_resume`.
-    AutomationResumed {
-        /// Who cleared it: `"user"`, `"hotkey"`, or `"system"`.
-        source: String,
-    },
 
     // ── Keyring ─────────────────────────────────────────────────────────
     /// The OS keyring is unavailable and no user consent for local fallback
@@ -1413,6 +1427,8 @@ impl DomainEvent {
             | Self::ProactiveMessageRequested { .. }
             | Self::FlowScheduleTick { .. }
             | Self::FlowRunProgress { .. }
+            | Self::FlowRunStarted { .. }
+            | Self::FlowRunFinished { .. }
             | Self::FlowChanged { .. } => "cron",
 
             Self::WorkflowLoaded { .. }
@@ -1470,9 +1486,7 @@ impl DomainEvent {
             | Self::HealthChanged { .. }
             | Self::HealthRestarted { .. }
             | Self::HarnessInitProgress { .. }
-            | Self::HarnessInitCompleted { .. }
-            | Self::AutomationHalted { .. }
-            | Self::AutomationResumed { .. } => "system",
+            | Self::HarnessInitCompleted { .. } => "system",
 
             Self::KeyringConsentRequired | Self::KeyringDecryptFailed { .. } => "keyring",
 
@@ -1579,6 +1593,8 @@ impl DomainEvent {
             Self::ProactiveMessageRequested { .. } => "ProactiveMessageRequested",
             Self::FlowScheduleTick { .. } => "FlowScheduleTick",
             Self::FlowRunProgress { .. } => "FlowRunProgress",
+            Self::FlowRunStarted { .. } => "FlowRunStarted",
+            Self::FlowRunFinished { .. } => "FlowRunFinished",
             Self::FlowChanged { .. } => "FlowChanged",
             Self::WorkflowLoaded { .. } => "WorkflowLoaded",
             Self::WorkflowStopped { .. } => "WorkflowStopped",
@@ -1628,8 +1644,6 @@ impl DomainEvent {
             Self::HealthRestarted { .. } => "HealthRestarted",
             Self::HarnessInitProgress { .. } => "HarnessInitProgress",
             Self::HarnessInitCompleted { .. } => "HarnessInitCompleted",
-            Self::AutomationHalted { .. } => "AutomationHalted",
-            Self::AutomationResumed { .. } => "AutomationResumed",
             Self::KeyringConsentRequired => "KeyringConsentRequired",
             Self::KeyringDecryptFailed { .. } => "KeyringDecryptFailed",
             Self::SessionExpired { .. } => "SessionExpired",

@@ -184,6 +184,10 @@ pub(super) const WORKSPACE_INTERNAL_DIRS: &[&str] = &[
     "vault",
     "task_sources",
     "whatsapp_data",
+    // The redirect_links domain was removed (#5051), but an upgraded profile can
+    // still hold a legacy `redirect_links/links.db` (stored URL history) written
+    // by an older version. Keep the directory on the internal denylist so agents
+    // with workspace access cannot read or overwrite that leftover state.
     "redirect_links",
     "codegraph",
     ".openhuman",
@@ -240,6 +244,15 @@ pub struct SecurityPolicy {
     /// `autonomy.auto_approve`; populated/cleared via `config.update_autonomy_settings`
     /// (or an "Always allow" decision) and observed live via `live_policy`.
     pub auto_approve: Vec<String>,
+    /// When true, the approval gate auto-approves ALL tool calls without
+    /// prompting — a blanket bypass, not just the `auto_approve` allowlist
+    /// above. `TrustedAutomationSource::SubconsciousTainted` and
+    /// `AgentTurnOrigin::Unknown` origins are still denied by the gate
+    /// regardless of this flag. Sourced from `autonomy.auto_approve_all`;
+    /// observed live via `live_policy`. Does not affect
+    /// `is_always_forbidden`, `is_workspace_internal_path`, or
+    /// `ToolPolicyMiddleware`, which are independent code paths.
+    pub auto_approve_all: bool,
     pub tracker: ActionTracker,
     /// Lazily-cached canonical form of [`workspace_dir`].
     ///
@@ -365,6 +378,7 @@ impl Default for SecurityPolicy {
             trusted_roots: Vec::new(),
             allow_tool_install: false,
             auto_approve: Vec::new(),
+            auto_approve_all: false,
             tracker: ActionTracker::new(),
             canonical_workspace: Arc::new(OnceCell::new()),
         }

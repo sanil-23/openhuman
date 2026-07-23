@@ -82,6 +82,7 @@ pub enum DomainGroup {
     Web3,
     Voice,
     Media,
+    DesktopAutomation,
     // Everything not in a named family — always on in `full()`, off otherwise.
     Platform,
 }
@@ -258,6 +259,8 @@ fn build_registered_controllers() -> Vec<GroupedController> {
     );
     // Webview APIs bridge — proxies connector calls (Gmail, …) through
     // a WebSocket to the Tauri shell so curl reaches the live webview.
+    // Gated behind the `channels` feature.
+    #[cfg(feature = "channels")]
     push(
         &mut controllers,
         DomainGroup::Channels,
@@ -336,12 +339,6 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         DomainGroup::Security,
         crate::openhuman::approval::all_approval_registered_controllers(),
     );
-    // Emergency stop kill switch (#4255 — fail-closed halt for desktop automation)
-    push(
-        &mut controllers,
-        DomainGroup::Security,
-        crate::openhuman::emergency_stop::all_emergency_registered_controllers(),
-    );
     // Interactive plan-review gate — parks a live turn on a thread-scoped plan
     push(
         &mut controllers,
@@ -360,7 +357,10 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         DomainGroup::Platform,
         crate::openhuman::heartbeat::all_heartbeat_registered_controllers(),
     );
-    // Ad-hoc static directory HTTP hosting for local file sharing / previews
+    // Ad-hoc static directory HTTP hosting for local file sharing / previews.
+    // Gated with the `http-server` feature (#5048): the domain is an axum server,
+    // so a slim build has no `http_host.*` controllers to register.
+    #[cfg(feature = "http-server")]
     push(
         &mut controllers,
         DomainGroup::Platform,
@@ -381,7 +381,7 @@ fn build_registered_controllers() -> Vec<GroupedController> {
     // Inline autocomplete settings
     push(
         &mut controllers,
-        DomainGroup::Platform,
+        DomainGroup::DesktopAutomation,
         crate::openhuman::autocomplete::all_autocomplete_registered_controllers(),
     );
     // External messaging channels (Web, Telegram, etc.)
@@ -390,6 +390,11 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         DomainGroup::Channels,
         crate::openhuman::web_chat::all_web_channel_registered_controllers(),
     );
+    // External messaging channels (Telegram, Discord, Slack, …).
+    // Gated behind the `channels` feature. NOTE: the web_chat push above stays
+    // ungated — the in-app chat is core product surface (decoupled in #5002),
+    // even though its runtime tag is DomainGroup::Channels.
+    #[cfg(feature = "channels")]
     push(
         &mut controllers,
         DomainGroup::Channels,
@@ -470,7 +475,7 @@ fn build_registered_controllers() -> Vec<GroupedController> {
     // Screen capture and UI analysis
     push(
         &mut controllers,
-        DomainGroup::Platform,
+        DomainGroup::DesktopAutomation,
         crate::openhuman::screen_intelligence::all_screen_intelligence_registered_controllers(),
     );
     // Sandbox execution backends (Docker, local jail, policy, cleanup)
@@ -490,6 +495,16 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         &mut controllers,
         DomainGroup::Platform,
         crate::openhuman::javascript::all_javascript_registered_controllers(),
+    );
+    // Local Medulla brain (plan Flavor A, §3.1–§3.2): status/instruct against a
+    // supervised `medulla-serve` child. Registration-site gate, like `flows` —
+    // with the feature off the `medulla_local.*` methods are simply absent
+    // (unknown-method), not a runtime error.
+    #[cfg(feature = "medulla-local")]
+    push(
+        &mut controllers,
+        DomainGroup::Agent,
+        crate::openhuman::medulla_local::all_medulla_local_registered_controllers(),
     );
     // Discovered SKILL.md skills and their bundled resources
     push(
@@ -580,12 +595,6 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         &mut controllers,
         DomainGroup::Memory,
         crate::openhuman::memory_diff::all_memory_diff_registered_controllers(),
-    );
-    // Link shortener for long tracking URLs — saves LLM tokens
-    push(
-        &mut controllers,
-        DomainGroup::Platform,
-        crate::openhuman::redirect_links::all_redirect_links_registered_controllers(),
     );
     // Referral and growth tracking
     push(
@@ -708,7 +717,8 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         DomainGroup::Threads,
         crate::openhuman::todos::all_todos_registered_controllers(),
     );
-    // Embedded webview native notifications
+    // Embedded webview native notifications. Gated behind the `channels` feature.
+    #[cfg(feature = "channels")]
     push(
         &mut controllers,
         DomainGroup::Channels,
@@ -747,13 +757,15 @@ fn build_registered_controllers() -> Vec<GroupedController> {
     // Desktop companion — Clicky-style interaction loop.
     push(
         &mut controllers,
-        DomainGroup::Platform,
+        DomainGroup::DesktopAutomation,
         crate::openhuman::desktop_companion::all_desktop_companion_registered_controllers(),
     );
     // Structured WhatsApp Web data — agent-facing read-only controllers (list/search).
     // The write-path ingest controller is registered separately in build_internal_only_controllers.
     // Classified Channels (WhatsApp Web messaging surface) — not enumerated in the
     // spec Platform list; grouped with the other channel/webview domains.
+    // Gated behind the `channels` feature.
+    #[cfg(feature = "channels")]
     push(
         &mut controllers,
         DomainGroup::Channels,
@@ -818,6 +830,8 @@ fn build_internal_only_controllers() -> Vec<GroupedController> {
     let mut controllers = Vec::new();
     // whatsapp_data ingest: scanner-side write path.  Callable over RPC by the
     // Tauri scanner but excluded from agent-facing schema discovery.
+    // Gated behind the `channels` feature.
+    #[cfg(feature = "channels")]
     push(
         &mut controllers,
         DomainGroup::Channels,
@@ -927,6 +941,7 @@ pub fn namespace_description(namespace: &str) -> Option<&'static str> {
         "inference" => Some("Connect to configured text, vision, and embedding inference runtimes."),
         "migrate" => Some("Data migration utilities."),
         "javascript" => Some("First-class JavaScript runtime bridge for listing and dispatching tools."),
+        "medulla_local" => Some("Supervised local medulla-serve brain: status of the child and instruct enqueue (Flavor A draft)."),
         "monitor" => Some("Start, inspect, read, and stop bounded background command monitors."),
         "screen_intelligence" => Some("Screen capture, permissions, and accessibility automation."),
         "security" => Some("Security policy and autonomy guardrail metadata."),
@@ -956,9 +971,6 @@ pub fn namespace_description(namespace: &str) -> Option<&'static str> {
         ),
         "memory_diff" => Some(
             "Snapshot-based change tracking for memory sources — capture state, compute diffs, and surface changes to agents.",
-        ),
-        "redirect_links" => Some(
-            "Shorten long tracking URLs to `openhuman://link/<id>` placeholders (SQLite-backed) to save tokens in prompts, with round-trip rewrite helpers.",
         ),
         "referral" => Some("Referral codes, stats, and apply flows via the hosted backend API."),
         "run_ledger" => Some(

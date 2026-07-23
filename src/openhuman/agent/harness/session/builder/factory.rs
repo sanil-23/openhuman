@@ -74,47 +74,11 @@ impl Agent {
     pub fn from_config_for_agent(config: &Config, agent_id: &str) -> Result<Self> {
         // Look up the target definition up front so we can fail fast
         // with a clear error instead of building half an agent and then
-        // discovering the id is unknown. The registry is a singleton
-        // initialised at startup; if it's not yet populated we
-        // conservatively fall back to the legacy "orchestrator-shaped"
-        // build by proceeding without a definition override.
-        let target_def: Option<crate::openhuman::agent::harness::definition::AgentDefinition> =
-            match AgentDefinitionRegistry::global() {
-                Some(reg) => match reg.get(agent_id) {
-                    Some(def) => Some(def.clone()),
-                    None if agent_id == "orchestrator" => {
-                        // Orchestrator is allowed to be missing from the
-                        // registry (legacy path, tests, pre-startup) —
-                        // fall back to default behaviour.
-                        log::debug!(
-                            "[agent::builder] orchestrator definition not in registry — \
-                         using legacy default prompt + filter"
-                        );
-                        None
-                    }
-                    None => {
-                        return Err(anyhow::anyhow!(
-                            "agent definition '{}' not found in registry",
-                            agent_id
-                        ));
-                    }
-                },
-                None => {
-                    if agent_id != "orchestrator" {
-                        return Err(anyhow::anyhow!(
-                            "AgentDefinitionRegistry is not initialised — cannot \
-                         resolve agent '{}'. Call AgentDefinitionRegistry::init_global \
-                         at startup.",
-                            agent_id
-                        ));
-                    }
-                    log::debug!(
-                        "[agent::builder] registry not initialised, orchestrator requested — \
-                     using legacy default prompt + filter"
-                    );
-                    None
-                }
-            };
+        // discovering the id is unknown. See `resolve_target_definition`
+        // for the full resolution order (harness registry, then the
+        // config-backed custom agent registry, then the orchestrator's
+        // legacy pre-startup fallback).
+        let target_def = resolve_target_definition(config, agent_id)?;
 
         log::info!(
             "[agent::builder] building session agent id={} \
@@ -197,30 +161,7 @@ impl Agent {
         profile_prompt_suffix: Option<String>,
         profile: Option<&crate::openhuman::profiles::AgentProfile>,
     ) -> Result<Self> {
-        let target_def: Option<crate::openhuman::agent::harness::definition::AgentDefinition> =
-            match AgentDefinitionRegistry::global() {
-                Some(reg) => match reg.get(agent_id) {
-                    Some(def) => Some(def.clone()),
-                    None if agent_id == "orchestrator" => None,
-                    None => {
-                        return Err(anyhow::anyhow!(
-                            "agent definition '{}' not found in registry",
-                            agent_id
-                        ));
-                    }
-                },
-                None => {
-                    if agent_id != "orchestrator" {
-                        return Err(anyhow::anyhow!(
-                            "AgentDefinitionRegistry is not initialised — cannot \
-                         resolve agent '{}'. Call AgentDefinitionRegistry::init_global \
-                         at startup.",
-                            agent_id
-                        ));
-                    }
-                    None
-                }
-            };
+        let target_def = resolve_target_definition(config, agent_id)?;
         Self::build_session_agent_inner(
             config,
             agent_id,
@@ -391,23 +332,17 @@ impl Agent {
         // (#3762). The actions stay approval-gated and bound by the
         // sensitive-app denylist; Full autonomy continues to grant this
         // independently via `app_control_enabled`.
-        let adjusted_config: Config;
-        let tool_config: &Config = if !config.computer_control.ax_interact_mutations
-            && tools::enables_app_ui_control_mutations(&enabled_tools)
-        {
-            let mut c = config.clone();
-            c.computer_control.ax_interact_mutations = true;
-            log::debug!(
-                "[session-builder] action=grant_app_ui_control_mutations source=features_toggle"
-            );
-            adjusted_config = c;
-            &adjusted_config
-        } else {
-            config
-        };
+        // Share a single `Arc<Config>` across the heavyweight per-build consumers
+        // (the tool registry, the reflection hook, the turn provider) instead of
+        // deep-cloning the large `Config` at each site (#5050, Fix 1). `Config` is
+        // immutable after construction, so one refcounted instance is behaviourally
+        // identical to N independent clones. `resolve_tool_config` handles the one
+        // consumer that needs a *different* config — the App-UI-Control toggle.
+        let base_config: Arc<Config> = Arc::new(config.clone());
+        let tool_config: Arc<Config> = resolve_tool_config(&base_config, &enabled_tools);
 
         let mut tools = tools::all_tools_with_runtime(
-            Arc::new(tool_config.clone()),
+            Arc::clone(&tool_config),
             &security,
             runtime,
             audit,
@@ -416,7 +351,7 @@ impl Agent {
             &tool_config.http_request,
             &tool_config.action_dir,
             &tool_config.agents,
-            tool_config,
+            &tool_config,
             profile_skill_allowlist.as_ref(),
             profile_mcp_allowlist.as_deref(),
         );
@@ -694,11 +629,10 @@ impl Agent {
             Vec::new();
         if config.learning.enabled {
             if config.learning.reflection_enabled {
-                // Only the reflection hook needs an owned snapshot of the
-                // full config, so create the `Arc` lazily inside this
-                // branch instead of paying for the clone whenever
-                // `learning.enabled` is true.
-                let full_config = Arc::new(config.clone());
+                // The reflection hook needs an owned `Arc<Config>`; reuse the
+                // shared base config (a refcount bump) rather than a second deep
+                // clone of the full config (#5050, Fix 1).
+                let full_config = Arc::clone(&base_config);
                 // For cloud reflection, wrap the provider in an Arc.
                 // For local, no provider needed.
                 let reflection_provider: Option<
@@ -892,7 +826,35 @@ impl Agent {
                 };
                 (synthed, None)
             }
-            (_, None) => {
+            (Some(def), None) => {
+                // We have a target definition (either a pre-populated
+                // harness entry looked up before the registry singleton
+                // existed, or — the common case today — a `CustomRegistry`
+                // definition `resolve_target_definition` synthesizes
+                // straight from `config.agent_registry.entries` without
+                // ever consulting `AgentDefinitionRegistry::global()`, see
+                // `agent_registry::find_custom_in_config`). Delegation-tool
+                // synthesis needs the registry (to resolve named
+                // subagents), so it's skipped here, but `def.tools` is a
+                // real scope the caller authored and MUST still gate
+                // visibility — silently dropping it into the `(_, None)`
+                // "no registry, no filter" catch-all would leave a custom
+                // agent's `ToolScope::Named` allowlist entirely
+                // unenforced (visible tools empty rather than the named
+                // set), regressing the least-privilege contract this
+                // synthesis path exists to provide.
+                log::debug!(
+                    "[agent::builder] AgentDefinitionRegistry not initialised — skipping \
+                     delegation tool synthesis, but still applying target definition's own \
+                     tool scope"
+                );
+                let filter: Option<std::collections::HashSet<String>> = match &def.tools {
+                    ToolScope::Named(names) => Some(names.iter().cloned().collect()),
+                    ToolScope::Wildcard => None,
+                };
+                (Vec::new(), filter)
+            }
+            (None, None) => {
                 log::debug!(
                     "[agent::builder] AgentDefinitionRegistry not initialised — \
                      skipping delegation tool synthesis"
@@ -1164,7 +1126,7 @@ impl Agent {
             effective_agent_config.max_tool_iterations = def_cap;
         }
         let mut builder = Agent::builder()
-            .crate_native_provider(provider_role, std::sync::Arc::new(config.clone()))
+            .crate_native_provider(provider_role, Arc::clone(&base_config))
             .tools(tools)
             .visible_tool_names(visible)
             .memory(memory)
@@ -1218,6 +1180,116 @@ impl Agent {
             crate::openhuman::composio::connected_set_hash(&agent.connected_integrations);
         agent.synthesized_tool_names = synthesized_tool_names;
         Ok(agent)
+    }
+}
+
+/// Resolves the `AgentDefinition` a session should be built from, given the
+/// requested `agent_id`, in three steps:
+///
+/// 1. **Harness registry** (`AgentDefinitionRegistry`, the process-global
+///    singleton of built-in + workspace-TOML-override definitions) — a hit
+///    here wins outright.
+/// 2. **Config-backed custom agent registry** (`config.agent_registry.entries`,
+///    `AgentRegistrySource::Custom`) — on a harness-registry miss (or the
+///    registry not yet being initialised), a user-authored custom agent is
+///    synthesized into a real `AgentDefinition` via
+///    `agent_registry::definition_from_registry_entry` so it runs through
+///    the exact same `build_session_agent_inner` path (and therefore the
+///    exact same `SecurityPolicy` / tool-filtering / approval gate) as a
+///    built-in. This closes the gap where a custom agent either hard-errored
+///    (chat, task-dispatcher) or silently ran tool-less/persona-only (flows'
+///    `RegistryFallback`) — see the cross-cutting fix in the PR that added
+///    this function.
+/// 3. **Orchestrator legacy fallback** — `orchestrator` alone is allowed to
+///    resolve to `None` (pre-startup, tests): the caller then builds with the
+///    default prompt/filter, matching pre-#1 behaviour.
+///
+/// Any other id that resolves nowhere is a hard error, exactly as before this
+/// function existed — only the *search order* changed, not the failure
+/// contract for a genuinely-unknown id.
+fn resolve_target_definition(
+    config: &Config,
+    agent_id: &str,
+) -> Result<Option<crate::openhuman::agent::harness::definition::AgentDefinition>> {
+    let registry = AgentDefinitionRegistry::global();
+
+    if let Some(reg) = registry {
+        if let Some(def) = reg.get(agent_id) {
+            return Ok(Some(def.clone()));
+        }
+    }
+
+    // Harness registry miss (or not yet initialised). Before failing, check
+    // the config-backed custom agent registry — the one place custom
+    // (non-shipped) agents live.
+    if let Some(entry) = crate::openhuman::agent_registry::find_custom_in_config(config, agent_id) {
+        log::info!(
+            "[agent::builder] agent_id={} not found in the harness AgentDefinitionRegistry — \
+             synthesizing a definition from its custom agent_registry entry so it runs with its \
+             real tool belt instead of persona-only / erroring",
+            agent_id
+        );
+        return Ok(Some(
+            crate::openhuman::agent_registry::definition_from_registry_entry(&entry),
+        ));
+    }
+
+    if agent_id == "orchestrator" {
+        // Orchestrator is allowed to be missing from every source (legacy
+        // path, tests, pre-startup) — fall back to default behaviour.
+        log::debug!(
+            "[agent::builder] orchestrator definition not in any registry — using legacy \
+             default prompt + filter"
+        );
+        return Ok(None);
+    }
+
+    if registry.is_none() {
+        return Err(anyhow::anyhow!(
+            "AgentDefinitionRegistry is not initialised — cannot resolve agent '{}'. Call \
+             AgentDefinitionRegistry::init_global at startup.",
+            agent_id
+        ));
+    }
+
+    Err(anyhow::anyhow!(
+        "agent definition '{}' not found in registry",
+        agent_id
+    ))
+}
+
+/// Resolve the `Config` the tool registry is built from (#5050, Fix 1).
+///
+/// Normally this is the shared `base_config` — returned as a refcount bump, not a
+/// deep clone. The one exception is the App-UI-Control / App-Automation features
+/// toggle (#3762): when the user enabled the `ax_interact` / `automate` tools in
+/// Settings without global Full autonomy, the tool registry (and *only* the tool
+/// registry) receives a copy of the config with `ax_interact_mutations` granted.
+/// Scoping the grant here keeps the turn provider and reflection hook on the
+/// ungranted base config, and clones at most once — only when the toggle fires.
+pub(super) fn resolve_tool_config(
+    base_config: &Arc<Config>,
+    enabled_tools: &[String],
+) -> Arc<Config> {
+    log::trace!(
+        "[session-builder] action=resolve_tool_config phase=enter enabled_tools_count={} base_ax_interact_mutations={}",
+        enabled_tools.len(),
+        base_config.computer_control.ax_interact_mutations
+    );
+    if !base_config.computer_control.ax_interact_mutations
+        && tools::enables_app_ui_control_mutations(enabled_tools)
+    {
+        let mut granted = (**base_config).clone();
+        granted.computer_control.ax_interact_mutations = true;
+        log::debug!(
+            "[session-builder] action=resolve_tool_config phase=exit outcome=granted_app_ui_control_mutations source=features_toggle"
+        );
+        Arc::new(granted)
+    } else {
+        log::debug!(
+            "[session-builder] action=resolve_tool_config phase=exit outcome=reused_base_config"
+        );
+        Arc::clone(base_config)
     }
 }
 
