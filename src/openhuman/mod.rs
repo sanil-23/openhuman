@@ -49,7 +49,6 @@ pub mod dev_paths;
 pub mod devices;
 pub mod doctor;
 pub mod embeddings;
-pub mod emergency_stop;
 pub mod encryption;
 pub mod file_state;
 pub mod file_storage;
@@ -58,6 +57,12 @@ pub mod flows;
 pub mod harness_init;
 pub mod health;
 pub mod heartbeat;
+// The whole http_host domain is an axum static-directory server, so it is
+// exclusive to the `http-server` feature (#5048). Its only outside reference is
+// the controller-registration push in `core::all`, itself gated in lockstep, so
+// no stub facade is needed — a slim build simply omits the `http_host.*` RPC
+// surface (unknown-method over `/rpc`, absent from `/schema`).
+#[cfg(feature = "http-server")]
 pub mod http_host;
 #[cfg(feature = "media")]
 pub mod image;
@@ -73,11 +78,12 @@ pub mod mcp_registry;
 pub mod mcp_server;
 #[cfg(feature = "media")]
 pub mod media_generation;
+#[cfg(feature = "medulla-local")]
+pub mod medulla_local;
 #[cfg(feature = "meet")]
 pub mod meet;
 pub mod meet_agent;
 pub mod memory;
-pub mod memory_archivist;
 pub mod memory_conversations;
 pub mod memory_diff;
 pub mod memory_goals;
@@ -97,11 +103,11 @@ pub mod orchestration;
 pub mod overlay;
 pub mod people;
 pub mod plan_review;
+pub mod proc_metrics;
 pub mod profiles;
 pub mod prompt_injection;
 pub mod provider_surfaces;
 pub mod recall_calendar;
-pub mod redirect_links;
 pub mod referral;
 #[cfg(feature = "flows")]
 pub mod rhai_workflows;
@@ -143,6 +149,7 @@ pub mod tool_registry;
 pub mod tool_status;
 pub mod tool_timeout;
 pub mod tools;
+pub mod tui;
 pub mod update;
 pub mod util;
 pub mod voice;
@@ -150,9 +157,13 @@ pub mod wallet;
 pub mod web3;
 pub mod web_chat;
 pub mod webhooks;
+#[cfg(feature = "channels")]
 pub mod webview_accounts;
+#[cfg(feature = "channels")]
 pub mod webview_apis;
+#[cfg(feature = "channels")]
 pub mod webview_notifications;
+#[cfg(feature = "channels")]
 pub mod whatsapp_data;
 pub mod workspace;
 pub mod x402;

@@ -240,3 +240,173 @@ async fn build_session_agent_falls_back_to_global_default_when_no_definition() {
         "with no definition, the global config default must be used unchanged"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// B38 (Gap 2) — a custom (non-shipped) `AgentRegistryEntry` must synthesize a
+// real `AgentDefinition` and run with its own `ToolScope::Named` filter,
+// instead of the factory hard-erroring "agent definition '…' not found in
+// registry" (chat / task-dispatcher) because it never consulted
+// `config.agent_registry.entries`.
+//
+// Regression note: this test deliberately does NOT call
+// `AgentDefinitionRegistry::init_global*` itself, so — depending on whether
+// an earlier test in this binary already initialised the process-wide
+// `OnceLock` singleton — it exercises `build_session_agent_inner`'s tool-
+// visibility computation under EITHER state: `(Some(def), Some(registry))`
+// or `(Some(def), None)`. Both arms must apply `def.tools` (the synthesized
+// `ToolScope::Named` from `definition_from_registry_entry`); the `None`
+// (registry-uninitialized) arm previously fell through to the catch-all
+// "no registry, no filter" case and silently discarded the custom agent's
+// allowlist, leaving `visible_tool_names_for_test()` empty. See the
+// `(Some(def), None)` match arm in `factory.rs`'s delegation-tool-and-
+// visibility block for the fix.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn from_config_for_agent_synthesizes_custom_registry_entry_with_named_scope() {
+    use crate::openhuman::agent::harness::session::types::Agent;
+    use crate::openhuman::agent_registry::types::{
+        AgentRegistryEntry, AgentRegistrySource, AgentSubagentPolicy,
+    };
+    use crate::openhuman::tokenjuice::RETRIEVE_TOOL_NAME;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = test_config(&tmp);
+    config.agent_registry.entries = vec![AgentRegistryEntry {
+        id: "finance_analyst_b38".to_string(),
+        name: "Finance Analyst".to_string(),
+        description: "Reviews spend and drafts finance summaries.".to_string(),
+        source: AgentRegistrySource::Custom,
+        enabled: true,
+        model: Some("hint:reasoning".to_string()),
+        system_prompt: Some("You are a meticulous finance analyst.".to_string()),
+        tool_allowlist: vec!["memory_search".to_string(), "web_search".to_string()],
+        tool_denylist: Vec::new(),
+        subagents: AgentSubagentPolicy::default(),
+        tags: Vec::new(),
+        metadata: serde_json::Value::Null,
+    }];
+
+    // Precondition: this id must NOT be a harness definition (built-in or
+    // workspace TOML) — the whole point is that only the config-backed
+    // custom registry knows about it.
+    assert!(
+        crate::openhuman::agent::harness::definition::AgentDefinitionRegistry::global()
+            .map(|reg| reg.get("finance_analyst_b38").is_none())
+            .unwrap_or(true),
+        "test id must not collide with a real harness definition"
+    );
+
+    let agent = Agent::from_config_for_agent(&config, "finance_analyst_b38").expect(
+        "a custom agent_registry entry must synthesize a real AgentDefinition and build \
+         successfully instead of erroring",
+    );
+
+    let visible = agent.visible_tool_names_for_test();
+    assert!(
+        visible.contains("memory_search") && visible.contains("web_search"),
+        "the custom agent's tool_allowlist must become a real ToolScope::Named filter: {visible:?}"
+    );
+    assert!(
+        visible.contains(RETRIEVE_TOOL_NAME),
+        "the compaction recovery tool must join any non-empty Named allowlist: {visible:?}"
+    );
+    assert!(
+        !visible.contains("automate"),
+        "a tool outside the custom agent's allowlist must not be visible: {visible:?}"
+    );
+}
+
+#[tokio::test]
+async fn from_config_for_agent_still_errors_for_a_genuinely_unknown_id() {
+    use crate::openhuman::agent::harness::session::types::Agent;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config = test_config(&tmp);
+
+    // No harness definition AND no config.agent_registry entry for this id —
+    // the factory must still hard-error rather than silently building an
+    // unfiltered/legacy agent.
+    //
+    // Note: `Agent` intentionally has no `Debug` impl (it holds `Box<dyn
+    // Tool>` / provider trait objects), so this must use `match` +
+    // `.is_err()` rather than `.expect_err()`, which requires `T: Debug`.
+    let result = Agent::from_config_for_agent(&config, "totally_unknown_agent_id_b38");
+    assert!(
+        result.is_err(),
+        "an id with no harness definition and no custom entry must error"
+    );
+    let err = result.err().unwrap();
+    assert!(
+        err.to_string().contains("totally_unknown_agent_id_b38"),
+        "error should name the unresolved agent id: {err}"
+    );
+}
+
+// ── #5050 Fix 1: shared `Arc<Config>` for the per-build tool config ──────────
+
+#[test]
+fn tool_config_shares_base_arc_when_ui_control_toggle_off() {
+    use super::factory::resolve_tool_config;
+    use std::sync::Arc;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut cfg = test_config(&tmp);
+    cfg.computer_control.ax_interact_mutations = false;
+    let base = Arc::new(cfg);
+
+    // No enabled tools → the App-UI-Control toggle does not fire → the tool
+    // registry shares the base `Arc` (a refcount bump), not a deep clone.
+    let resolved = resolve_tool_config(&base, &[]);
+    assert!(
+        Arc::ptr_eq(&base, &resolved),
+        "toggle off must reuse the base config Arc rather than deep-clone it"
+    );
+}
+
+#[test]
+fn tool_config_grant_is_scoped_and_leaves_base_untouched() {
+    use super::factory::resolve_tool_config;
+    use std::sync::Arc;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut cfg = test_config(&tmp);
+    cfg.computer_control.ax_interact_mutations = false;
+    let base = Arc::new(cfg);
+
+    // Enabling `ax_interact` fires the toggle: the tool registry gets the mutation
+    // grant, but as a *distinct* instance — the base config (which feeds the turn
+    // provider + reflection hook) must stay ungranted so the grant cannot leak.
+    let resolved = resolve_tool_config(&base, &["ax_interact".to_string()]);
+    assert!(
+        resolved.computer_control.ax_interact_mutations,
+        "the tool-registry config must carry the granted mutation flag"
+    );
+    assert!(
+        !Arc::ptr_eq(&base, &resolved),
+        "granting must produce a distinct config, not alias the shared base"
+    );
+    assert!(
+        !base.computer_control.ax_interact_mutations,
+        "the base config must stay ungranted — the grant is scoped to the tool registry"
+    );
+}
+
+#[test]
+fn tool_config_reuses_base_when_mutations_already_granted_globally() {
+    use super::factory::resolve_tool_config;
+    use std::sync::Arc;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut cfg = test_config(&tmp);
+    cfg.computer_control.ax_interact_mutations = true;
+    let base = Arc::new(cfg);
+
+    // Already granted globally (e.g. Full autonomy) → no clone even when the tool
+    // is enabled, since there is nothing to grant.
+    let resolved = resolve_tool_config(&base, &["ax_interact".to_string()]);
+    assert!(
+        Arc::ptr_eq(&base, &resolved),
+        "an already-granted base config must not be re-cloned"
+    );
+}
