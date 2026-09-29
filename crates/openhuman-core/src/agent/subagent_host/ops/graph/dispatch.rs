@@ -315,6 +315,9 @@ pub(in super::super) async fn run_subagent_via_graph(
         // Pause gracefully at the model-call cap so we can summarize a resumable
         // checkpoint (below) instead of erroring — legacy cap-summary parity.
         true,
+        // A sub-agent's caller does not record it by a tool call, so the
+        // must-record guard stays uninstalled.
+        Vec::new(),
         // Bound the sub-agent's per-call output at its configured budget.
         Some(max_output_tokens),
         // Context middlewares (#4466): config-sourced TokenJuice compaction +

@@ -1463,6 +1463,7 @@ impl OpenHumanSessionHost {
                 .unwrap_or(crate::agent::harness::definition::SandboxMode::None),
             self.hosted_base.clone(),
             self.agent_definition_id.clone(),
+            self.records_with.clone(),
         ));
         // A thread-bound root session addresses its transcript by durable
         // identity, so a restart appends to the conversation's own file rather

@@ -48,6 +48,13 @@ pub(crate) struct ChatTurnGraph {
     /// already built by the caller from the session's `TurnModelSource` (issue
     /// #4249, Phase 3 / Motion A). The graph names crate model types only.
     pub turn_models: crate::agent::tinyagents::TurnModels,
+    /// Whether this turn may record at all.
+    ///
+    /// A host whose seat is owed an answer cannot complete, so compelling a
+    /// recording call only earns a refusal -- see the must-record guard in
+    /// `harness_assembly`. Per turn, not per agent: the same seat may record
+    /// freely on its next one.
+    pub records_with: Vec<String>,
     /// The effective model id for this turn.
     pub model: String,
     /// Provider-ready messages (system + prior history + this turn's user turn,
@@ -139,6 +146,7 @@ pub(crate) async fn run_chat_turn_graph(graph: ChatTurnGraph) -> Result<Tinyagen
         // Pause gracefully at the model-call cap so the turn emits a resumable
         // checkpoint instead of erroring or returning a dangling tool cycle.
         let pause_at_cap = true;
+        let records_with = graph.records_with.clone();
         // The runtime's durable `after_commit` callback emits the terminal
         // event after any driver-grounded close has become part of the
         // candidate history. A seam-level event would arrive before that
@@ -179,6 +187,7 @@ pub(crate) async fn run_chat_turn_graph(graph: ChatTurnGraph) -> Result<Tinyagen
             // ever being asked anything.
             &["ask_user_clarification"],
             pause_at_cap,
+            records_with,
             // Bound the main agent's per-call output (legacy parity — the engine
             // capped every turn at `AGENT_TURN_MAX_OUTPUT_TOKENS`).
             Some(AGENT_TURN_MAX_OUTPUT_TOKENS),

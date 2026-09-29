@@ -231,6 +231,24 @@ impl OpenHumanSessionHost {
     ///
     /// `session_id` is the conversation this turn runs in, reaching the
     /// factory as [`TurnContext::session_id`]; `None` when none is named yet.
+    /// Name the tools a turn on this session is recorded by.
+    ///
+    /// The must-record guard holds the floor open until the turn calls one of
+    /// them; an empty list leaves it uninstalled, which is the default. What
+    /// counts as recording is the caller's to define -- this crate only holds
+    /// the floor for the names it is given.
+    ///
+    /// A setter rather than config because the answer is per turn: a caller
+    /// whose turn is already barred from recording passes nothing for that
+    /// turn, rather than being compelled into a call that will be refused
+    /// (measured on one such caller: 472s on a turn that could not end,
+    /// against 258s without the guard).
+    #[must_use]
+    pub fn with_records_with(mut self, records_with: Vec<String>) -> Self {
+        self.records_with = records_with;
+        self
+    }
+
     pub fn from_config_with_host_tools(
         config: &Config,
         definition: &crate::agent::harness::definition::AgentDefinition,

@@ -243,6 +243,7 @@ pub struct Turn {
     progress: Option<tokio::sync::mpsc::Sender<AgentProgress>>,
     seed: Option<Vec<(String, String)>>,
     meter: Option<Box<dyn FnOnce(Option<LastTurnUsage>) + Send>>,
+    records_with: Vec<String>,
 }
 
 impl Turn {
@@ -255,11 +256,28 @@ impl Turn {
             progress: None,
             seed: None,
             meter: None,
+            records_with: Vec::new(),
         }
     }
 
     pub(crate) fn with_agent_id(mut self, id: &str) -> Self {
         self.request.agent_id = Some(id.to_string());
+        self
+    }
+
+    /// Name the tools this turn's caller records a turn by.
+    ///
+    /// The must-record guard holds the floor open until the turn calls one of
+    /// them. This crate does not decide what recording means: a caller that
+    /// records a turn by its text, or by nothing, passes nothing and the guard
+    /// never installs — which is the default.
+    ///
+    /// Per turn, not per agent, because the answer changes between turns of one
+    /// caller: a turn that is already barred from recording should pass an
+    /// empty list rather than be compelled into a call that will be refused.
+    #[must_use]
+    pub fn records_with(mut self, tools: Vec<String>) -> Self {
+        self.records_with = tools;
         self
     }
 
@@ -465,7 +483,13 @@ impl Turn {
         // a reply or an error.
         let usage: UsageSink = std::sync::Mutex::new(None);
         let meter = self.meter.take();
-        let dispatch = dispatch(self.target, self.request, self.seed.take(), &usage);
+        let dispatch = dispatch(
+            self.target,
+            self.request,
+            self.seed.take(),
+            self.records_with,
+            &usage,
+        );
 
         let reply = match (self.origin, self.progress) {
             (Some(origin), Some(sink)) => {
@@ -546,6 +570,8 @@ async fn dispatch(
     target: TurnTarget,
     request: TurnRequest,
     seed: Option<Vec<(String, String)>>,
+    // The tools the caller records a turn by; see `Turn::records_with`.
+    records_with: Vec<String>,
     usage: &UsageSink,
 ) -> Result<String, CoreError> {
     match target {
@@ -600,6 +626,7 @@ async fn dispatch(
                     host: inner.host_tools.as_ref(),
                     seed: seed.as_deref(),
                     usage: Some(usage),
+                    records_with,
                 };
                 agent_chat_for(
                     &mut config,

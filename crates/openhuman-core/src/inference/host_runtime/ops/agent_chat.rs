@@ -72,7 +72,10 @@ pub async fn agent_chat(
 }
 
 /// Which session [`agent_chat_for`] builds the turn on.
-#[derive(Clone, Copy)]
+// `Clone` but not `Copy`: the recording verbs are owned, and a target that
+// silently copied its belt-matching list would be a footgun the moment one
+// caller mutated it.
+#[derive(Clone)]
 pub enum AgentChatTarget<'a> {
     /// The orchestrator — [`OpenHumanSessionHost::from_config`], today's `agent_chat`.
     Orchestrator,
@@ -90,6 +93,16 @@ pub enum AgentChatTarget<'a> {
     Definition {
         definition: &'a crate::agent::harness::definition::AgentDefinition,
         host: Option<&'a crate::agent::HostTools>,
+        /// Whether this turn may record at all.
+        ///
+        /// Rides the target for the same reason `host` and `seed` do: only a
+        /// caller holding its own definition and belt knows that this seat is
+        /// owed an answer and so cannot complete. The must-record guard is
+        /// right for a seat that can record and wrong for one that cannot --
+        /// compelling the call there only earns a refusal.
+        ///
+        /// `true` for every caller that has no such notion.
+        records_with: Vec<String>,
         /// History to seed this turn with, as `(role, content)` rows, instead
         /// of whatever the session would otherwise resume.
         ///
@@ -129,12 +142,14 @@ impl std::fmt::Debug for AgentChatTarget<'_> {
                 host,
                 seed,
                 usage,
+                records_with,
             } => f
                 .debug_struct("Definition")
                 .field("definition", &definition.id)
                 .field("host_tools", &host.is_some())
                 .field("seed_rows", &seed.map_or(0, <[(String, String)]>::len))
                 .field("meters", &usage.is_some())
+                .field("records_with", records_with)
                 .finish(),
         }
     }
@@ -152,11 +167,15 @@ fn build_turn_agent(
             OpenHumanSessionHost::from_config_for_agent(config, id)
         }
         AgentChatTarget::Definition {
-            definition, host, ..
+            definition,
+            host,
+            records_with,
+            ..
         } => match host {
             Some(host) => OpenHumanSessionHost::from_config_with_host_tools(
                 config, definition, host, session_id,
-            ),
+            )
+            .map(|session| session.with_records_with(records_with.clone())),
             None => OpenHumanSessionHost::from_config_with_definition(config, definition),
         },
     }
