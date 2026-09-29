@@ -423,6 +423,12 @@ pub(super) fn assemble_turn_harness(
         ),
     ));
 
+    // Before anything reads the call list: a model that wrote its call as
+    // text has called a tool, and every later stage should see the call
+    // rather than the prose. Registration order is hook order, so this
+    // precedes every middleware that inspects `tool_calls`.
+    harness.push_middleware(Arc::new(middleware::TextToolCallSalvageMiddleware));
+
     // Prompt-cache prefix protection (issue #4249, 03.2). First declare the turn's
     // stable prefix (system prompt + tool schemas) as `PromptSegment`s, then let
     // the crate `PromptCacheGuardMiddleware` diff the cacheable prefix across model
