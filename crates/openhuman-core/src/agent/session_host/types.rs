@@ -78,14 +78,13 @@ pub struct OpenHumanSessionHost {
     /// runtime hooks. It deliberately contains no generic session mechanics.
     pub(super) runtime_state:
         std::sync::Arc<std::sync::Mutex<super::runtime_session::OpenHumanSessionState>>,
-    /// The tools a turn on this host is recorded by.
+    /// Narrow a turn on this host to these tools, requiring one of them.
     ///
-    /// Empty for every host that has not named any, which leaves the
-    /// must-record guard uninstalled. Set through
-    /// [`with_records_with`](OpenHumanSessionHost::with_records_with) by the
-    /// caller, because only it knows what recording means and whether this
-    /// turn is allowed to.
-    pub(super) records_with: Vec<String>,
+    /// Empty for every caller that asked for nothing, which leaves the turn
+    /// unconstrained. Set through
+    /// [`with_only_tools`](OpenHumanSessionHost::with_only_tools), because
+    /// only the caller knows why a turn should be narrowed.
+    pub(super) only_tools: Vec<String>,
     /// The turn's model source — builds this agent's tiered crate `ChatModel`
     /// set per turn (issue #4249, Phase 3 / Motion A). Replaces the raw
     /// `Arc<dyn Provider>`; the harness names crate model types only.

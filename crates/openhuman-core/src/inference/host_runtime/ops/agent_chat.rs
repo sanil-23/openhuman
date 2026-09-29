@@ -102,7 +102,7 @@ pub enum AgentChatTarget<'a> {
         /// compelling the call there only earns a refusal.
         ///
         /// `true` for every caller that has no such notion.
-        records_with: Vec<String>,
+        only_tools: Vec<String>,
         /// History to seed this turn with, as `(role, content)` rows, instead
         /// of whatever the session would otherwise resume.
         ///
@@ -142,14 +142,14 @@ impl std::fmt::Debug for AgentChatTarget<'_> {
                 host,
                 seed,
                 usage,
-                records_with,
+                only_tools,
             } => f
                 .debug_struct("Definition")
                 .field("definition", &definition.id)
                 .field("host_tools", &host.is_some())
                 .field("seed_rows", &seed.map_or(0, <[(String, String)]>::len))
                 .field("meters", &usage.is_some())
-                .field("records_with", records_with)
+                .field("only_tools", only_tools)
                 .finish(),
         }
     }
@@ -169,13 +169,13 @@ fn build_turn_agent(
         AgentChatTarget::Definition {
             definition,
             host,
-            records_with,
+            only_tools,
             ..
         } => match host {
             Some(host) => OpenHumanSessionHost::from_config_with_host_tools(
                 config, definition, host, session_id,
             )
-            .map(|session| session.with_records_with(records_with.clone())),
+            .map(|session| session.with_only_tools(only_tools.clone())),
             None => OpenHumanSessionHost::from_config_with_definition(config, definition),
         },
     }

@@ -142,8 +142,7 @@ pub(crate) async fn run_channel_turn_via_graph(
         // Channels surface the cap as an error (legacy `ErrorCheckpoint`), so no
         // graceful cap pause/summary here.
         false,
-        // A channel turn's caller does not record it by a tool call, so the
-        // must-record guard stays uninstalled.
+        // A channel turn is not constrained to any tool.
         Vec::new(),
         // Bound the model's per-call output (legacy parity — channel turns ran at
         // the standard per-turn budget).

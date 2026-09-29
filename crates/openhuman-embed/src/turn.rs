@@ -243,7 +243,7 @@ pub struct Turn {
     progress: Option<tokio::sync::mpsc::Sender<AgentProgress>>,
     seed: Option<Vec<(String, String)>>,
     meter: Option<Box<dyn FnOnce(Option<LastTurnUsage>) + Send>>,
-    records_with: Vec<String>,
+    only_tools: Vec<String>,
 }
 
 impl Turn {
@@ -256,7 +256,7 @@ impl Turn {
             progress: None,
             seed: None,
             meter: None,
-            records_with: Vec::new(),
+            only_tools: Vec::new(),
         }
     }
 
@@ -265,19 +265,18 @@ impl Turn {
         self
     }
 
-    /// Name the tools this turn's caller records a turn by.
+    /// Narrow this turn to these tools, and require one of them to be called.
     ///
-    /// The must-record guard holds the floor open until the turn calls one of
-    /// them. This crate does not decide what recording means: a caller that
-    /// records a turn by its text, or by nothing, passes nothing and the guard
-    /// never installs — which is the default.
+    /// For a caller that needs a turn to *end in a particular call* rather than
+    /// in prose — it names the tools that would satisfy it and this turn cannot
+    /// end without one. Nothing passed leaves the turn unconstrained, which is
+    /// the default and every ordinary turn.
     ///
-    /// Per turn, not per agent, because the answer changes between turns of one
-    /// caller: a turn that is already barred from recording should pass an
-    /// empty list rather than be compelled into a call that will be refused.
+    /// A name the turn's belt does not carry is ignored, and if none of them is
+    /// carried the constraint is dropped whole rather than refusing the call.
     #[must_use]
-    pub fn records_with(mut self, tools: Vec<String>) -> Self {
-        self.records_with = tools;
+    pub fn only_tools(mut self, tools: Vec<String>) -> Self {
+        self.only_tools = tools;
         self
     }
 
@@ -487,7 +486,7 @@ impl Turn {
             self.target,
             self.request,
             self.seed.take(),
-            self.records_with,
+            self.only_tools,
             &usage,
         );
 
@@ -570,8 +569,8 @@ async fn dispatch(
     target: TurnTarget,
     request: TurnRequest,
     seed: Option<Vec<(String, String)>>,
-    // The tools the caller records a turn by; see `Turn::records_with`.
-    records_with: Vec<String>,
+    // The tools this turn is narrowed to; see `Turn::only_tools`.
+    only_tools: Vec<String>,
     usage: &UsageSink,
 ) -> Result<String, CoreError> {
     match target {
@@ -626,7 +625,7 @@ async fn dispatch(
                     host: inner.host_tools.as_ref(),
                     seed: seed.as_deref(),
                     usage: Some(usage),
-                    records_with,
+                    only_tools,
                 };
                 agent_chat_for(
                     &mut config,

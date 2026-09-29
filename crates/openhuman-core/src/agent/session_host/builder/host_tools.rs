@@ -231,21 +231,17 @@ impl OpenHumanSessionHost {
     ///
     /// `session_id` is the conversation this turn runs in, reaching the
     /// factory as [`TurnContext::session_id`]; `None` when none is named yet.
-    /// Name the tools a turn on this session is recorded by.
+    /// Narrow a turn on this session to these tools, requiring one of them.
     ///
-    /// The must-record guard holds the floor open until the turn calls one of
-    /// them; an empty list leaves it uninstalled, which is the default. What
-    /// counts as recording is the caller's to define -- this crate only holds
-    /// the floor for the names it is given.
+    /// For a caller that needs the turn to end in a particular call rather than
+    /// in prose. An empty list leaves the turn unconstrained, which is the
+    /// default.
     ///
-    /// A setter rather than config because the answer is per turn: a caller
-    /// whose turn is already barred from recording passes nothing for that
-    /// turn, rather than being compelled into a call that will be refused
-    /// (measured on one such caller: 472s on a turn that could not end,
-    /// against 258s without the guard).
+    /// A setter rather than config because it is per turn: the same session runs
+    /// ordinary turns before and after a constrained one.
     #[must_use]
-    pub fn with_records_with(mut self, records_with: Vec<String>) -> Self {
-        self.records_with = records_with;
+    pub fn with_only_tools(mut self, only_tools: Vec<String>) -> Self {
+        self.only_tools = only_tools;
         self
     }
 

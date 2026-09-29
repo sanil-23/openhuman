@@ -38,7 +38,7 @@ mod message_trim;
 mod packed_tool_route;
 mod prompt_cache;
 mod repeat_progress;
-mod must_record;
+mod only_tools;
 mod repeated_failure;
 mod research_budget;
 mod tool_exposure;
@@ -60,7 +60,7 @@ pub(crate) use message_trim::{legacy_max_input_tokens, ImageAwareMessageTrimMidd
 pub(crate) use packed_tool_route::PackedToolRouteMiddleware;
 pub(crate) use prompt_cache::PromptCacheSegmentMiddleware;
 pub(crate) use repeat_progress::RepeatProgressMiddleware;
-pub(crate) use must_record::MustRecordMiddleware;
+pub(crate) use only_tools::OnlyToolsMiddleware;
 pub(crate) use repeated_failure::RepeatedToolFailureMiddleware;
 pub(crate) use research_budget::ResearchBudgetMiddleware;
 pub(crate) use tool_exposure::OpenHumanToolExposureShadowMiddleware;

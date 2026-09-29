@@ -33,8 +33,8 @@ pub struct OpenHumanSessionDriver {
     temperature: f64,
     max_iterations: usize,
     max_history_messages: usize,
-    /// See [`ChatTurnGraph::records_with`](super::turn::graph::ChatTurnGraph).
-    records_with: Vec<String>,
+    /// See [`ChatTurnGraph::only_tools`](super::turn::graph::ChatTurnGraph).
+    only_tools: Vec<String>,
     model_vision: bool,
     run_queue:
         Option<Arc<tinyagents_harness::run_queue::RunQueue<crate::agent::queued_turn::QueuedTurn>>>,
@@ -62,10 +62,10 @@ impl OpenHumanSessionDriver {
         hosted_base: Option<Arc<OpenHumanHostBase>>,
         agent_id: String,
         // Whether a turn on this session may record; see the field.
-        records_with: Vec<String>,
+        only_tools: Vec<String>,
     ) -> Self {
         Self {
-            records_with,
+            only_tools,
             turn_model_source,
             dispatcher,
             model_name,
@@ -196,8 +196,8 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
             .harness_dispatcher(),
         );
         let mut outcome = match graph::run_chat_turn_graph(ChatTurnGraph {
-            // Threaded from the caller's target; see `ChatTurnGraph::records_with`.
-            records_with: self.records_with.clone(),
+            // Threaded from the caller's target; see `ChatTurnGraph::only_tools`.
+            only_tools: self.only_tools.clone(),
             turn_models,
             model: self.model_name.clone(),
             messages,

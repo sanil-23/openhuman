@@ -352,10 +352,10 @@ impl SessionHostBuilder {
         crate::tools::toolpacks::bind_synthesized_pack_registry(&tools, &synthesized_tools);
 
         Ok(OpenHumanSessionHost {
-            // Empty by default: a host that records a turn by its tool calls
-            // names those tools with `with_records_with`, and one that does not
+            // Empty by default: a caller that needs a turn narrowed
+            // names those tools with `with_only_tools`, and one that does not
             // record that way never installs the guard.
-            records_with: Vec::new(),
+            only_tools: Vec::new(),
             runtime_session: None,
             runtime_state: Arc::new(std::sync::Mutex::new(
                 super::super::runtime_session::OpenHumanSessionState::default(),

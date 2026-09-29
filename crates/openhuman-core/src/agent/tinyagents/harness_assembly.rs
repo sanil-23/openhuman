@@ -132,9 +132,9 @@ pub(super) fn assemble_turn_harness(
     // `MaxIterationsExceeded`) must keep doing that, and handing it a wrap-up
     // would silently convert a documented error into an answer.
     pause_at_cap: bool,
-    // The tools this turn's host records a turn by, if it records by tools at
-    // all; see the guard below. Empty leaves the guard uninstalled.
-    records_with: Vec<String>,
+    // Narrow this turn to these tools and require one of them; see below.
+    // Empty leaves the turn unconstrained, which is every ordinary turn.
+    only_tools: Vec<String>,
     // The dialect the session composed its prompt for; see
     // `OpenHumanRunContext::tool_dialect`.
     tool_dialect: tinyagents_harness::config::ToolDispatcher,
@@ -426,40 +426,30 @@ pub(super) fn assemble_turn_harness(
         ),
     ));
 
-    // Hold the floor open until the turn calls one of the tools its host
-    // records by.
+    // A turn its caller narrowed: only these tools are offered and one of them
+    // must be called. Empty -- every caller that asked for nothing -- installs
+    // nothing, so an unconstrained turn is byte-for-byte what it was.
     //
-    // Which tools those are is the host's to name, not ours: this crate has no
-    // notion of what recording means, and a list of verbs hardcoded here would
-    // be one embedding of one host's vocabulary. An empty list -- every host
-    // that has not asked for the guard -- leaves it uninstalled.
-    //
-    // Per turn rather than per agent, because whether a turn may record can
-    // change between turns of one agent: a seat already owed an answer may be
-    // unable to finish, and compelling a call that will only be refused is
-    // worse than the silence it replaces (measured on one such host: a held
-    // seat spent 472s on a turn it could not end, against 258s without the
-    // guard). Such a host passes an empty list for that turn.
-    if !records_with.is_empty() {
-        // Matched against the belt the host actually handed us, so a verb the
-        // host named but did not serve this turn cannot be compelled. A host
-        // namespaces its tools (`x_ask` for `ask`), so a trailing `_`-segment
-        // match counts -- the prefix is the host's and this crate never spells
-        // one out.
-        let mut recording: Vec<String> = tool_sets
+    // The names are matched against the belt this turn was actually served, so
+    // a name the caller gave but the turn does not carry is ignored rather than
+    // compelled. A host namespaces its tools (`x_ask` for `ask`), so a trailing
+    // `_`-segment match counts -- the prefix is the host's and this crate never
+    // spells one out.
+    if !only_tools.is_empty() {
+        let mut named: Vec<String> = tool_sets
             .iter()
             .flat_map(|set| set.iter())
             .map(|tool| tool.name().to_owned())
             .filter(|name| {
-                records_with
+                only_tools
                     .iter()
-                    .any(|verb| name == verb || name.ends_with(&format!("_{verb}")))
+                    .any(|want| name == want || name.ends_with(&format!("_{want}")))
             })
             .collect();
-        recording.sort();
-        recording.dedup();
-        if !recording.is_empty() {
-            harness.push_middleware(Arc::new(middleware::MustRecordMiddleware::new(recording)));
+        named.sort();
+        named.dedup();
+        if !named.is_empty() {
+            harness.push_middleware(Arc::new(middleware::OnlyToolsMiddleware::new(named)));
         }
     }
 

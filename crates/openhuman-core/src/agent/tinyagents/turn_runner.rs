@@ -100,9 +100,9 @@ pub(crate) async fn run_turn_via_tinyagents_shared(
     run_queue: Option<Arc<RunQueue<crate::agent::queued_turn::QueuedTurn>>>,
     early_exit_tools: &[&str],
     pause_at_cap: bool,
-    // The tools this turn's caller records a turn by; empty leaves the
-    // must-record guard uninstalled.
-    records_with: Vec<String>,
+    // Narrow this turn to these tools, requiring one; empty leaves it
+    // unconstrained.
+    only_tools: Vec<String>,
     max_output_tokens: Option<u32>,
     context_mw: TurnContextMiddleware,
     tool_policy: Option<ToolPolicyEnforcement>,
@@ -131,7 +131,7 @@ pub(crate) async fn run_turn_via_tinyagents_shared(
         run_queue,
         early_exit_tools,
         pause_at_cap,
-        records_with,
+        only_tools,
         max_output_tokens,
         context_mw,
         tool_policy,
@@ -164,9 +164,9 @@ pub(crate) async fn run_root_turn_via_hosted_agent(
     run_queue: Option<Arc<RunQueue<crate::agent::queued_turn::QueuedTurn>>>,
     early_exit_tools: &[&str],
     pause_at_cap: bool,
-    // The tools this turn's caller records a turn by; empty leaves the
-    // must-record guard uninstalled.
-    records_with: Vec<String>,
+    // Narrow this turn to these tools, requiring one; empty leaves it
+    // unconstrained.
+    only_tools: Vec<String>,
     max_output_tokens: Option<u32>,
     context_mw: TurnContextMiddleware,
     tool_policy: Option<ToolPolicyEnforcement>,
@@ -186,7 +186,7 @@ pub(crate) async fn run_root_turn_via_hosted_agent(
         run_queue,
         early_exit_tools,
         pause_at_cap,
-        records_with,
+        only_tools,
         max_output_tokens,
         context_mw,
         tool_policy,
@@ -212,9 +212,9 @@ async fn run_turn_via_tinyagents_inner(
     run_queue: Option<Arc<RunQueue<crate::agent::queued_turn::QueuedTurn>>>,
     early_exit_tools: &[&str],
     pause_at_cap: bool,
-    // The tools this turn's caller records a turn by; empty leaves the
-    // must-record guard uninstalled.
-    records_with: Vec<String>,
+    // Narrow this turn to these tools, requiring one; empty leaves it
+    // unconstrained.
+    only_tools: Vec<String>,
     max_output_tokens: Option<u32>,
     context_mw: TurnContextMiddleware,
     tool_policy: Option<ToolPolicyEnforcement>,
@@ -291,7 +291,7 @@ async fn run_turn_via_tinyagents_inner(
         deterministic_cacheable,
         hosted_root.is_some(),
         pause_at_cap,
-        records_with,
+        only_tools,
         run_context.tool_dialect,
         run_context
             .thread_id
