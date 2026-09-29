@@ -233,6 +233,23 @@ pub(super) fn failure_scope(tool: &str, arguments: &serde_json::Value) -> String
     scope
 }
 
+/// Tools that resolve a path rather than launch a program.
+///
+/// An allowlist, not a denylist of executors: a reader missed here keeps the
+/// prior behaviour, while an executor missed by a denylist would quietly lose
+/// the missing-binary halt that `MissingApp` exists to provide.
+fn resolves_a_path(tool: &str) -> bool {
+    matches!(
+        tool,
+        "read_skill_resource"
+            | "read_workflow_resource"
+            | "file_read"
+            | "list_files"
+            | "grep"
+            | "workspace_read"
+    )
+}
+
 /// Explicit recovery policy. Only recognised failures enter the classified
 /// ledger; unknown prose continues through the established exact-repeat guard.
 pub(super) fn recovery_policy(
@@ -288,6 +305,43 @@ pub(super) fn recovery_policy(
         Class::MissingPermission => ("permission", 0),
         Class::BadCredentials => ("authentication", 0),
         Class::BlockedByPolicy | Class::Denied | Class::ApprovalExpired => ("policy", 0),
+        // `no such file or directory (os error 2)` is the one entry in the
+        // missing-application keyword list that names no program. On a tool
+        // that *launches* something it is right: ENOENT from an exec is a
+        // binary that is not installed, which no retry fixes, so halting at
+        // once is correct. On a tool that *resolves a path* it says only that
+        // the path is absent -- an ordinary negative result, and for an
+        // optional resource the expected one.
+        //
+        // Read as a missing application it took `("unsupported", 0)`: halt on
+        // the first occurrence. An agent probing a skill's conventional
+        // `scripts/`, `references/` and `README.md` lost its whole turn to the
+        // first probe, and because a halt pauses the run rather than handing
+        // the model a turn, it recorded nothing and the episode stalled
+        // holding open work. Every skill shipping a bare `SKILL.md` reaches
+        // this, and the symlink-escape walk in `skills::ops_discover::resource`
+        // makes it the *normal* text for an absent resource.
+        //
+        // It is not a recognised blocker at all, so it leaves the classified
+        // ledger entirely (the `Class::Unknown` arm below does the same) and
+        // falls back to the generic exact-repeat guard. That guard keys on the
+        // *arguments*, so three probes of three different paths are three
+        // different calls and never trip it, while a model re-issuing the same
+        // dead path unchanged still halts on the third strike.
+        //
+        // A budget would not do: `failure_scope` keys on `resource`/`url`/`app`
+        // and friends, and this tool names its target with `skill_id` /
+        // `relative_path`, so every probe collapses onto the bare tool name and
+        // shares one counter. Any finite budget therefore halts partway through
+        // a legitimate sweep of candidate paths.
+        Class::MissingApp
+            if resolves_a_path(tool)
+                && error
+                    .to_ascii_lowercase()
+                    .contains("no such file or directory") =>
+        {
+            return None;
+        }
         Class::Unsupported | Class::MissingApp => ("unsupported", 0),
         Class::NotFound
             if tool.contains("desktop") && error.to_ascii_lowercase().contains("window") =>
